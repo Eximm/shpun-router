@@ -16,12 +16,13 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt update
-          sudo apt install -y build-essential git libncurses5-dev zlib1g-dev gawk flex gettext unzip file python3 wget
+          sudo apt install -y build-essential git libncurses5-dev zlib1g-dev gawk flex gettext unzip file python3 wget zstd
 
       - name: Download OpenWrt SDK (x86/generic, 24.10.3)
         run: |
-          wget https://downloads.openwrt.org/releases/24.10.3/targets/x86/generic/openwrt-sdk-24.10.3-x86-generic_gcc-13.3.0_musl.Linux-x86_64.tar.xz
-          tar xf openwrt-sdk-24.10.3-x86-generic_gcc-13.3.0_musl.Linux-x86_64.tar.xz
+          SDK_URL="https://downloads.openwrt.org/releases/24.10.3/targets/x86/generic/openwrt-sdk-24.10.3-x86-generic_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
+          wget "$SDK_URL"
+          tar -I zstd -xf openwrt-sdk-24.10.3-x86-generic_gcc-13.3.0_musl.Linux-x86_64.tar.zst
           mv openwrt-sdk-24.10.3-x86-generic_* sdk
 
       - name: Copy package into SDK
@@ -32,7 +33,7 @@ jobs:
         run: |
           cd sdk
           make defconfig
-          make package/shpun-router/compile -j$(nproc) V=s
+          make package/shpun-router/compile -j"$(nproc)" V=s
 
       - name: Upload built package
         uses: actions/upload-artifact@v4
