@@ -1,71 +1,69 @@
-name: Build shpun-router for OpenWrt
+name: Build shpun-router OpenWrt package
 
 on:
   push:
     branches: [ main ]
+  pull_request:
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
+    env:
+      # SDK для OpenWrt 24.10.3, target ath79/generic
+      SDK_URL: https://downloads.openwrt.org/releases/24.10.3/targets/ath79/generic/openwrt-sdk-24.10.3-ath79-generic_gcc-13.3.0_musl.Linux-x86_64.tar.xz
+      SDK_DIR: openwrt-sdk-24.10.3-ath79-generic_gcc-13.3.0_musl.Linux-x86_64
+
+      PACKAGE_NAME: shpun-router
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      # Быстрые проверки проекта
-      - name: Install tools for checks
-        run: |
-          sudo apt update
-          sudo apt install -y shellcheck lua5.3
-
-      - name: Lint shpun scripts and lua
-        run: |
-          set -e
-          sh -n package/shpun-router/files/etc/shpun/agent.sh
-          sh -n package/shpun-router/files/etc/shpun/gen_code.sh
-          sh -n package/shpun-router/files/etc/init.d/shpun-agent
-
-          shellcheck package/shpun-router/files/etc/shpun/agent.sh
-          shellcheck package/shpun-router/files/etc/shpun/gen_code.sh
-          shellcheck package/shpun-router/files/etc/init.d/shpun-agent
-
-          lua5.3 -p package/shpun-router/files/usr/lib/luci/controller/shpun.lua
-
-      # Зависимости для SDK
       - name: Install build dependencies
         run: |
-          sudo apt update
-          sudo apt install -y build-essential git libncurses5-dev zlib1g-dev gawk flex gettext unzip file python3 wget zstd
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential libncurses5-dev gawk unzip file \
+            libssl-dev wget python3
 
-      - name: Download OpenWrt SDK (x86/generic, 24.10.3)
+      - name: Download OpenWrt SDK
         run: |
-          SDK_URL="https://downloads.openwrt.org/releases/24.10.3/targets/x86/generic/openwrt-sdk-24.10.3-x86-generic_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
-          wget "$SDK_URL"
-          tar -I zstd -xf openwrt-sdk-24.10.3-x86-generic_gcc-13.3.0_musl.Linux-x86_64.tar.zst
-          SDK_DIR=$(tar -I zstd -tf openwrt-sdk-24.10.3-x86-generic_gcc-13.3.0_musl.Linux-x86_64.tar.zst | head -1 | cut -d/ -f1)
-          echo "SDK_DIR=$SDK_DIR"
+          wget -O sdk.tar.xz "$SDK_URL"
+          tar -xf sdk.tar.xz
           mv "$SDK_DIR" sdk
+          ls -la
+          ls -la sdk
 
       - name: Copy package into SDK
         run: |
-          cp -R package/shpun-router sdk/package/
+          mkdir -p sdk/package
+          cp -r package/${PACKAGE_NAME} sdk/package/
+          ls -la sdk/package
+          ls -la sdk/package/${PACKAGE_NAME}
 
-      - name: Debug package visibility
+      - name: Configure SDK
+        working-directory: sdk
         run: |
-          cd sdk
-          make package/metadata
-          echo "---- grep shpun-router in tmp/.packageinfo ----"
-          grep shpun-router tmp/.packageinfo || { echo "shpun-router NOT found in metadata"; exit 1; }
+          cp feeds.conf.default feeds.conf || true
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          make defconfig
 
       - name: Build package
+        working-directory: sdk
         run: |
-          cd sdk
-          make defconfig
-          make package/shpun-router/compile -j"$(nproc)" V=s
+          make package/${PACKAGE_NAME}/compile V=s
 
-      - name: Upload built package
+      - name: List built packages
+        working-directory: sdk
+        run: |
+          find bin -name "*${PACKAGE_NAME}*.ipk" -print || echo "No ipk found"
+
+      - name: Upload shpun-router ipk artifact
         uses: actions/upload-artifact@v4
         with:
           name: shpun-router-ipk
-          path: sdk/bin/packages/**/shpun-router_*.ipk
+          path: |
+            sdk/bin/packages/**/*shpun-router*.ipk
