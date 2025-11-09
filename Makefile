@@ -16,18 +16,18 @@ define Package/shpun-router/description
  Shpun VPN router integration: agent + LuCI wizard.
 endef
 
-# У нас нет исходников/компиляции — только скрипты и LuCI
+# Никаких исходников не качаем/не конфигурим
 define Build/Configure
 endef
 
 define Build/Compile
 endef
 
-# Кладём всё из ./files в корень образа
+# Устанавливаем файлы из ./files в корень прошивки
 define Package/shpun-router/install
 	$(INSTALL_DIR) $(1)/
 	$(CP) ./files/* $(1)/
 endef
 
-# ВОТ ЭТА СТРОКА СОЗДАЁТ RULE package/shpun-router/compile
+# ВАЖНО: именно эта строка создаёт rule package/shpun-router/compile
 $(eval $(call BuildPackage,shpun-router))
