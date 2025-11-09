@@ -17,11 +17,11 @@ jobs:
           sudo apt update
           sudo apt install -y build-essential git libncurses5-dev zlib1g-dev gawk flex gettext unzip file python3 wget
 
-      - name: Download OpenWrt SDK
+       - name: Download OpenWrt SDK
         run: |
-          wget https://downloads.openwrt.org/releases/24.10.3/targets/ath79/generic/openwrt-sdk-24.10.3-ath79-generic_gcc-13.3.0_musl.Linux-x86_64.tar.xz
-          tar xf openwrt-sdk-24.10.3-ath79-generic_gcc-13.3.0_musl.Linux-x86_64.tar.xz
-          mv openwrt-sdk-24.10.3-ath79-generic_* sdk
+          wget https://downloads.openwrt.org/releases/24.10.3/targets/x86/generic/openwrt-sdk-24.10.3-x86-generic_gcc-13.3.0_musl.Linux-x86_64.tar.xz
+          tar xf openwrt-sdk-24.10.3-x86-generic_gcc-13.3.0_musl.Linux-x86_64.tar.xz
+          mv openwrt-sdk-24.10.3-x86-generic_* sdk
 
       - name: Copy package into SDK
         run: |
