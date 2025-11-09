@@ -1,0 +1,40 @@
+name: Build shpun-router for OpenWrt
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y build-essential git libncurses5-dev zlib1g-dev gawk flex gettext unzip file python3 wget
+
+      - name: Download OpenWrt SDK
+        run: |
+          wget https://downloads.openwrt.org/releases/24.10.3/targets/ath79/generic/openwrt-sdk-24.10.3-ath79-generic_gcc-13.3.0_musl.Linux-x86_64.tar.xz
+          tar xf openwrt-sdk-24.10.3-ath79-generic_gcc-13.3.0_musl.Linux-x86_64.tar.xz
+          mv openwrt-sdk-24.10.3-ath79-generic_* sdk
+
+      - name: Copy package into SDK
+        run: |
+          cp -R package/shpun-router sdk/package/
+
+      - name: Build package
+        run: |
+          cd sdk
+          make defconfig
+          make package/shpun-router/compile -j$(nproc) V=s
+
+      - name: Upload built package
+        uses: actions/upload-artifact@v4
+        with:
+          name: shpun-router-ipk
+          path: sdk/bin/packages/**/shpun-router_*.ipk
