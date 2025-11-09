@@ -13,7 +13,27 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Install dependencies
+      # Быстрая проверка проекта
+      - name: Install tools for checks
+        run: |
+          sudo apt update
+          sudo apt install -y shellcheck lua5.3
+
+      - name: Lint shpun scripts and lua
+        run: |
+          set -e
+          sh -n package/shpun-router/files/shpun/agent.sh
+          sh -n package/shpun-router/files/shpun/gen_code.sh
+          sh -n package/shpun-router/files/etc/init.d/shpun-agent
+
+          shellcheck package/shpun-router/files/shpun/agent.sh
+          shellcheck package/shpun-router/files/shpun/gen_code.sh
+          shellcheck package/shpun-router/files/etc/init.d/shpun-agent
+
+          lua5.3 -p package/shpun-router/files/usr/lib/luci/controller/shpun.lua
+
+      # Зависимости для SDK
+      - name: Install build dependencies
         run: |
           sudo apt update
           sudo apt install -y build-essential git libncurses5-dev zlib1g-dev gawk flex gettext unzip file python3 wget zstd
@@ -23,14 +43,15 @@ jobs:
           SDK_URL="https://downloads.openwrt.org/releases/24.10.3/targets/x86/generic/openwrt-sdk-24.10.3-x86-generic_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
           wget "$SDK_URL"
           tar -I zstd -xf openwrt-sdk-24.10.3-x86-generic_gcc-13.3.0_musl.Linux-x86_64.tar.zst
-          # Вычисляем правильное имя распакованной папки
           SDK_DIR=$(tar -I zstd -tf openwrt-sdk-24.10.3-x86-generic_gcc-13.3.0_musl.Linux-x86_64.tar.zst | head -1 | cut -d/ -f1)
+          echo "SDK_DIR=$SDK_DIR"
           mv "$SDK_DIR" sdk
 
-            - name: Copy package into SDK
+      - name: Copy package into SDK
         run: |
           cp -R package/shpun-router sdk/package/
 
+      # Проверяем, что пакет увиделся build-системой
       - name: Debug package visibility
         run: |
           cd sdk
