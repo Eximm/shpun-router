@@ -27,10 +27,16 @@ jobs:
           SDK_DIR=$(tar -I zstd -tf openwrt-sdk-24.10.3-x86-generic_gcc-13.3.0_musl.Linux-x86_64.tar.zst | head -1 | cut -d/ -f1)
           mv "$SDK_DIR" sdk
 
-
-      - name: Copy package into SDK
+            - name: Copy package into SDK
         run: |
           cp -R package/shpun-router sdk/package/
+
+      - name: Debug package visibility
+        run: |
+          cd sdk
+          make package/metadata
+          echo "---- grep shpun-router in tmp/.packageinfo ----"
+          grep shpun-router tmp/.packageinfo || { echo "shpun-router NOT found in metadata"; exit 1; }
 
       - name: Build package
         run: |
