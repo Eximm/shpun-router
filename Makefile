@@ -9,14 +9,13 @@ define Package/shpun-router
   SECTION:=utils
   CATEGORY:=Utilities
   TITLE:=Shpun Router Integration
-  DEPENDS:=+luci-base
+  DEPENDS:=+luci-base +curl
 endef
 
 define Package/shpun-router/description
  Shpun VPN router integration: agent + LuCI wizard.
 endef
 
-# Ничего не конфигурируем и не компилируем — только ставим файлы
 define Build/Configure
 endef
 
@@ -28,5 +27,4 @@ define Package/shpun-router/install
 	$(CP) ./files/* $(1)/
 endef
 
-# ВАЖНО: эта строка создаёт цель package/shpun-router/compile
 $(eval $(call BuildPackage,shpun-router))

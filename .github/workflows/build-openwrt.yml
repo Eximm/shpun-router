@@ -13,7 +13,7 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      # Быстрая проверка проекта
+      # Быстрые проверки проекта
       - name: Install tools for checks
         run: |
           sudo apt update
@@ -22,12 +22,12 @@ jobs:
       - name: Lint shpun scripts and lua
         run: |
           set -e
-          sh -n package/shpun-router/files/shpun/agent.sh
-          sh -n package/shpun-router/files/shpun/gen_code.sh
+          sh -n package/shpun-router/files/etc/shpun/agent.sh
+          sh -n package/shpun-router/files/etc/shpun/gen_code.sh
           sh -n package/shpun-router/files/etc/init.d/shpun-agent
 
-          shellcheck package/shpun-router/files/shpun/agent.sh
-          shellcheck package/shpun-router/files/shpun/gen_code.sh
+          shellcheck package/shpun-router/files/etc/shpun/agent.sh
+          shellcheck package/shpun-router/files/etc/shpun/gen_code.sh
           shellcheck package/shpun-router/files/etc/init.d/shpun-agent
 
           lua5.3 -p package/shpun-router/files/usr/lib/luci/controller/shpun.lua
@@ -51,7 +51,6 @@ jobs:
         run: |
           cp -R package/shpun-router sdk/package/
 
-      # Проверяем, что пакет увиделся build-системой
       - name: Debug package visibility
         run: |
           cd sdk
