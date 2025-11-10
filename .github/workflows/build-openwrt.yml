@@ -27,21 +27,43 @@ jobs:
             build-essential libncurses5-dev gawk unzip file \
             libssl-dev wget python3 zstd
 
+      # 🧊 Кэшируем уже распакованный SDK
+      - name: Cache OpenWrt SDK
+        id: cache-sdk
+        uses: actions/cache@v4
+        with:
+          path: sdk
+          # Если поменяешь версию SDK_URL/SDK_DIR — измени key или v1 → v2
+          key: ${{ runner.os }}-openwrt-sdk-${{ env.SDK_DIR }}-v1
+
       - name: Download OpenWrt SDK
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
         run: |
+          echo "SDK cache miss, downloading..."
           wget -O sdk.tar.zst "$SDK_URL"
-          # распаковываем .tar.zst
           tar -I zstd -xf sdk.tar.zst
           mv "$SDK_DIR" sdk
-          ls -la
           ls -la sdk
+
+      - name: SDK info
+        run: |
+          ls -la
+          ls -la sdk || echo "sdk directory not found"
 
       - name: Copy package into SDK
         run: |
           mkdir -p sdk/package
+          # На всякий случай удаляем старую копию пакета
+          rm -rf sdk/package/${PACKAGE_NAME}
           cp -r package/${PACKAGE_NAME} sdk/package/
-          ls -la sdk/package
           ls -la sdk/package/${PACKAGE_NAME}
+
+      # 🧩 Автоматически обновляем номер релиза перед сборкой
+      - name: Patch PKG_RELEASE with GitHub run number
+        run: |
+          sed -i "s/^PKG_RELEASE:=.*/PKG_RELEASE:=${GITHUB_RUN_NUMBER}/" sdk/package/${PACKAGE_NAME}/Makefile
+          echo "Patched PKG_RELEASE=${GITHUB_RUN_NUMBER}"
+          grep PKG_RELEASE sdk/package/${PACKAGE_NAME}/Makefile || true
 
       - name: Configure SDK
         working-directory: sdk
