@@ -17,12 +17,78 @@ log() {
 	logger -t shpun-agent "$*"
 }
 
+# --------------------------------------------------------
+# Выбор HTTP-клиента: curl / uclient-fetch / wget
+# --------------------------------------------------------
+
+HTTP_TOOL=""
+
+detect_http_client() {
+	if command -v curl >/dev/null 2>&1; then
+		HTTP_TOOL="curl"
+	elif command -v uclient-fetch >/dev/null 2>&1; then
+		HTTP_TOOL="uclient"
+	elif command -v wget >/dev/null 2>&1; then
+		HTTP_TOOL="wget"
+	else
+		HTTP_TOOL=""
+	fi
+}
+
+http_get() {
+	# $1 = URL
+	case "$HTTP_TOOL" in
+		curl)
+			# stdout
+			curl -fsS "$1"
+			;;
+		uclient)
+			# uclient-fetch -qO- URL
+			uclient-fetch -qO- "$1"
+			;;
+		wget)
+			# wget -qO- URL
+			wget -qO- "$1"
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
+http_download() {
+	# $1 = URL, $2 = FILE
+	url="$1"
+	file="$2"
+
+	case "$HTTP_TOOL" in
+		curl)
+			curl -fsS "$url" -o "$file"
+			;;
+		uclient)
+			# uclient-fetch -qO file URL
+			uclient-fetch -qO "$file" "$url"
+			;;
+		wget)
+			wget -qO "$file" "$url"
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
+
 ensure_prereqs() {
-	if ! command -v curl >/dev/null 2>&1; then
-		log "curl not found, exiting"
+	# HTTP-клиент
+	detect_http_client
+	if [ -z "$HTTP_TOOL" ]; then
+		log "no HTTP client found (curl/uclient-fetch/wget), exiting"
 		exit 1
 	fi
+	log "using HTTP client: $HTTP_TOOL"
 
+	# скрипт генерации кода
 	if [ ! -x /etc/shpun/gen_code.sh ]; then
 		log "/etc/shpun/gen_code.sh missing or not executable"
 		exit 1
@@ -56,7 +122,7 @@ get_or_create_code() {
 
 fetch_json() {
 	URL=$1
-	curl -fsS "$URL" 2>/dev/null || return 1
+	http_get "$URL" 2>/dev/null || return 1
 }
 
 parse_ok() {
@@ -71,7 +137,7 @@ download_xray_conf() {
 	SUB_URL=$1
 	TMP="$XRAY_CONF.tmp"
 
-	if ! curl -fsS "$SUB_URL" -o "$TMP" 2>/dev/null; then
+	if ! http_download "$SUB_URL" "$TMP" 2>/dev/null; then
 		log "failed to download config from subscription url"
 		rm -f "$TMP"
 		return 1
