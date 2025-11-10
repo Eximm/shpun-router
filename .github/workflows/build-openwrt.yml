@@ -11,46 +11,36 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      # SDK для OpenWrt 24.10.3, target ath79/generic ( Archer C6 v2 )
-      SDK_URL: https://downloads.openwrt.org/releases/24.10.3/targets/ath79/generic/openwrt-sdk-24.10.3-ath79-generic_gcc-13.3.0_musl.Linux-x86_64.tar.xz
+      # SDK для OpenWrt 24.10.3, target ath79/generic
+      SDK_URL: https://downloads.openwrt.org/releases/24.10.3/targets/ath79/generic/openwrt-sdk-24.10.3-ath79-generic_gcc-13.3.0_musl.Linux-x86_64.tar.zst
       SDK_DIR: openwrt-sdk-24.10.3-ath79-generic_gcc-13.3.0_musl.Linux-x86_64
-
       PACKAGE_NAME: shpun-router
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Show repo tree
-        run: |
-          echo "=== REPO ROOT ==="
-          pwd
-          ls -R
-
       - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             build-essential libncurses5-dev gawk unzip file \
-            libssl-dev wget python3
+            libssl-dev wget python3 zstd
 
       - name: Download OpenWrt SDK
         run: |
-          wget -O sdk.tar.xz "$SDK_URL"
-          tar -xf sdk.tar.xz
+          wget -O sdk.tar.zst "$SDK_URL"
+          # распаковываем .tar.zst
+          tar -I zstd -xf sdk.tar.zst
           mv "$SDK_DIR" sdk
-          echo "=== SDK ROOT ==="
           ls -la
           ls -la sdk
 
       - name: Copy package into SDK
         run: |
-          echo "=== COPY PACKAGE INTO SDK ==="
           mkdir -p sdk/package
-          cp -vr package/${PACKAGE_NAME} sdk/package/
-          echo "=== SDK/package CONTENTS ==="
+          cp -r package/${PACKAGE_NAME} sdk/package/
           ls -la sdk/package
-          echo "=== SDK/package/shpun-router CONTENTS ==="
           ls -la sdk/package/${PACKAGE_NAME}
 
       - name: Configure SDK
@@ -64,22 +54,14 @@ jobs:
       - name: Build package
         working-directory: sdk
         run: |
-          echo "=== CHECK PACKAGE DIR BEFORE MAKE ==="
-          pwd
-          ls -la package
-          ls -la package/${PACKAGE_NAME}
-          echo "=== START MAKE ==="
           make package/${PACKAGE_NAME}/compile V=s
 
       - name: List built packages
-        if: always()
         working-directory: sdk
         run: |
-          echo "=== SEARCHING FOR BUILT IPK ==="
           find bin -name "*${PACKAGE_NAME}*.ipk" -print || echo "No ipk found"
 
       - name: Upload shpun-router ipk artifact
-        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: shpun-router-ipk
