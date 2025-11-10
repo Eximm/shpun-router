@@ -87,7 +87,7 @@
       }
 
       setBusy(wanApplyBtn, true);
-      ajax("POST", base + "/admin/shpun/api/apply_wan", data)
+      ajax("POST", base + "/admin/network/shpun/api/apply_wan", data)
         .then(function () {
           showStep(2);
         })
@@ -124,7 +124,7 @@
       }
 
       setBusy(wifiApplyBtn, true);
-      ajax("POST", base + "/admin/shpun/api/apply_wifi", {
+      ajax("POST", base + "/admin/network/shpun/api/apply_wifi", {
         ssid: ssid,
         key: key
       })
@@ -159,7 +159,7 @@
     var spinner = document.getElementById("vpn-spinner");
     var st = document.getElementById("vpn-status-text");
 
-    ajax("GET", base + "/admin/shpun/api/state")
+    ajax("GET", base + "/admin/network/shpun/api/state")
       .then(function (d) {
         if (d.code) {
           var codeText = document.getElementById("router-code");
