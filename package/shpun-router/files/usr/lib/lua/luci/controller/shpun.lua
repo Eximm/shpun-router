@@ -1,25 +1,45 @@
 module("luci.controller.shpun", package.seeall)
 
-function index()
-	-- Раздел Shpun в меню
-	entry({"admin", "shpun"}, firstchild(), _("Shpun VPN"), 10).dependent = false
-	entry({"admin", "shpun", "wizard"}, template("shpun/wizard"), _("Мастер Shpun"), 1)
-
-	-- API endpoints
-	entry({"admin", "shpun", "api", "state"}, call("api_state")).leaf = true
-	entry({"admin", "shpun", "api", "apply_wan"}, call("api_apply_wan")).leaf = true
-	entry({"admin", "shpun", "api", "apply_wifi"}, call("api_apply_wifi")).leaf = true
-end
-
 local uci  = require "luci.model.uci".cursor()
 local sys  = require "luci.sys"
 local fs   = require "nixio.fs"
 local http = require "luci.http"
 
-local STATE_DIR  = "/etc/shpun"
-local CODE_FILE  = STATE_DIR .. "/router_code"
-local SUB_FILE   = STATE_DIR .. "/subscription_url"
-local READY_FILE = STATE_DIR .. "/vpn_ready"
+local STATE_DIR       = "/etc/shpun"
+local CODE_FILE       = STATE_DIR .. "/router_code"
+local SUB_FILE        = STATE_DIR .. "/subscription_url"
+local READY_FILE      = STATE_DIR .. "/vpn_ready"
+local FIRST_RUN_FILE  = STATE_DIR .. "/first_run"
+
+function index()
+	-- Главный пункт Shpun в меню
+	-- ТЕПЕРЬ он идёт не на firstchild(), а в нашу функцию action_index
+	entry({"admin", "shpun"}, call("action_index"), _("Shpun VPN"), 10).dependent = false
+
+	-- Отдельный пункт для мастера (можно вызывать вручную)
+	entry({"admin", "shpun", "wizard"}, template("shpun/wizard"), _("Мастер Shpun"), 1)
+
+	-- API endpoints
+	entry({"admin", "shpun", "api", "state"},      call("api_state")).leaf      = true
+	entry({"admin", "shpun", "api", "apply_wan"},  call("api_apply_wan")).leaf  = true
+	entry({"admin", "shpun", "api", "apply_wifi"}, call("api_apply_wifi")).leaf = true
+end
+
+-- Что происходит при заходе в "Shpun VPN" в меню
+function action_index()
+	-- Если это ПЕРВЫЙ запуск (есть /etc/shpun/first_run) – сразу показываем мастер
+	if fs.access(FIRST_RUN_FILE) then
+		luci.template.render("shpun/wizard")
+		return
+	end
+
+	-- Если не первый запуск:
+	-- тут можно будет сделать отдельную страницу статуса (shpun/status),
+	-- но пока для простоты тоже открываем мастер
+	luci.template.render("shpun/wizard")
+end
+
+-- ===== API: состояние роутера / кода / подписки =====
 
 function api_state()
 	local code  = fs.readfile(CODE_FILE) or ""
@@ -36,6 +56,8 @@ function api_state()
 		vpn_ready        = (ready ~= "" and ready ~= nil),
 	})
 end
+
+-- ===== API: применение настроек WAN =====
 
 function api_apply_wan()
 	local proto = http.formvalue("proto") or "dhcp"
@@ -59,6 +81,8 @@ function api_apply_wan()
 	http.prepare_content("application/json")
 	http.write_json({ ok = 1 })
 end
+
+-- ===== API: применение настроек Wi-Fi =====
 
 function api_apply_wifi()
 	local ssid = http.formvalue("ssid") or "Shpun-Router"

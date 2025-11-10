@@ -17,7 +17,7 @@ define Package/shpun-router
   CATEGORY:=Network
   SUBMENU:=VPN
   TITLE:=Shpun Router integration
-  DEPENDS:=+curl +luci-base +luci-compat
+  DEPENDS:=+curl +bash +luci-base +luci-compat +luci-lib-jsonc
 endef
 
 define Package/shpun-router/description
@@ -26,7 +26,13 @@ define Package/shpun-router/description
   * LuCI мастер настройки и генерации кода
 endef
 
-# Нам ничего не нужно конфигурировать/компилировать – только скрипты
+# Какие файлы считаем конфигами (не стирать при обновлении)
+define Package/shpun-router/conffiles
+/etc/config/shpun
+/etc/shpun/agent.conf
+endef
+
+# Ничего не готовим/не компилируем – только скрипты и файлы
 define Build/Prepare
 endef
 
@@ -36,10 +42,27 @@ endef
 define Build/Compile
 endef
 
-# Устанавливаем файлы из ./files в корень файловой системы роутера
+# Разворачиваем содержимое ./files в корень ФС роутера
 define Package/shpun-router/install
 	$(INSTALL_DIR) $(1)
 	$(CP) ./files/* $(1)/
+endef
+
+# postinst: выполняется сразу после установки пакета
+# создаём флаг первого запуска и включаем автозапуск агента
+define Package/shpun-router/postinst
+#!/bin/sh
+[ -n "$$IPKG_INSTROOT" ] || {
+    mkdir -p /etc/shpun
+    touch /etc/shpun/first_run
+
+    # включить автозапуск агента, если он есть
+    /etc/init.d/shpun-agent enable 2>/dev/null || true
+
+    # если хочешь авт ребут после установки – раскомментируй:
+    # reboot &
+}
+exit 0
 endef
 
 $(eval $(call BuildPackage,shpun-router))
