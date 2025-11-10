@@ -7,7 +7,7 @@ PKG_RELEASE:=1
 PKG_MAINTAINER:=Eximm
 PKG_LICENSE:=MIT
 
-# Универсальный пакет — ставится на любые архитектуры
+# Пакет без бинарей — архитектурно независимый
 PKGARCH:=all
 
 include $(INCLUDE_DIR)/package.mk
@@ -17,8 +17,7 @@ define Package/shpun-router
   CATEGORY:=Network
   SUBMENU:=VPN
   TITLE:=Shpun Router integration (light)
-  # НИКАКИХ тяжёлых зависимостей:
-  # luci-base и так уже есть на любом роутере с веб-мордой
+  # Только luci-base, НИКАКИХ curl/bash и т.п.
   DEPENDS:=+luci-base
 endef
 
@@ -29,7 +28,7 @@ define Package/shpun-router/description
   * без curl/bash, максимум экономии флеша
 endef
 
-# Можно оставить, если реально используешь эти конфиги
+# Конфиги (если используешь)
 define Package/shpun-router/conffiles
 /etc/config/shpun
 /etc/shpun/agent.conf
@@ -44,12 +43,16 @@ endef
 define Build/Compile
 endef
 
-# Кладём всё из ./files в файловую систему роутера
+# Установка файлов пакета
 define Package/shpun-router/install
+	# Копируем всё из ./files с сохранением прав
 	$(CP) -a ./files/* $(1)/
+
+	# Гарантируем, что init-скрипт исполняемый
+	chmod 0755 $(1)/etc/init.d/shpun-agent
 endef
 
-# postinst: создаём флаг первого запуска и включаем автозапуск агента
+# postinst: первый запуск + автозапуск агента
 define Package/shpun-router/postinst
 #!/bin/sh
 [ -n "$$IPKG_INSTROOT" ] || {
