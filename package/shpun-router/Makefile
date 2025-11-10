@@ -59,10 +59,21 @@ define Package/shpun-router/install
 	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/view/shpun
 	$(INSTALL_DATA) ./files/usr/lib/lua/luci/view/shpun/wizard.htm $(1)/usr/lib/lua/luci/view/shpun/wizard.htm
 
+  # виджет на Status → Overview
+  $(INSTALL_DIR) $(1)/usr/lib/lua/luci/view/status/include
+  $(INSTALL_DATA) ./files/usr/lib/lua/luci/view/status/include/20_shpunvpn.htm \
+	$(1)/usr/lib/lua/luci/view/status/include/20_shpunvpn.htm
+
+  # JSON-описание виджета (для LuCI 24.10+)
+  $(INSTALL_DIR) $(1)/usr/share/luci/status/include
+  $(INSTALL_DATA) ./files/usr/share/luci/status/include/shpunvpn.json \
+	$(1)/usr/share/luci/status/include/shpunvpn.json
+
+
 	# виджет на Status → Overview
 	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/view/status/include
 	$(INSTALL_DATA) ./files/usr/lib/lua/luci/view/status/include/20_shpunvpn.htm \
-		$(1)/usr/lib/lua/luci/view/status/include/20_shpunvpn.htm
+	$(1)/usr/lib/lua/luci/view/status/include/20_shpunvpn.htm
 
 	# статический JS мастера
 	$(INSTALL_DIR) $(1)/www/luci-static/shpun
