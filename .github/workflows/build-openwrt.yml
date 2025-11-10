@@ -65,6 +65,12 @@ jobs:
           echo "Patched PKG_RELEASE=${GITHUB_RUN_NUMBER}"
           grep PKG_RELEASE sdk/package/${PACKAGE_NAME}/Makefile || true
 
+      # 🧹 Чистим пакет, чтобы подтянулся новый PKGARCH/PKG_RELEASE
+      - name: Clean package before build
+        working-directory: sdk
+        run: |
+          make package/${PACKAGE_NAME}/clean
+
       - name: Configure SDK
         working-directory: sdk
         run: |
