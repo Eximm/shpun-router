@@ -7,7 +7,7 @@ PKG_RELEASE:=1
 PKG_MAINTAINER:=Eximm
 PKG_LICENSE:=MIT
 
-# Делаем пакет универсальным, чтобы ставился на любые архитектуры
+# Универсальный пакет — ставится на любые архитектуры
 PKGARCH:=all
 
 include $(INCLUDE_DIR)/package.mk
@@ -16,23 +16,25 @@ define Package/shpun-router
   SECTION:=net
   CATEGORY:=Network
   SUBMENU:=VPN
-  TITLE:=Shpun Router integration
-  DEPENDS:=+curl +bash +luci-base +luci-compat +luci-lib-jsonc
+  TITLE:=Shpun Router integration (light)
+  # НИКАКИХ тяжёлых зависимостей:
+  # luci-base и так уже есть на любом роутере с веб-мордой
+  DEPENDS:=+luci-base
 endef
 
 define Package/shpun-router/description
- Shpun Router integration package:
-  * агент для привязки роутера к Shpun VPN
-  * LuCI мастер настройки и генерации кода
+ Лёгкий пакет Shpun Router:
+  * агент привязки роутера к Shpun VPN
+  * LuCI-мастер настройки и генерации кода
+  * без curl/bash, максимум экономии флеша
 endef
 
-# Какие файлы считаем конфигами (не стирать при обновлении)
+# Можно оставить, если реально используешь эти конфиги
 define Package/shpun-router/conffiles
 /etc/config/shpun
 /etc/shpun/agent.conf
 endef
 
-# Ничего не готовим/не компилируем – только скрипты и файлы
 define Build/Prepare
 endef
 
@@ -42,25 +44,18 @@ endef
 define Build/Compile
 endef
 
-# Разворачиваем содержимое ./files в корень ФС роутера
+# Кладём всё из ./files в файловую систему роутера
 define Package/shpun-router/install
-	$(INSTALL_DIR) $(1)
-	$(CP) ./files/* $(1)/
+	$(CP) -a ./files/* $(1)/
 endef
 
-# postinst: выполняется сразу после установки пакета
-# создаём флаг первого запуска и включаем автозапуск агента
+# postinst: создаём флаг первого запуска и включаем автозапуск агента
 define Package/shpun-router/postinst
 #!/bin/sh
 [ -n "$$IPKG_INSTROOT" ] || {
     mkdir -p /etc/shpun
     touch /etc/shpun/first_run
-
-    # включить автозапуск агента, если он есть
     /etc/init.d/shpun-agent enable 2>/dev/null || true
-
-    # если хочешь авт ребут после установки – раскомментируй:
-    # reboot &
 }
 exit 0
 endef
