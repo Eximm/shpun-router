@@ -13,28 +13,21 @@ local READY_FILE     = STATE_DIR .. "/vpn_ready"
 local FIRST_RUN_FILE = STATE_DIR .. "/first_run"
 
 function index()
-	-- Пункт в меню: Network → Shpun VPN
-	entry({"admin", "network", "shpun"}, call("action_index"), "Shpun VPN", 90).dependent = false
-
-	-- Страница мастера
-	entry({"admin", "network", "shpun", "wizard"}, template("shpun/wizard"), "Мастер Shpun", 1)
+	-- Узел, на который смотрит alias из shpun.json:
+	-- admin/network/shpun  → alias → admin/network/shpun/wizard
+	entry({"admin", "network", "shpun", "wizard"},
+		template("shpun/wizard"),
+		_("Shpun VPN"), 1).leaf = true
 
 	-- API endpoints
-	entry({"admin", "network", "shpun", "api", "state"},      call("api_state")).leaf      = true
-	entry({"admin", "network", "shpun", "api", "apply_wan"},  call("api_apply_wan")).leaf  = true
-	entry({"admin", "network", "shpun", "api", "apply_wifi"}, call("api_apply_wifi")).leaf = true
-end
+	entry({"admin", "network", "shpun", "api", "state"},
+		call("api_state")).leaf = true
 
--- Что показывать по клику на "Shpun VPN" в меню
-function action_index()
-	-- Если первый запуск — сразу рендерим мастер
-	if fs.access(FIRST_RUN_FILE) then
-		tpl.render("shpun/wizard")
-		return
-	end
+	entry({"admin", "network", "shpun", "api", "apply_wan"},
+		call("api_apply_wan")).leaf = true
 
-	-- Пока логика одинаковая: всегда открываем мастер
-	tpl.render("shpun/wizard")
+	entry({"admin", "network", "shpun", "api", "apply_wifi"},
+		call("api_apply_wifi")).leaf = true
 end
 
 -- ===== API: состояние роутера / кода / подписки =====
