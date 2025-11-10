@@ -67,9 +67,10 @@ define Package/shpun-router/install
 	$(INSTALL_DIR) $(1)/usr/share/luci/status/include
 	$(INSTALL_DATA) ./files/usr/share/luci/status/include/shpunvpn.json $(1)/usr/share/luci/status/include/shpunvpn.json
 
-	# статический JS мастера
-	$(INSTALL_DIR) $(1)/www/luci-static/shpun
-	$(INSTALL_DATA) ./files/www/luci-static/shpun/wizard.js $(1)/www/luci-static/shpun/wizard.js
+	# статический JS view (новый LuCI)
+	$(INSTALL_DIR) $(1)/www/luci-static/resources/view/shpun
+	$(INSTALL_DATA) ./files/www/luci-static/resources/view/shpun/wizard.js \
+		$(1)/www/luci-static/resources/view/shpun/wizard.js
 
 	# JSON-меню для новой LuCI (24.10+)
 	$(INSTALL_DIR) $(1)/usr/share/luci/menu.d

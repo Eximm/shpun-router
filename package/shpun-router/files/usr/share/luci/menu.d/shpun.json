@@ -3,8 +3,8 @@
     "title": "Shpun VPN",
     "order": 90,
     "action": {
-      "type": "alias",
-      "path": "admin/network/shpun/wizard"
+      "type": "view",
+      "path": "shpun/wizard"
     }
   }
 }

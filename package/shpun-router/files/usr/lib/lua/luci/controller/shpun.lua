@@ -4,7 +4,6 @@ local uci  = require("luci.model.uci").cursor()
 local sys  = require "luci.sys"
 local fs   = require "nixio.fs"
 local http = require "luci.http"
-local tpl  = require "luci.template"
 
 local STATE_DIR      = "/etc/shpun"
 local CODE_FILE      = STATE_DIR .. "/router_code"
@@ -13,13 +12,7 @@ local READY_FILE     = STATE_DIR .. "/vpn_ready"
 local FIRST_RUN_FILE = STATE_DIR .. "/first_run"
 
 function index()
-	-- Узел, на который смотрит alias из shpun.json:
-	-- admin/network/shpun  → alias → admin/network/shpun/wizard
-	entry({"admin", "network", "shpun", "wizard"},
-		template("shpun/wizard"),
-		_("Shpun VPN"), 1).leaf = true
-
-	-- API endpoints
+	-- API endpoints, UI теперь чистый JS-view
 	entry({"admin", "network", "shpun", "api", "state"},
 		call("api_state")).leaf = true
 
@@ -37,7 +30,6 @@ function api_state()
 	local sub   = fs.readfile(SUB_FILE) or ""
 	local ready = fs.readfile(READY_FILE) or ""
 
-	-- убираем хвостовые \n
 	code = code:gsub("%s+$", "")
 
 	http.prepare_content("application/json")
