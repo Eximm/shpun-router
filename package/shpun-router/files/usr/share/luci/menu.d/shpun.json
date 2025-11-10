@@ -1,0 +1,10 @@
+{
+	"admin/network/shpun": {
+		"title": "Shpun VPN",
+		"order": 90,
+		"action": {
+			"type": "view",
+			"path": "shpun/wizard"
+		}
+	}
+}

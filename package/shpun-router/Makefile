@@ -7,7 +7,7 @@ PKG_RELEASE:=1
 PKG_MAINTAINER:=Eximm
 PKG_LICENSE:=MIT
 
-# ВАЖНО: до include package.mk, чтобы пакет стал noarch
+# noarch нам сейчас не критичен, но пусть будет
 PKGARCH:=all
 
 include $(INCLUDE_DIR)/package.mk
@@ -42,7 +42,7 @@ define Build/Compile
 endef
 
 define Package/shpun-router/install
-	# init-скрипт
+	# init-скрипт агента
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/etc/init.d/shpun-agent $(1)/etc/init.d/shpun-agent
 
@@ -59,9 +59,18 @@ define Package/shpun-router/install
 	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/view/shpun
 	$(INSTALL_DATA) ./files/usr/lib/lua/luci/view/shpun/wizard.htm $(1)/usr/lib/lua/luci/view/shpun/wizard.htm
 
-	# статический JS
+	# виджет на Status → Overview
+	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/view/status/include
+	$(INSTALL_DATA) ./files/usr/lib/lua/luci/view/status/include/20_shpunvpn.htm \
+		$(1)/usr/lib/lua/luci/view/status/include/20_shpunvpn.htm
+
+	# статический JS мастера
 	$(INSTALL_DIR) $(1)/www/luci-static/shpun
 	$(INSTALL_DATA) ./files/www/luci-static/shpun/wizard.js $(1)/www/luci-static/shpun/wizard.js
+
+	# JSON-меню для новой LuCI (24.10+)
+	$(INSTALL_DIR) $(1)/usr/share/luci/menu.d
+	$(INSTALL_DATA) ./files/usr/share/luci/menu.d/shpun.json $(1)/usr/share/luci/menu.d/shpun.json
 endef
 
 define Package/shpun-router/postinst
