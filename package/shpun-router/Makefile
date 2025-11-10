@@ -7,9 +7,6 @@ PKG_RELEASE:=1
 PKG_MAINTAINER:=Eximm
 PKG_LICENSE:=MIT
 
-# Пакет без бинарей — архитектурно независимый
-PKGARCH:=all
-
 include $(INCLUDE_DIR)/package.mk
 
 define Package/shpun-router
@@ -62,5 +59,8 @@ define Package/shpun-router/postinst
 }
 exit 0
 endef
+
+# Архитектурно независимый пакет (только скрипты/Lua)
+PKGARCH:=all
 
 $(eval $(call BuildPackage,shpun-router))
