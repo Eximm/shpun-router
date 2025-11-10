@@ -7,6 +7,9 @@ PKG_RELEASE:=1
 PKG_MAINTAINER:=Eximm
 PKG_LICENSE:=MIT
 
+# ВАЖНО: до include package.mk, чтобы пакет стал noarch
+PKGARCH:=all
+
 include $(INCLUDE_DIR)/package.mk
 
 define Package/shpun-router
@@ -14,7 +17,6 @@ define Package/shpun-router
   CATEGORY:=Network
   SUBMENU:=VPN
   TITLE:=Shpun Router integration (light)
-  # Только luci-base, НИКАКИХ curl/bash и т.п.
   DEPENDS:=+luci-base
 endef
 
@@ -25,7 +27,6 @@ define Package/shpun-router/description
   * без curl/bash, максимум экономии флеша
 endef
 
-# Конфиги (если используешь)
 define Package/shpun-router/conffiles
 /etc/config/shpun
 /etc/shpun/agent.conf
@@ -40,16 +41,29 @@ endef
 define Build/Compile
 endef
 
-# Установка файлов пакета
 define Package/shpun-router/install
-	# Копируем всё из ./files с сохранением прав
-	$(CP) -a ./files/* $(1)/
+	# init-скрипт
+	$(INSTALL_DIR) $(1)/etc/init.d
+	$(INSTALL_BIN) ./files/etc/init.d/shpun-agent $(1)/etc/init.d/shpun-agent
 
-	# Гарантируем, что init-скрипт исполняемый
-	chmod 0755 $(1)/etc/init.d/shpun-agent
+	# скрипты агента
+	$(INSTALL_DIR) $(1)/etc/shpun
+	$(INSTALL_BIN) ./files/etc/shpun/agent.sh $(1)/etc/shpun/agent.sh
+	$(INSTALL_BIN) ./files/etc/shpun/gen_code.sh $(1)/etc/shpun/gen_code.sh
+
+	# контроллер LuCI
+	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/controller
+	$(INSTALL_DATA) ./files/usr/lib/lua/luci/controller/shpun.lua $(1)/usr/lib/lua/luci/controller/shpun.lua
+
+	# шаблон мастера
+	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/view/shpun
+	$(INSTALL_DATA) ./files/usr/lib/lua/luci/view/shpun/wizard.htm $(1)/usr/lib/lua/luci/view/shpun/wizard.htm
+
+	# статический JS
+	$(INSTALL_DIR) $(1)/www/luci-static/shpun
+	$(INSTALL_DATA) ./files/www/luci-static/shpun/wizard.js $(1)/www/luci-static/shpun/wizard.js
 endef
 
-# postinst: первый запуск + автозапуск агента
 define Package/shpun-router/postinst
 #!/bin/sh
 [ -n "$$IPKG_INSTROOT" ] || {
@@ -59,8 +73,5 @@ define Package/shpun-router/postinst
 }
 exit 0
 endef
-
-# Архитектурно независимый пакет (только скрипты/Lua)
-PKGARCH:=all
 
 $(eval $(call BuildPackage,shpun-router))

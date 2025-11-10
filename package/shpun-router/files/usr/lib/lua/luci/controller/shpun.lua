@@ -13,14 +13,13 @@ local READY_FILE     = STATE_DIR .. "/vpn_ready"
 local FIRST_RUN_FILE = STATE_DIR .. "/first_run"
 
 function index()
-	-- Встраиваемся в существующее меню:
-	-- Network → Shpun VPN
-	entry({"admin", "network", "shpun"}, call("action_index"), _("Shpun VPN"), 90).dependent = false
+	-- Пункт в меню: Network → Shpun VPN
+	entry({"admin", "network", "shpun"}, call("action_index"), "Shpun VPN", 90).dependent = false
 
 	-- Страница мастера
-	entry({"admin", "network", "shpun", "wizard"}, template("shpun/wizard"), _("Мастер Shpun"), 1)
+	entry({"admin", "network", "shpun", "wizard"}, template("shpun/wizard"), "Мастер Shpun", 1)
 
-	-- API endpoints (под тем же префиксом)
+	-- API endpoints
 	entry({"admin", "network", "shpun", "api", "state"},      call("api_state")).leaf      = true
 	entry({"admin", "network", "shpun", "api", "apply_wan"},  call("api_apply_wan")).leaf  = true
 	entry({"admin", "network", "shpun", "api", "apply_wifi"}, call("api_apply_wifi")).leaf = true
