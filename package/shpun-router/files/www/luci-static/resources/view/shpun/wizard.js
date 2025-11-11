@@ -1,7 +1,6 @@
 'use strict';
 'require view';
 'require request';
-'require uci';
 
 return view.extend({
     load: function() {
@@ -87,14 +86,6 @@ return view.extend({
   border-radius: 4px;
 }
 .shpun-muted { font-size: 0.9em; color: #666; }
-.shpun-debug {
-  font-size: 0.8em;
-  color: #666;
-  background: #f9f9f9;
-  padding: 8px;
-  border-radius: 4px;
-  margin-top: 8px;
-}
 `]),
             E('h2', {}, [_('Мастер настройки Shpun Router')]),
             E('p', { 'class': 'shpun-muted' }, [
@@ -260,7 +251,6 @@ return view.extend({
                     E('span', { id: 'vpn-status-text' }, [_('Проверяем состояние…')]),
                     E('span', { id: 'vpn-spinner', 'class': 'shpun-spinner' })
                 ]),
-                E('div', { id: 'debug-info', 'class': 'shpun-debug', style: 'display:none;' }),
                 E('div', { 'class': 'btn-row' }, [
                     E('button', {
                         id: 'finish-btn',
@@ -321,6 +311,34 @@ return view.extend({
             if (pppoe) pppoe.style.display = (proto === 'pppoe') ? 'block' : 'none';
             if (stat)  stat.style.display  = (proto === 'static') ? 'block' : 'none';
             if (l2tp)  l2tp.style.display  = (proto === 'l2tp') ? 'block' : 'none';
+        }
+
+        /* === Улучшенная обработка API === */
+        
+        function handleApiResponse(res) {
+            if (!res) {
+                throw new Error(_('Нет ответа от сервера'));
+            }
+            
+            if (res.status !== 200) {
+                throw new Error(_('Ошибка сервера: ') + res.status);
+            }
+            
+            // Сначала получаем текст ответа
+            return res.text().then(function(text) {
+                // Проверяем, не HTML ли это
+                if (text.trim().startsWith('<!DOCTYPE') || text.trim().startsWith('<html')) {
+                    throw new Error(_('Сервер вернул HTML страницу. Возможно, проблема с авторизацией или API endpoint не существует.'));
+                }
+                
+                // Пытаемся распарсить JSON
+                try {
+                    return JSON.parse(text);
+                } catch (e) {
+                    console.error('JSON parse error:', e, 'Response:', text.substring(0, 200));
+                    throw new Error(_('Сервер вернул некорректный JSON: ') + text.substring(0, 100));
+                }
+            });
         }
 
         /* === Логика WAN === */
@@ -396,15 +414,9 @@ return view.extend({
 
                 setBusy(wanApplyBtn, true);
                 
-                // ПРОСТОЙ ВЫЗОВ API
+                // Используем улучшенную обработку
                 request.post(L.url('admin/network/shpun/api/apply_wan'), data)
-                    .then(function(res) {
-                        console.log('WAN Response:', res);
-                        if (!res || res.status !== 200) {
-                            throw new Error('HTTP ' + (res ? res.status : 'нет ответа'));
-                        }
-                        return res.json();
-                    })
+                    .then(handleApiResponse)
                     .then(function(result) {
                         console.log('WAN Result:', result);
                         if (result && result.ok === 1) {
@@ -457,13 +469,7 @@ return view.extend({
                 setBusy(wifiApplyBtn, true);
                 
                 request.post(L.url('admin/network/shpun/api/apply_wifi'), data)
-                    .then(function(res) {
-                        console.log('WiFi Response:', res);
-                        if (!res || res.status !== 200) {
-                            throw new Error('HTTP ' + (res ? res.status : 'нет ответа'));
-                        }
-                        return res.json();
-                    })
+                    .then(handleApiResponse)
                     .then(function(result) {
                         console.log('WiFi Result:', result);
                         if (result && result.ok === 1) {
@@ -501,34 +507,17 @@ return view.extend({
             };
         }
 
-        /* === Опрос состояния VPN / кода / QR === */
+        /* === Опрос состояния VPN === */
 
         function updateState() {
             var spinner = root.querySelector('#vpn-spinner');
             var st      = root.querySelector('#vpn-status-text');
-            var debug   = root.querySelector('#debug-info');
 
             request.get(L.url('admin/network/shpun/api/state'))
-                .then(function(res) {
-                    if (!res || res.status !== 200) {
-                        throw new Error('HTTP ' + (res ? res.status : 'нет ответа'));
-                    }
-                    return res.json();
-                })
+                .then(handleApiResponse)
                 .then(function(d) {
                     console.log('State response:', d);
                     
-                    // Показываем отладочную информацию
-                    if (debug) {
-                        debug.innerHTML = [
-                            'code: ' + (d.code || 'нет'),
-                            'has_sub: ' + (d.has_sub ? 'да' : 'нет'),
-                            'vpn_ready: ' + (d.vpn_ready ? 'да' : 'нет'),
-                            'subscription_url: ' + (d.subscription_url || 'нет')
-                        ].join(' | ');
-                        debug.style.display = 'block';
-                    }
-
                     if (d.code) {
                         var codeText = root.querySelector('#router-code');
                         if (codeText) codeText.textContent = d.code;
@@ -570,7 +559,7 @@ return view.extend({
                     var spinner = root.querySelector('#vpn-spinner');
                     if (spinner) spinner.style.display = 'none';
                     if (st) {
-                        st.textContent = _('Ошибка связи с сервером: ') + e.message;
+                        st.textContent = _('Ошибка связи: ') + e.message;
                     }
                     setTimeout(updateState, 8000);
                 });
