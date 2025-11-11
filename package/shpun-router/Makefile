@@ -75,6 +75,13 @@ define Package/shpun-router/install
 	$(INSTALL_DIR) $(1)/www/luci-static/resources/view/shpun
 	$(INSTALL_DATA) ./files/www/luci-static/resources/view/shpun/wizard.js \
 		$(1)/www/luci-static/resources/view/shpun/wizard.js
+
+	# uci-defaults: очистка кэша LuCI после установки (один раз)
+	$(INSTALL_DIR) $(1)/etc/uci-defaults
+	echo '#!/bin/sh' > $(1)/etc/uci-defaults/99-shpun-luci-refresh
+	echo 'rm -rf /tmp/luci-*' >> $(1)/etc/uci-defaults/99-shpun-luci-refresh
+	echo '/etc/init.d/uhttpd restart >/dev/null 2>&1 &' >> $(1)/etc/uci-defaults/99-shpun-luci-refresh
+	chmod 755 $(1)/etc/uci-defaults/99-shpun-luci-refresh
 endef
 
 define Package/shpun-router/postinst
