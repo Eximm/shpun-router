@@ -35,6 +35,15 @@ return view.extend({
   color: #b71c1c;
   font-size: 0.9em;
 }
+#shpun-success {
+  display: none;
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: #e8f5e8;
+  color: #2e7d32;
+  font-size: 0.9em;
+}
 .shpun-spinner {
   width: 20px;
   height: 20px;
@@ -76,6 +85,7 @@ return view.extend({
             ]),
 
             E('div', { id: 'shpun-error' }),
+            E('div', { id: 'shpun-success' }),
 
             /* === Шаг 1: WAN === */
             E('div', { 'class': 'step step-1 step-card active' }, [
@@ -268,11 +278,17 @@ return view.extend({
             }
         }
 
-        function clearError() {
-            var box = root.querySelector('#shpun-error');
+        function showSuccess(msg) {
+            var box = root.querySelector('#shpun-success');
             if (box) {
-                box.style.display = 'none';
+                box.textContent = msg;
+                box.style.display = 'block';
             }
+        }
+
+        function clearMessages() {
+            root.querySelector('#shpun-error').style.display = 'none';
+            root.querySelector('#shpun-success').style.display = 'none';
         }
 
         function setBusy(btn, busy) {
@@ -296,37 +312,6 @@ return view.extend({
             if (l2tp)  l2tp.style.display  = (proto === 'l2tp') ? 'block' : 'none';
         }
 
-        function handleApiResponse(res) {
-            if (!res || res.status !== 200) {
-                throw new Error(_('Ошибка сервера: ') + (res ? res.status : 'нет ответа'));
-            }
-            
-            // Получаем текст ответа
-            return res.text().then(function(text) {
-                // Пытаемся распарсить JSON
-                try {
-                    if (text && text.trim()) {
-                        return JSON.parse(text);
-                    }
-                    return { success: true };
-                } catch (e) {
-                    console.error('Failed to parse JSON:', e, 'Response:', text.substring(0, 200));
-                    
-                    // Если это HTML страница, это ошибка
-                    if (text.trim().startsWith('<!DOCTYPE') || text.trim().startsWith('<html')) {
-                        throw new Error(_('Сервер вернул HTML вместо данных. Проверьте настройки API.'));
-                    }
-                    
-                    // Если это пустой ответ, считаем успехом
-                    if (!text.trim()) {
-                        return { success: true };
-                    }
-                    
-                    throw new Error(_('Некорректный ответ от сервера: ') + text.substring(0, 100));
-                }
-            });
-        }
-
         /* === Логика WAN === */
 
         var wanApplyBtn = root.querySelector('#wan-apply');
@@ -337,14 +322,14 @@ return view.extend({
 
         root.querySelectorAll('input[name="wan_proto"]').forEach(function(r) {
             r.addEventListener('change', function() {
-                clearError();
+                clearMessages();
                 updateWanFields(this.value);
             });
         });
 
         if (wanApplyBtn) {
             wanApplyBtn.onclick = function() {
-                clearError();
+                clearMessages();
                 var protoInput = root.querySelector('input[name="wan_proto"]:checked');
                 if (!protoInput) {
                     showError(_('Выберите тип подключения WAN'));
@@ -400,11 +385,23 @@ return view.extend({
 
                 setBusy(wanApplyBtn, true);
                 
+                // ПРОСТОЙ ВЫЗОВ API - без сложной обработки
                 request.post(L.url('admin/network/shpun/api/apply_wan'), data)
-                    .then(handleApiResponse)
+                    .then(function(res) {
+                        if (!res || res.status !== 200) {
+                            throw new Error('HTTP ' + (res ? res.status : 'нет ответа'));
+                        }
+                        return res.json();
+                    })
                     .then(function(result) {
-                        console.log('WAN settings applied:', result);
-                        showStep(2);
+                        if (result && result.ok === 1) {
+                            showSuccess(_('Настройки WAN успешно применены!'));
+                            setTimeout(function() {
+                                showStep(2);
+                            }, 1000);
+                        } else {
+                            throw new Error(result.error || _('Неизвестная ошибка'));
+                        }
                     })
                     .catch(function(e) {
                         console.error('WAN apply error:', e);
@@ -418,7 +415,7 @@ return view.extend({
 
         if (wanSkipBtn) {
             wanSkipBtn.onclick = function() {
-                clearError();
+                clearMessages();
                 showStep(2);
             };
         }
@@ -430,7 +427,7 @@ return view.extend({
 
         if (wifiApplyBtn) {
             wifiApplyBtn.onclick = function() {
-                clearError();
+                clearMessages();
                 var ssid = (root.querySelector('#wifi-ssid') || {}).value || '';
                 var key  = (root.querySelector('#wifi-key')  || {}).value || '';
 
@@ -445,11 +442,24 @@ return view.extend({
                 };
 
                 setBusy(wifiApplyBtn, true);
+                
+                // ПРОСТОЙ ВЫЗОВ API
                 request.post(L.url('admin/network/shpun/api/apply_wifi'), data)
-                    .then(handleApiResponse)
+                    .then(function(res) {
+                        if (!res || res.status !== 200) {
+                            throw new Error('HTTP ' + (res ? res.status : 'нет ответа'));
+                        }
+                        return res.json();
+                    })
                     .then(function(result) {
-                        console.log('WiFi settings applied:', result);
-                        showStep(3);
+                        if (result && result.ok === 1) {
+                            showSuccess(_('Настройки Wi-Fi успешно применены!'));
+                            setTimeout(function() {
+                                showStep(3);
+                            }, 1000);
+                        } else {
+                            throw new Error(result.error || _('Неизвестная ошибка'));
+                        }
                     })
                     .catch(function(e) {
                         console.error('WiFi apply error:', e);
@@ -463,7 +473,7 @@ return view.extend({
 
         if (wifiSkipBtn) {
             wifiSkipBtn.onclick = function() {
-                clearError();
+                clearMessages();
                 showStep(3);
             };
         }
@@ -479,68 +489,53 @@ return view.extend({
 
         /* === Опрос состояния VPN / кода / QR === */
 
-        function updateState(delay) {
-            if (typeof delay === 'number' && delay > 0) {
-                window.setTimeout(function() { updateState(); }, delay);
-                return;
-            }
-
+        function updateState() {
             var spinner = root.querySelector('#vpn-spinner');
             var st      = root.querySelector('#vpn-status-text');
 
-            // Используем request вместо fetch для совместимости
+            // ПРОСТОЙ ЗАПРОС СОСТОЯНИЯ
             request.get(L.url('admin/network/shpun/api/state'))
                 .then(function(res) {
                     if (!res || res.status !== 200) {
                         throw new Error('HTTP ' + (res ? res.status : 'нет ответа'));
                     }
-                    return res.text();
+                    return res.json();
                 })
-                .then(function(text) {
-                    try {
-                        var d = text && text.trim() ? JSON.parse(text) : {};
-                        
-                        if (d.code) {
-                            var codeText = root.querySelector('#router-code');
-                            if (codeText) codeText.textContent = d.code;
+                .then(function(d) {
+                    if (d.code) {
+                        var codeText = root.querySelector('#router-code');
+                        if (codeText) codeText.textContent = d.code;
 
-                            var botUsername = 'shpunvpn_bot';
-                            var tgUrl = 'https://t.me/' + botUsername +
-                                '?start=router_' + encodeURIComponent(d.code);
-                            var qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=' +
-                                encodeURIComponent(tgUrl);
+                        var botUsername = 'shpunvpn_bot';
+                        var tgUrl = 'https://t.me/' + botUsername +
+                            '?start=router_' + encodeURIComponent(d.code);
+                        var qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=' +
+                            encodeURIComponent(tgUrl);
 
-                            var img = root.querySelector('#qr-img');
-                            if (img) {
-                                if (img.src !== qrUrl) img.src = qrUrl;
-                                img.style.display = 'block';
-                            }
-                            var linkEl = root.querySelector('#tg-link');
-                            if (linkEl) linkEl.href = tgUrl;
+                        var img = root.querySelector('#qr-img');
+                        if (img) {
+                            if (img.src !== qrUrl) img.src = qrUrl;
+                            img.style.display = 'block';
                         }
+                        var linkEl = root.querySelector('#tg-link');
+                        if (linkEl) linkEl.href = tgUrl;
+                    }
 
-                        if (st && spinner) {
-                            if (!d.has_sub) {
-                                st.textContent = _('Ожидаем привязку…');
-                                spinner.style.display = 'none';
-                                updateState(5000);
-                            } else if (d.has_sub && !d.vpn_ready) {
-                                st.textContent = _('Получаем настройки и запускаем VPN…');
-                                spinner.style.display = 'inline-block';
-                                updateState(3000);
-                            } else if (d.has_sub && d.vpn_ready) {
-                                st.textContent = _('VPN настроен и работает ✅');
-                                spinner.style.display = 'none';
-                            }
-                        } else if (!d.has_sub) {
-                            updateState(5000);
+                    if (st && spinner) {
+                        if (!d.has_sub) {
+                            st.textContent = _('Ожидаем привязку…');
+                            spinner.style.display = 'none';
+                            setTimeout(updateState, 5000);
+                        } else if (d.has_sub && !d.vpn_ready) {
+                            st.textContent = _('Получаем настройки и запускаем VPN…');
+                            spinner.style.display = 'inline-block';
+                            setTimeout(updateState, 3000);
+                        } else if (d.has_sub && d.vpn_ready) {
+                            st.textContent = _('VPN настроен и работает ✅');
+                            spinner.style.display = 'none';
                         }
-                    } catch (e) {
-                        console.error('State parse error:', e);
-                        if (st) {
-                            st.textContent = _('Ошибка получения статуса');
-                        }
-                        updateState(8000);
+                    } else if (!d.has_sub) {
+                        setTimeout(updateState, 5000);
                     }
                 })
                 .catch(function(e) {
@@ -550,7 +545,7 @@ return view.extend({
                     if (st) {
                         st.textContent = _('Нет связи с сервером');
                     }
-                    updateState(8000);
+                    setTimeout(updateState, 8000);
                 });
         }
 
