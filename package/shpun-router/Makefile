@@ -48,33 +48,33 @@ define Package/shpun-router/install
 
 	# скрипты агента
 	$(INSTALL_DIR) $(1)/etc/shpun
-	$(INSTALL_BIN) ./files/etc/shpun/agent.sh $(1)/etc/shpun/agent.sh
+	$(INSTALL_BIN) ./files/etc/shpun/agent.sh    $(1)/etc/shpun/agent.sh
 	$(INSTALL_BIN) ./files/etc/shpun/gen_code.sh $(1)/etc/shpun/gen_code.sh
 
 	# контроллер LuCI
 	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/controller
-	$(INSTALL_DATA) ./files/usr/lib/lua/luci/controller/shpun.lua $(1)/usr/lib/lua/luci/controller/shpun.lua
+	$(INSTALL_DATA) ./files/usr/lib/lua/luci/controller/shpun.lua \
+		$(1)/usr/lib/lua/luci/controller/shpun.lua
 
-	# шаблон мастера
-	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/view/shpun
-	$(INSTALL_DATA) ./files/usr/lib/lua/luci/view/shpun/wizard.htm $(1)/usr/lib/lua/luci/view/shpun/wizard.htm
-
-	# виджет на Status → Overview
+	# виджет статуса (20_shpunvpn.htm)
 	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/view/status/include
-	$(INSTALL_DATA) ./files/usr/lib/lua/luci/view/status/include/20_shpunvpn.htm $(1)/usr/lib/lua/luci/view/status/include/20_shpunvpn.htm
+	$(INSTALL_DATA) ./files/usr/lib/lua/luci/view/status/include/20_shpunvpn.htm \
+		$(1)/usr/lib/lua/luci/view/status/include/20_shpunvpn.htm
 
-	# JSON-описание виджета (для LuCI 24.10+)
+	# JSON-меню LuCI
+	$(INSTALL_DIR) $(1)/usr/share/luci/menu.d
+	$(INSTALL_DATA) ./files/usr/share/luci/menu.d/shpun.json \
+		$(1)/usr/share/luci/menu.d/shpun.json
+
+	# JSON для status (если используешь)
 	$(INSTALL_DIR) $(1)/usr/share/luci/status/include
-	$(INSTALL_DATA) ./files/usr/share/luci/status/include/shpunvpn.json $(1)/usr/share/luci/status/include/shpunvpn.json
+	$(INSTALL_DATA) ./files/usr/share/luci/status/include/shpunvpn.json \
+		$(1)/usr/share/luci/status/include/shpunvpn.json
 
-	# статический JS view (новый LuCI)
+	# JS-мастер (новый путь для LuCI 24.10+)
 	$(INSTALL_DIR) $(1)/www/luci-static/resources/view/shpun
 	$(INSTALL_DATA) ./files/www/luci-static/resources/view/shpun/wizard.js \
 		$(1)/www/luci-static/resources/view/shpun/wizard.js
-
-	# JSON-меню для новой LuCI (24.10+)
-	$(INSTALL_DIR) $(1)/usr/share/luci/menu.d
-	$(INSTALL_DATA) ./files/usr/share/luci/menu.d/shpun.json $(1)/usr/share/luci/menu.d/shpun.json
 endef
 
 define Package/shpun-router/postinst
