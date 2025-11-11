@@ -301,13 +301,14 @@ return view.extend({
                 throw new Error(_('Ошибка сервера: ') + (res ? res.status : 'нет ответа'));
             }
             
+            // Получаем текст ответа
             return res.text().then(function(text) {
                 // Пытаемся распарсить JSON
                 try {
-                    if (text) {
+                    if (text && text.trim()) {
                         return JSON.parse(text);
                     }
-                    return {};
+                    return { success: true };
                 } catch (e) {
                     console.error('Failed to parse JSON:', e, 'Response:', text.substring(0, 200));
                     
@@ -487,70 +488,70 @@ return view.extend({
             var spinner = root.querySelector('#vpn-spinner');
             var st      = root.querySelector('#vpn-status-text');
 
-            fetch(L.url('admin/network/shpun/api/state'), {
-                method: 'GET',
-                headers: { 'X-Requested-With': 'XMLHttpRequest' }
-            })
-            .then(function(r) {
-                if (!r.ok) throw new Error('HTTP ' + r.status);
-                return r.text();
-            })
-            .then(function(text) {
-                try {
-                    var d = text ? JSON.parse(text) : {};
-                    
-                    if (d.code) {
-                        var codeText = root.querySelector('#router-code');
-                        if (codeText) codeText.textContent = d.code;
-
-                        var botUsername = 'shpunvpn_bot';
-                        var tgUrl = 'https://t.me/' + botUsername +
-                            '?start=router_' + encodeURIComponent(d.code);
-                        var qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=' +
-                            encodeURIComponent(tgUrl);
-
-                        var img = root.querySelector('#qr-img');
-                        if (img) {
-                            if (img.src !== qrUrl) img.src = qrUrl;
-                            img.style.display = 'block';
-                        }
-                        var linkEl = root.querySelector('#tg-link');
-                        if (linkEl) linkEl.href = tgUrl;
+            // Используем request вместо fetch для совместимости
+            request.get(L.url('admin/network/shpun/api/state'))
+                .then(function(res) {
+                    if (!res || res.status !== 200) {
+                        throw new Error('HTTP ' + (res ? res.status : 'нет ответа'));
                     }
+                    return res.text();
+                })
+                .then(function(text) {
+                    try {
+                        var d = text && text.trim() ? JSON.parse(text) : {};
+                        
+                        if (d.code) {
+                            var codeText = root.querySelector('#router-code');
+                            if (codeText) codeText.textContent = d.code;
 
-                    if (st && spinner) {
-                        if (!d.has_sub) {
-                            st.textContent = _('Ожидаем привязку…');
-                            spinner.style.display = 'none';
+                            var botUsername = 'shpunvpn_bot';
+                            var tgUrl = 'https://t.me/' + botUsername +
+                                '?start=router_' + encodeURIComponent(d.code);
+                            var qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=' +
+                                encodeURIComponent(tgUrl);
+
+                            var img = root.querySelector('#qr-img');
+                            if (img) {
+                                if (img.src !== qrUrl) img.src = qrUrl;
+                                img.style.display = 'block';
+                            }
+                            var linkEl = root.querySelector('#tg-link');
+                            if (linkEl) linkEl.href = tgUrl;
+                        }
+
+                        if (st && spinner) {
+                            if (!d.has_sub) {
+                                st.textContent = _('Ожидаем привязку…');
+                                spinner.style.display = 'none';
+                                updateState(5000);
+                            } else if (d.has_sub && !d.vpn_ready) {
+                                st.textContent = _('Получаем настройки и запускаем VPN…');
+                                spinner.style.display = 'inline-block';
+                                updateState(3000);
+                            } else if (d.has_sub && d.vpn_ready) {
+                                st.textContent = _('VPN настроен и работает ✅');
+                                spinner.style.display = 'none';
+                            }
+                        } else if (!d.has_sub) {
                             updateState(5000);
-                        } else if (d.has_sub && !d.vpn_ready) {
-                            st.textContent = _('Получаем настройки и запускаем VPN…');
-                            spinner.style.display = 'inline-block';
-                            updateState(3000);
-                        } else if (d.has_sub && d.vpn_ready) {
-                            st.textContent = _('VPN настроен и работает ✅');
-                            spinner.style.display = 'none';
                         }
-                    } else if (!d.has_sub) {
-                        updateState(5000);
+                    } catch (e) {
+                        console.error('State parse error:', e);
+                        if (st) {
+                            st.textContent = _('Ошибка получения статуса');
+                        }
+                        updateState(8000);
                     }
-                } catch (e) {
-                    console.error('State parse error:', e);
+                })
+                .catch(function(e) {
+                    console.error('State fetch error:', e);
+                    var spinner = root.querySelector('#vpn-spinner');
+                    if (spinner) spinner.style.display = 'none';
                     if (st) {
-                        st.textContent = _('Ошибка получения статуса');
+                        st.textContent = _('Нет связи с сервером');
                     }
                     updateState(8000);
-                }
-            })
-            .catch(function(e) {
-                console.error('State fetch error:', e);
-                var spinner = root.querySelector('#vpn-spinner');
-                if (spinner) spinner.style.display = 'none';
-                if (st) {
-                    st.textContent = _('Нет связи с сервером');
-                }
-                updateState(8000);
-            });
+                });
         }
 
         // Инициализация
