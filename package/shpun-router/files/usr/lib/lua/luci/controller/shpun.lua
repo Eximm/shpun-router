@@ -12,9 +12,7 @@ local READY_FILE     = STATE_DIR .. "/vpn_ready"
 local FIRST_RUN_FILE = STATE_DIR .. "/first_run"
 
 function index()
-    -- ВАЖНО: никакого entry({"admin","network","shpun"}, ...) здесь нет.
-    -- Пункт меню создаётся через JSON /usr/share/luci/menu.d/shpun.json.
-
+    -- API: /admin/network/shpun/api/*
     entry({"admin", "network", "shpun", "api", "state"},
         call("api_state"), nil).leaf = true
 
@@ -51,7 +49,6 @@ function api_apply_wan()
     if proto == "dhcp" then
         uci:set("network", "wan", "proto", "dhcp")
 
-        -- подчистим лишнее
         uci:delete("network", "wan", "username")
         uci:delete("network", "wan", "password")
         uci:delete("network", "wan", "ipaddr")
@@ -121,7 +118,7 @@ function api_apply_wan()
             return
         end
 
-        -- Требуется наличие proto-l2tp / luci-proto-l2tp в прошивке
+        -- Требуются пакеты proto-l2tp / luci-proto-l2tp
         uci:set("network", "wan", "proto",    "l2tp")
         uci:set("network", "wan", "server",   srv)
         uci:set("network", "wan", "username", user)
