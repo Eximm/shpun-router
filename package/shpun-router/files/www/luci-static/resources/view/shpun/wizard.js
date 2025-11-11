@@ -7,9 +7,6 @@ return view.extend({
 	},
 
 	render: function() {
-		const base    = L.env.cgi_base || '';
-		const apiBase = base + '/admin/network/shpun/api';
-
 		const root = E('div', { id: 'shpun-wizard', 'class': 'cbi-section' }, [
 			E('style', {}, [String.raw`
 #shpun-wizard { max-width: 720px; margin: 0 auto; }
@@ -362,7 +359,7 @@ return view.extend({
 				}
 
 				setBusy(wanApplyBtn, true);
-				fetch(apiBase + '/apply_wan', {
+				fetch(L.url('admin/network/shpun/api/apply_wan'), {
 					method: 'POST',
 					headers: {
 						'Content-Type': 'application/x-www-form-urlencoded',
@@ -412,7 +409,7 @@ return view.extend({
 				data.set('key',  key);
 
 				setBusy(wifiApplyBtn, true);
-				fetch(apiBase + '/apply_wifi', {
+				fetch(L.url('admin/network/shpun/api/apply_wifi'), {
 					method: 'POST',
 					headers: {
 						'Content-Type': 'application/x-www-form-urlencoded',
@@ -462,7 +459,7 @@ return view.extend({
 			var spinner = root.querySelector('#vpn-spinner');
 			var st      = root.querySelector('#vpn-status-text');
 
-			fetch(apiBase + '/state', {
+			fetch(L.url('admin/network/shpun/api/state'), {
 				method: 'GET',
 				headers: { 'X-Requested-With': 'XMLHttpRequest' }
 			})
