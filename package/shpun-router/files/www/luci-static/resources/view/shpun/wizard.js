@@ -358,6 +358,10 @@ return view.extend({
 					data.set('pass',   pass);
 				}
 
+				/* === ВАЖНО: добавляем CSRF-токен для LuCI === */
+				if (L.env && L.env.token)
+					data.set('token', L.env.token);
+
 				setBusy(wanApplyBtn, true);
 				fetch(L.url('admin/network/shpun/api/apply_wan'), {
 					method: 'POST',
@@ -407,6 +411,10 @@ return view.extend({
 				var data = new URLSearchParams();
 				data.set('ssid', ssid.trim());
 				data.set('key',  key);
+
+				/* CSRF-токен для POST */
+				if (L.env && L.env.token)
+					data.set('token', L.env.token);
 
 				setBusy(wifiApplyBtn, true);
 				fetch(L.url('admin/network/shpun/api/apply_wifi'), {
