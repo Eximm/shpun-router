@@ -1,5 +1,6 @@
 'use strict';
 'require view';
+'require request';
 
 return view.extend({
 	load: function() {
@@ -311,8 +312,7 @@ return view.extend({
 				}
 
 				var proto = protoInput.value;
-				var data = new URLSearchParams();
-				data.set('proto', proto);
+				var data = { proto: proto };
 
 				if (proto === 'pppoe') {
 					var user = (root.querySelector('#pppoe-user') || {}).value || '';
@@ -323,8 +323,8 @@ return view.extend({
 						return;
 					}
 
-					data.set('user', user.trim());
-					data.set('pass', pass);
+					data.user = user.trim();
+					data.pass = pass;
 				}
 				else if (proto === 'static') {
 					var ip  = (root.querySelector('#static-ip')   || {}).value || '';
@@ -337,54 +337,43 @@ return view.extend({
 						return;
 					}
 
-					data.set('ipaddr',  ip.trim());
-					data.set('netmask', msk.trim());
-					data.set('gateway', gw.trim());
+					data.ipaddr  = ip.trim();
+					data.netmask = msk.trim();
+					data.gateway = gw.trim();
 					if (dns.trim())
-						data.set('dns', dns.trim());
+						data.dns = dns.trim();
 				}
 				else if (proto === 'l2tp') {
 					var srv  = (root.querySelector('#l2tp-server') || {}).value || '';
-					var user = (root.querySelector('#l2tp-user')   || {}).value || '';
-					var pass = (root.querySelector('#l2tp-pass')   || {}).value || '';
+					var user2 = (root.querySelector('#l2tp-user')   || {}).value || '';
+					var pass2 = (root.querySelector('#l2tp-pass')   || {}).value || '';
 
-					if (!srv.trim() || !user.trim() || !pass) {
+					if (!srv.trim() || !user2.trim() || !pass2) {
 						showError(_('Для L2TP необходимо указать сервер, логин и пароль'));
 						return;
 					}
 
-					data.set('server', srv.trim());
-					data.set('user',   user.trim());
-					data.set('pass',   pass);
+					data.server = srv.trim();
+					data.user   = user2.trim();
+					data.pass   = pass2;
 				}
 
-				/* токен в URL */
-				let url = L.url('admin/network/shpun/api/apply_wan');
-				if (L.env && L.env.token)
-					url += '?token=' + encodeURIComponent(L.env.token);
-
 				setBusy(wanApplyBtn, true);
-				fetch(url, {
-					method: 'POST',
-					headers: {
-						'Content-Type': 'application/x-www-form-urlencoded',
-						'X-Requested-With': 'XMLHttpRequest'
-					},
-					body: data
-				})
-				.then(function(r) {
-					if (!r.ok) throw new Error('HTTP ' + r.status);
-					return r.json();
-				})
-				.then(function() {
-					showStep(2);
-				})
-				.catch(function(e) {
-					showError(_('Не удалось применить настройки WAN: ') + e.message);
-				})
-				.finally(function() {
-					setBusy(wanApplyBtn, false);
-				});
+				request.post(L.url('admin/network/shpun/api/apply_wan'), data)
+					.then(function(res) {
+						if (!res || res.status !== 200)
+							throw new Error('HTTP ' + (res ? res.status : '?'));
+						return res.json();
+					})
+					.then(function() {
+						showStep(2);
+					})
+					.catch(function(e) {
+						showError(_('Не удалось применить настройки WAN: ') + e.message);
+					})
+					.finally(function() {
+						setBusy(wanApplyBtn, false);
+					});
 			};
 		}
 
@@ -409,36 +398,27 @@ return view.extend({
 					return;
 				}
 
-				var data = new URLSearchParams();
-				data.set('ssid', ssid.trim());
-				data.set('key',  key);
-
-				let url = L.url('admin/network/shpun/api/apply_wifi');
-				if (L.env && L.env.token)
-					url += '?token=' + encodeURIComponent(L.env.token);
+				var data = {
+					ssid: ssid.trim(),
+					key:  key
+				};
 
 				setBusy(wifiApplyBtn, true);
-				fetch(url, {
-					method: 'POST',
-					headers: {
-						'Content-Type': 'application/x-www-form-urlencoded',
-						'X-Requested-With': 'XMLHttpRequest'
-					},
-					body: data
-				})
-				.then(function(r) {
-					if (!r.ok) throw new Error('HTTP ' + r.status);
-					return r.json();
-				})
-				.then(function() {
-					showStep(3);
-				})
-				.catch(function(e) {
-					showError(_('Не удалось применить настройки Wi-Fi: ') + e.message);
-				})
-				.finally(function() {
-					setBusy(wifiApplyBtn, false);
-				});
+				request.post(L.url('admin/network/shpun/api/apply_wifi'), data)
+					.then(function(res) {
+						if (!res || res.status !== 200)
+							throw new Error('HTTP ' + (res ? res.status : '?'));
+						return res.json();
+					})
+					.then(function() {
+						showStep(3);
+					})
+					.catch(function(e) {
+						showError(_('Не удалось применить настройки Wi-Fi: ') + e.message);
+					})
+					.finally(function() {
+						setBusy(wifiApplyBtn, false);
+					});
 			};
 		}
 
