@@ -313,7 +313,7 @@ return view.extend({
             if (l2tp)  l2tp.style.display  = (proto === 'l2tp') ? 'block' : 'none';
         }
 
-        /* === Улучшенная обработка API === */
+        /* === ПРОСТАЯ обработка API === */
         
         function handleApiResponse(res) {
             if (!res) {
@@ -324,20 +324,12 @@ return view.extend({
                 throw new Error(_('Ошибка сервера: ') + res.status);
             }
             
-            // Сначала получаем текст ответа
-            return res.text().then(function(text) {
-                // Проверяем, не HTML ли это
-                if (text.trim().startsWith('<!DOCTYPE') || text.trim().startsWith('<html')) {
-                    throw new Error(_('Сервер вернул HTML страницу. Возможно, проблема с авторизацией или API endpoint не существует.'));
-                }
-                
-                // Пытаемся распарсить JSON
-                try {
-                    return JSON.parse(text);
-                } catch (e) {
-                    console.error('JSON parse error:', e, 'Response:', text.substring(0, 200));
-                    throw new Error(_('Сервер вернул некорректный JSON: ') + text.substring(0, 100));
-                }
+            // В LuCI res.json() уже возвращает промис с данными
+            return res.json().then(function(data) {
+                return data;
+            }).catch(function(e) {
+                // Если JSON не парсится, это HTML ошибка
+                throw new Error(_('Сервер вернул некорректный ответ. Проверьте API endpoints.'));
             });
         }
 
@@ -414,9 +406,14 @@ return view.extend({
 
                 setBusy(wanApplyBtn, true);
                 
-                // Используем улучшенную обработку
+                // ПРОСТОЙ вызов API
                 request.post(L.url('admin/network/shpun/api/apply_wan'), data)
-                    .then(handleApiResponse)
+                    .then(function(res) {
+                        if (!res || res.status !== 200) {
+                            throw new Error('HTTP ' + (res ? res.status : 'нет ответа'));
+                        }
+                        return res.json();
+                    })
                     .then(function(result) {
                         console.log('WAN Result:', result);
                         if (result && result.ok === 1) {
@@ -469,7 +466,12 @@ return view.extend({
                 setBusy(wifiApplyBtn, true);
                 
                 request.post(L.url('admin/network/shpun/api/apply_wifi'), data)
-                    .then(handleApiResponse)
+                    .then(function(res) {
+                        if (!res || res.status !== 200) {
+                            throw new Error('HTTP ' + (res ? res.status : 'нет ответа'));
+                        }
+                        return res.json();
+                    })
                     .then(function(result) {
                         console.log('WiFi Result:', result);
                         if (result && result.ok === 1) {
@@ -514,7 +516,12 @@ return view.extend({
             var st      = root.querySelector('#vpn-status-text');
 
             request.get(L.url('admin/network/shpun/api/state'))
-                .then(handleApiResponse)
+                .then(function(res) {
+                    if (!res || res.status !== 200) {
+                        throw new Error('HTTP ' + (res ? res.status : 'нет ответа'));
+                    }
+                    return res.json();
+                })
                 .then(function(d) {
                     console.log('State response:', d);
                     
