@@ -12,7 +12,7 @@ local READY_FILE     = STATE_DIR .. "/vpn_ready"
 local FIRST_RUN_FILE = STATE_DIR .. "/first_run"
 
 function index()
-    -- ВАЖНО: никаких entry({"admin","network","shpun"}, ...) здесь нет.
+    -- ВАЖНО: никакого entry({"admin","network","shpun"}, ...) здесь нет.
     -- Пункт меню создаётся через JSON /usr/share/luci/menu.d/shpun.json.
 
     entry({"admin", "network", "shpun", "api", "state"},
@@ -50,10 +50,90 @@ function api_apply_wan()
 
     if proto == "dhcp" then
         uci:set("network", "wan", "proto", "dhcp")
+
+        -- подчистим лишнее
+        uci:delete("network", "wan", "username")
+        uci:delete("network", "wan", "password")
+        uci:delete("network", "wan", "ipaddr")
+        uci:delete("network", "wan", "netmask")
+        uci:delete("network", "wan", "gateway")
+        uci:delete("network", "wan", "dns")
+        uci:delete("network", "wan", "server")
+
     elseif proto == "pppoe" then
+        local user = http.formvalue("user") or ""
+        local pass = http.formvalue("pass") or ""
+
+        if user == "" or pass == "" then
+            http.status(400, "Bad Request")
+            http.prepare_content("application/json")
+            http.write_json({ ok = 0, error = "missing pppoe credentials" })
+            return
+        end
+
         uci:set("network", "wan", "proto", "pppoe")
-        uci:set("network", "wan", "username", http.formvalue("user") or "")
-        uci:set("network", "wan", "password", http.formvalue("pass") or "")
+        uci:set("network", "wan", "username", user)
+        uci:set("network", "wan", "password", pass)
+
+        uci:delete("network", "wan", "ipaddr")
+        uci:delete("network", "wan", "netmask")
+        uci:delete("network", "wan", "gateway")
+        uci:delete("network", "wan", "dns")
+        uci:delete("network", "wan", "server")
+
+    elseif proto == "static" then
+        local ip  = http.formvalue("ipaddr")  or ""
+        local msk = http.formvalue("netmask") or ""
+        local gw  = http.formvalue("gateway") or ""
+        local dns = http.formvalue("dns")     or ""
+
+        if ip == "" or msk == "" or gw == "" then
+            http.status(400, "Bad Request")
+            http.prepare_content("application/json")
+            http.write_json({ ok = 0, error = "missing static params" })
+            return
+        end
+
+        uci:set("network", "wan", "proto",   "static")
+        uci:set("network", "wan", "ipaddr",  ip)
+        uci:set("network", "wan", "netmask", msk)
+        uci:set("network", "wan", "gateway", gw)
+
+        if dns ~= "" then
+            uci:set("network", "wan", "dns", dns)
+        else
+            uci:delete("network", "wan", "dns")
+        end
+
+        uci:delete("network", "wan", "username")
+        uci:delete("network", "wan", "password")
+        uci:delete("network", "wan", "server")
+
+    elseif proto == "l2tp" then
+        local srv  = http.formvalue("server") or ""
+        local user = http.formvalue("user")   or ""
+        local pass = http.formvalue("pass")   or ""
+
+        if srv == "" or user == "" or pass == "" then
+            http.status(400, "Bad Request")
+            http.prepare_content("application/json")
+            http.write_json({ ok = 0, error = "missing l2tp params" })
+            return
+        end
+
+        -- Требуется наличие proto-l2tp / luci-proto-l2tp в прошивке
+        uci:set("network", "wan", "proto",    "l2tp")
+        uci:set("network", "wan", "server",   srv)
+        uci:set("network", "wan", "username", user)
+        uci:set("network", "wan", "password", pass)
+        uci:set("network", "wan", "peerdns",  "1")
+        uci:set("network", "wan", "defaultroute", "1")
+
+        uci:delete("network", "wan", "ipaddr")
+        uci:delete("network", "wan", "netmask")
+        uci:delete("network", "wan", "gateway")
+        uci:delete("network", "wan", "dns")
+
     else
         http.status(400, "Bad Request")
         http.prepare_content("application/json")
