@@ -1,6 +1,7 @@
 'use strict';
 'require view';
 'require request';
+'require uci';
 
 return view.extend({
     load: function() {
@@ -65,6 +66,11 @@ return view.extend({
 #router-code {
   font-weight: bold;
   font-size: 1.2em;
+  color: #2e7d32;
+  background: #f5f5f5;
+  padding: 8px 12px;
+  border-radius: 4px;
+  display: inline-block;
 }
 .shpun-field { margin-bottom: 10px; }
 .shpun-field label {
@@ -76,8 +82,19 @@ return view.extend({
 .shpun-field input[type="password"] {
   width: 100%;
   max-width: 360px;
+  padding: 6px 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
 }
 .shpun-muted { font-size: 0.9em; color: #666; }
+.shpun-debug {
+  font-size: 0.8em;
+  color: #666;
+  background: #f9f9f9;
+  padding: 8px;
+  border-radius: 4px;
+  margin-top: 8px;
+}
 `]),
             E('h2', {}, [_('Мастер настройки Shpun Router')]),
             E('p', { 'class': 'shpun-muted' }, [
@@ -125,9 +142,6 @@ return view.extend({
                     E('div', { 'class': 'shpun-field' }, [
                         E('label', { 'for': 'pppoe-pass' }, [_('PPPoE пароль:')]),
                         E('input', { id: 'pppoe-pass', type: 'password', autocomplete: 'off' })
-                    ]),
-                    E('p', { 'class': 'shpun-muted' }, [
-                        _('Эти данные вы можете найти в договоре с провайдером или личном кабинете.')
                     ])
                 ]),
 
@@ -148,9 +162,6 @@ return view.extend({
                     E('div', { 'class': 'shpun-field' }, [
                         E('label', { 'for': 'static-dns' }, [_('DNS-сервер (можно оставить пустым):')]),
                         E('input', { id: 'static-dns', type: 'text', placeholder: '1.1.1.1' })
-                    ]),
-                    E('p', { 'class': 'shpun-muted' }, [
-                        _('Все параметры вы берёте у провайдера. Если что-то не знаете — лучше используйте DHCP.')
                     ])
                 ]),
 
@@ -167,9 +178,6 @@ return view.extend({
                     E('div', { 'class': 'shpun-field' }, [
                         E('label', { 'for': 'l2tp-pass' }, [_('L2TP пароль:')]),
                         E('input', { id: 'l2tp-pass', type: 'password' })
-                    ]),
-                    E('p', { 'class': 'shpun-muted' }, [
-                        _('Используется провайдерами, где вы подключаетесь к VPN-серверу L2TP.')
                     ])
                 ]),
 
@@ -249,9 +257,10 @@ return view.extend({
                     ])
                 ]),
                 E('div', { id: 'vpn-status', 'class': 'shpun-field' }, [
-                    E('span', { id: 'vpn-status-text' }, [_('Ожидаем привязку…')]),
-                    E('span', { id: 'vpn-spinner', 'class': 'shpun-spinner', style: 'display:none;' })
+                    E('span', { id: 'vpn-status-text' }, [_('Проверяем состояние…')]),
+                    E('span', { id: 'vpn-spinner', 'class': 'shpun-spinner' })
                 ]),
+                E('div', { id: 'debug-info', 'class': 'shpun-debug', style: 'display:none;' }),
                 E('div', { 'class': 'btn-row' }, [
                     E('button', {
                         id: 'finish-btn',
@@ -276,6 +285,7 @@ return view.extend({
                 box.textContent = msg;
                 box.style.display = 'block';
             }
+            root.querySelector('#shpun-success').style.display = 'none';
         }
 
         function showSuccess(msg) {
@@ -284,6 +294,7 @@ return view.extend({
                 box.textContent = msg;
                 box.style.display = 'block';
             }
+            root.querySelector('#shpun-error').style.display = 'none';
         }
 
         function clearMessages() {
@@ -385,22 +396,24 @@ return view.extend({
 
                 setBusy(wanApplyBtn, true);
                 
-                // ПРОСТОЙ ВЫЗОВ API - без сложной обработки
+                // ПРОСТОЙ ВЫЗОВ API
                 request.post(L.url('admin/network/shpun/api/apply_wan'), data)
                     .then(function(res) {
+                        console.log('WAN Response:', res);
                         if (!res || res.status !== 200) {
                             throw new Error('HTTP ' + (res ? res.status : 'нет ответа'));
                         }
                         return res.json();
                     })
                     .then(function(result) {
+                        console.log('WAN Result:', result);
                         if (result && result.ok === 1) {
-                            showSuccess(_('Настройки WAN успешно применены!'));
+                            showSuccess(_('Настройки WAN успешно применены! Перезапускаем сеть...'));
                             setTimeout(function() {
                                 showStep(2);
-                            }, 1000);
+                            }, 2000);
                         } else {
-                            throw new Error(result.error || _('Неизвестная ошибка'));
+                            throw new Error(result.error || _('Неизвестная ошибка сервера'));
                         }
                     })
                     .catch(function(e) {
@@ -443,22 +456,23 @@ return view.extend({
 
                 setBusy(wifiApplyBtn, true);
                 
-                // ПРОСТОЙ ВЫЗОВ API
                 request.post(L.url('admin/network/shpun/api/apply_wifi'), data)
                     .then(function(res) {
+                        console.log('WiFi Response:', res);
                         if (!res || res.status !== 200) {
                             throw new Error('HTTP ' + (res ? res.status : 'нет ответа'));
                         }
                         return res.json();
                     })
                     .then(function(result) {
+                        console.log('WiFi Result:', result);
                         if (result && result.ok === 1) {
                             showSuccess(_('Настройки Wi-Fi успешно применены!'));
                             setTimeout(function() {
                                 showStep(3);
                             }, 1000);
                         } else {
-                            throw new Error(result.error || _('Неизвестная ошибка'));
+                            throw new Error(result.error || _('Неизвестная ошибка сервера'));
                         }
                     })
                     .catch(function(e) {
@@ -492,8 +506,8 @@ return view.extend({
         function updateState() {
             var spinner = root.querySelector('#vpn-spinner');
             var st      = root.querySelector('#vpn-status-text');
+            var debug   = root.querySelector('#debug-info');
 
-            // ПРОСТОЙ ЗАПРОС СОСТОЯНИЯ
             request.get(L.url('admin/network/shpun/api/state'))
                 .then(function(res) {
                     if (!res || res.status !== 200) {
@@ -502,6 +516,19 @@ return view.extend({
                     return res.json();
                 })
                 .then(function(d) {
+                    console.log('State response:', d);
+                    
+                    // Показываем отладочную информацию
+                    if (debug) {
+                        debug.innerHTML = [
+                            'code: ' + (d.code || 'нет'),
+                            'has_sub: ' + (d.has_sub ? 'да' : 'нет'),
+                            'vpn_ready: ' + (d.vpn_ready ? 'да' : 'нет'),
+                            'subscription_url: ' + (d.subscription_url || 'нет')
+                        ].join(' | ');
+                        debug.style.display = 'block';
+                    }
+
                     if (d.code) {
                         var codeText = root.querySelector('#router-code');
                         if (codeText) codeText.textContent = d.code;
@@ -524,7 +551,7 @@ return view.extend({
                     if (st && spinner) {
                         if (!d.has_sub) {
                             st.textContent = _('Ожидаем привязку…');
-                            spinner.style.display = 'none';
+                            spinner.style.display = 'inline-block';
                             setTimeout(updateState, 5000);
                         } else if (d.has_sub && !d.vpn_ready) {
                             st.textContent = _('Получаем настройки и запускаем VPN…');
@@ -543,7 +570,7 @@ return view.extend({
                     var spinner = root.querySelector('#vpn-spinner');
                     if (spinner) spinner.style.display = 'none';
                     if (st) {
-                        st.textContent = _('Нет связи с сервером');
+                        st.textContent = _('Ошибка связи с сервером: ') + e.message;
                     }
                     setTimeout(updateState, 8000);
                 });
