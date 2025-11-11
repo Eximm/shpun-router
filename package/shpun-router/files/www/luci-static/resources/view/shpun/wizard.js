@@ -1,6 +1,5 @@
 'use strict';
 'require view';
-'require request';
 
 return view.extend({
 	load: function() {
@@ -312,7 +311,8 @@ return view.extend({
 				}
 
 				var proto = protoInput.value;
-				var data = { proto: proto };
+				var params = new URLSearchParams();
+				params.set('proto', proto);
 
 				if (proto === 'pppoe') {
 					var user = (root.querySelector('#pppoe-user') || {}).value || '';
@@ -323,8 +323,8 @@ return view.extend({
 						return;
 					}
 
-					data.user = user.trim();
-					data.pass = pass;
+					params.set('user', user.trim());
+					params.set('pass', pass);
 				}
 				else if (proto === 'static') {
 					var ip  = (root.querySelector('#static-ip')   || {}).value || '';
@@ -337,11 +337,11 @@ return view.extend({
 						return;
 					}
 
-					data.ipaddr  = ip.trim();
-					data.netmask = msk.trim();
-					data.gateway = gw.trim();
+					params.set('ipaddr',  ip.trim());
+					params.set('netmask', msk.trim());
+					params.set('gateway', gw.trim());
 					if (dns.trim())
-						data.dns = dns.trim();
+						params.set('dns', dns.trim());
 				}
 				else if (proto === 'l2tp') {
 					var srv  = (root.querySelector('#l2tp-server') || {}).value || '';
@@ -353,27 +353,31 @@ return view.extend({
 						return;
 					}
 
-					data.server = srv.trim();
-					data.user   = user2.trim();
-					data.pass   = pass2;
+					params.set('server', srv.trim());
+					params.set('user',   user2.trim());
+					params.set('pass',   pass2);
 				}
 
+				var url = L.url('admin/network/shpun/api/apply_wan') + '?' + params.toString();
+
 				setBusy(wanApplyBtn, true);
-				request.post(L.url('admin/network/shpun/api/apply_wan'), data)
-					.then(function(res) {
-						if (!res || res.status !== 200)
-							throw new Error('HTTP ' + (res ? res.status : '?'));
-						return res.json();
-					})
-					.then(function() {
-						showStep(2);
-					})
-					.catch(function(e) {
-						showError(_('Не удалось применить настройки WAN: ') + e.message);
-					})
-					.finally(function() {
-						setBusy(wanApplyBtn, false);
-					});
+				fetch(url, {
+					method: 'GET',
+					headers: { 'X-Requested-With': 'XMLHttpRequest' }
+				})
+				.then(function(r) {
+					if (!r.ok) throw new Error('HTTP ' + r.status);
+					return r.json();
+				})
+				.then(function() {
+					showStep(2);
+				})
+				.catch(function(e) {
+					showError(_('Не удалось применить настройки WAN: ') + e.message);
+				})
+				.finally(function() {
+					setBusy(wanApplyBtn, false);
+				});
 			};
 		}
 
@@ -398,27 +402,30 @@ return view.extend({
 					return;
 				}
 
-				var data = {
-					ssid: ssid.trim(),
-					key:  key
-				};
+				var params = new URLSearchParams();
+				params.set('ssid', ssid.trim());
+				params.set('key',  key);
+
+				var url = L.url('admin/network/shpun/api/apply_wifi') + '?' + params.toString();
 
 				setBusy(wifiApplyBtn, true);
-				request.post(L.url('admin/network/shpun/api/apply_wifi'), data)
-					.then(function(res) {
-						if (!res || res.status !== 200)
-							throw new Error('HTTP ' + (res ? res.status : '?'));
-						return res.json();
-					})
-					.then(function() {
-						showStep(3);
-					})
-					.catch(function(e) {
-						showError(_('Не удалось применить настройки Wi-Fi: ') + e.message);
-					})
-					.finally(function() {
-						setBusy(wifiApplyBtn, false);
-					});
+				fetch(url, {
+					method: 'GET',
+					headers: { 'X-Requested-With': 'XMLHttpRequest' }
+				})
+				.then(function(r) {
+					if (!r.ok) throw new Error('HTTP ' + r.status);
+					return r.json();
+				})
+				.then(function() {
+					showStep(3);
+				})
+				.catch(function(e) {
+					showError(_('Не удалось применить настройки Wi-Fi: ') + e.message);
+				})
+				.finally(function() {
+					setBusy(wifiApplyBtn, false);
+				});
 			};
 		}
 
