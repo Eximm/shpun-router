@@ -313,23 +313,38 @@ return view.extend({
             if (l2tp)  l2tp.style.display  = (proto === 'l2tp') ? 'block' : 'none';
         }
 
-        /* === Улучшенная обработка API === */
-
+        /* === Улучшенная обработка API (фикс под LuCI) === */
         function handleApiResponse(res) {
             if (!res) {
                 throw new Error(_('Нет ответа от сервера'));
             }
 
-            if (res.status !== 200) {
-                throw new Error(_('Ошибка сервера: ') + res.status);
+            var status = (typeof res.status === 'number') ? res.status : 200;
+            if (status !== 200) {
+                throw new Error(_('Ошибка сервера: ') + status);
             }
 
-            // ВАЖНО: в LuCI request.res.text() — синхронный, а не Promise
-            var text = res.text() || '';
-            var trimmed = text.trim();
+            // ВАЖНО: в LuCI это не функция. text/responseText — СТРОКА.
+            var text = '';
+            if (typeof res === 'string') {
+                text = res;
+            } else if (typeof res.text === 'string') {
+                text = res.text;
+            } else if (typeof res.responseText === 'string') {
+                text = res.responseText;
+            } else if (res.body && typeof res.body === 'string') {
+                text = res.body;
+            } else {
+                text = '';
+            }
+
+            text = (text || '').trim();
 
             // Проверяем, не HTML ли это (например, страница логина)
-            if (trimmed.startsWith('<!DOCTYPE') || trimmed.startsWith('<html')) {
+            if (!text) {
+                throw new Error(_('Пустой ответ сервера'));
+            }
+            if (text.startsWith('<!DOCTYPE') || text.startsWith('<html')) {
                 throw new Error(_('Сервер вернул HTML страницу. Возможно, проблема с авторизацией или API endpoint не существует.'));
             }
 
@@ -337,7 +352,7 @@ return view.extend({
                 return JSON.parse(text);
             } catch (e) {
                 console.error('JSON parse error:', e, 'Response:', text.substring(0, 200));
-                throw new Error(_('Сервер вернул некорректный JSON: ') + text.substring(0, 100));
+                throw new Error(_('Сервер вернул некорректный JSON: ') + text.substring(0, 120));
             }
         }
 
@@ -414,7 +429,7 @@ return view.extend({
 
                 setBusy(wanApplyBtn, true);
 
-                request.post(L.url('admin/network/shpun/api/apply_wan'), data)
+                request.post(L.url('admin/network/shpun/api/apply_wan'), data, { timeout: 15000 })
                     .then(handleApiResponse)
                     .then(function(result) {
                         console.log('WAN Result:', result);
@@ -422,9 +437,9 @@ return view.extend({
                             showSuccess(_('Настройки WAN успешно применены! Перезапускаем сеть...'));
                             setTimeout(function() {
                                 showStep(2);
-                            }, 2000);
+                            }, 1500);
                         } else {
-                            throw new Error(result && result.error || _('Неизвестная ошибка сервера'));
+                            throw new Error((result && result.error) || _('Неизвестная ошибка сервера'));
                         }
                     })
                     .catch(function(e) {
@@ -467,7 +482,7 @@ return view.extend({
 
                 setBusy(wifiApplyBtn, true);
 
-                request.post(L.url('admin/network/shpun/api/apply_wifi'), data)
+                request.post(L.url('admin/network/shpun/api/apply_wifi'), data, { timeout: 15000 })
                     .then(handleApiResponse)
                     .then(function(result) {
                         console.log('WiFi Result:', result);
@@ -475,9 +490,9 @@ return view.extend({
                             showSuccess(_('Настройки Wi-Fi успешно применены!'));
                             setTimeout(function() {
                                 showStep(3);
-                            }, 1000);
+                            }, 800);
                         } else {
-                            throw new Error(result && result.error || _('Неизвестная ошибка сервера'));
+                            throw new Error((result && result.error) || _('Неизвестная ошибка сервера'));
                         }
                     })
                     .catch(function(e) {
@@ -512,7 +527,7 @@ return view.extend({
             var spinner = root.querySelector('#vpn-spinner');
             var st      = root.querySelector('#vpn-status-text');
 
-            request.get(L.url('admin/network/shpun/api/state'))
+            request.get(L.url('admin/network/shpun/api/state'), { timeout: 10000 })
                 .then(handleApiResponse)
                 .then(function(d) {
                     console.log('State response:', d);

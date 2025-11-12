@@ -1,4 +1,6 @@
 #!/bin/sh
+# Shpun agent v2 — POSIX clean: получает subscription_url из биллинга,
+# дальше проверяет саму ссылку: 200=ОК (редкий опрос), 404/ошибка=НЕ настроен (частый опрос).
 
 STATE_DIR="/etc/shpun"
 CODE_FILE="$STATE_DIR/router_code"
@@ -6,21 +8,26 @@ SUB_FILE="$STATE_DIR/subscription_url"
 VPN_READY_FILE="$STATE_DIR/vpn_ready"
 XRAY_CONF="/etc/xray/config.json"
 XRAY_INIT="/etc/init.d/xray"
+
+# Биллинг (куда ходим, пока роутер не настроен)
 API_URL="https://bill.shpyn.online/shm/v1/public/router_public"
 
-POLL_INTERVAL_OK=60    # когда всё ок, как часто опрашивать
-POLL_INTERVAL_FAIL=15  # пауза при ошибках
+# Интервалы
+POLL_BASE=30                 # старт опроса биллинга
+POLL_MAX=$((10*60))          # максимум бэкоффа
+POLL_JIT=15                  # ±15% к backoff
+
+OK_INTERVAL=$((6*60*60))     # 6 часов при 200 OK
+OK_JIT_MIN=$((10*60))        # минимальный джиттер при OK (±10 мин)
+OK_JIT_MAX=$((30*60))        # максимальный джиттер при OK (±30 мин)
+
+FAIL_INTERVAL=60             # 1 мин при NOT OK
 
 set -eu
 
-log() {
-	logger -t shpun-agent "$*"
-}
+log() { logger -t shpun-agent "$*"; }
 
-# --------------------------------------------------------
-# Выбор HTTP-клиента: curl / uclient-fetch / wget
-# --------------------------------------------------------
-
+# ---------- HTTP ----------
 HTTP_TOOL=""
 
 detect_http_client() {
@@ -36,193 +43,146 @@ detect_http_client() {
 }
 
 http_get() {
-	# $1 = URL
 	case "$HTTP_TOOL" in
-		curl)
-			# stdout
-			curl -fsS "$1"
-			;;
-		uclient)
-			# uclient-fetch -qO- URL
-			uclient-fetch -qO- "$1"
-			;;
-		wget)
-			# wget -qO- URL
-			wget -qO- "$1"
-			;;
-		*)
-			return 1
-			;;
+		curl)    curl -fsS "$1" ;;
+		uclient) uclient-fetch -qO- "$1" ;;
+		wget)    wget -qO- "$1" ;;
+		*)       return 1 ;;
 	esac
 }
 
 http_download() {
-	# $1 = URL, $2 = FILE
-	url="$1"
-	file="$2"
+	url="$1"; file="$2"
+	case "$HTTP_TOOL" in
+		curl)    curl -fsS "$url" -o "$file" ;;
+		uclient) uclient-fetch -qO "$file" "$url" ;;
+		wget)    wget -qO "$file" "$url" ;;
+		*)       return 1 ;;
+	esac
+}
 
+http_code() {
+	url="$1"
 	case "$HTTP_TOOL" in
 		curl)
-			curl -fsS "$url" -o "$file"
-			;;
-		uclient)
-			# uclient-fetch -qO file URL
-			uclient-fetch -qO "$file" "$url"
+			curl -fsS -o /dev/null -w "%{http_code}" "$url" 2>/dev/null || echo 000
 			;;
 		wget)
-			wget -qO "$file" "$url"
+			wget -S --spider "$url" 2>&1 | awk '/HTTP\/[0-9.]+/ {c=$2} END{if(c=="") c=0; print c}' || echo 000
+			;;
+		uclient)
+			head="$(uclient-fetch -qO- "$url" 2>/dev/null | head -c 256 || true)"
+			[ -z "$head" ] && { echo 000; return; }
+			echo "$head" | grep -qi 'not found' && echo 404 || echo 200
 			;;
 		*)
-			return 1
+			echo 000
 			;;
 	esac
 }
 
-
+# ---------- utils ----------
 ensure_prereqs() {
-	# HTTP-клиент
 	detect_http_client
-	if [ -z "$HTTP_TOOL" ]; then
-		log "no HTTP client found (curl/uclient-fetch/wget), exiting"
-		exit 1
-	fi
-	log "using HTTP client: $HTTP_TOOL"
-
-	# скрипт генерации кода
-	if [ ! -x /etc/shpun/gen_code.sh ]; then
-		log "/etc/shpun/gen_code.sh missing or not executable"
-		exit 1
-	fi
+	[ -n "$HTTP_TOOL" ] || { log "no HTTP client"; exit 1; }
+	[ -x /etc/shpun/gen_code.sh ] || { log "gen_code.sh missing"; exit 1; }
 }
 
-ensure_state_dir() {
-	if ! mkdir -p "$STATE_DIR"; then
-		log "failed to create $STATE_DIR"
-		exit 1
-	fi
-}
+ensure_state_dir() { mkdir -p "$STATE_DIR" || exit 1; }
 
 get_or_create_code() {
 	if [ ! -s "$CODE_FILE" ]; then
 		log "router code not found, generating..."
-		if ! /etc/shpun/gen_code.sh >/dev/null 2>&1; then
-			log "router code generation failed"
-			return 1
-		fi
+		/etc/shpun/gen_code.sh >/dev/null 2>&1 || { log "code generation failed"; return 1; }
 	fi
-
-	CODE=$(cat "$CODE_FILE" 2>/dev/null || echo "")
-	if [ -z "$CODE" ]; then
-		log "router code is empty"
-		return 1
-	fi
-
-	printf '%s\n' "$CODE"
+	CODE="$(cat "$CODE_FILE" 2>/dev/null || true)"
+	[ -n "$CODE" ] || { log "router code empty"; return 1; }
+	echo "$CODE"
 }
 
-fetch_json() {
-	URL=$1
-	http_get "$URL" 2>/dev/null || return 1
-}
+fetch_json() { http_get "$1" 2>/dev/null || return 1; }
 
-parse_ok() {
-	printf '%s\n' "$1" | grep -o '"ok":[0-9]*' | head -n1 | cut -d: -f2
-}
+parse_ok() { echo "$1" | grep -o '"ok":[0-9]*' | head -n1 | cut -d: -f2; }
 
-parse_sub_url() {
-	printf '%s\n' "$1" | sed -n 's/.*"subscription_url":"\([^"]*\)".*/\1/p'
-}
+parse_sub_url() { echo "$1" | sed -n 's/.*"subscription_url":"\([^"]*\)".*/\1/p'; }
 
 download_xray_conf() {
-	SUB_URL=$1
-	TMP="$XRAY_CONF.tmp"
-
-	if ! http_download "$SUB_URL" "$TMP" 2>/dev/null; then
-		log "failed to download config from subscription url"
-		rm -f "$TMP"
-		return 1
-	fi
-
-	if [ ! -s "$TMP" ]; then
-		log "downloaded config is empty"
-		rm -f "$TMP"
-		return 1
-	fi
-
+	SUB_URL="$1"; TMP="$XRAY_CONF.tmp"
+	http_download "$SUB_URL" "$TMP" 2>/dev/null || { rm -f "$TMP"; return 1; }
+	[ -s "$TMP" ] || { rm -f "$TMP"; return 1; }
 	mv "$TMP" "$XRAY_CONF"
 	return 0
 }
 
 restart_xray() {
-	if [ ! -x "$XRAY_INIT" ]; then
-		log "xray init script not found at $XRAY_INIT"
-		return 1
-	fi
-
+	[ -x "$XRAY_INIT" ] || return 0
 	"$XRAY_INIT" enable >/dev/null 2>&1 || true
-	if ! "$XRAY_INIT" restart >/dev/null 2>&1; then
-		log "failed to restart xray"
-		return 1
-	fi
-
+	"$XRAY_INIT" restart >/dev/null 2>&1 || true
 	log "xray restarted"
-	return 0
 }
 
+stop_xray() { [ -x "$XRAY_INIT" ] && "$XRAY_INIT" stop >/dev/null 2>&1 || true; }
+
+# rand(min,max) — POSIX-псевдослучайное число через awk
+rand() { awk -v min="$1" -v max="$2" 'BEGIN{srand(); print int(min+rand()*(max-min+1))}'; }
+
+# ---------- main ----------
 main_loop() {
+	backoff=$POLL_BASE
 	while :; do
-		CODE=$(get_or_create_code || echo "")
-		if [ -z "$CODE" ]; then
-			log "no valid router code, retry in ${POLL_INTERVAL_FAIL}s"
-			sleep "$POLL_INTERVAL_FAIL"
-			continue
+		# 1) пока нет ссылки — тянем из биллинга с бэкоффом
+		if [ ! -s "$SUB_FILE" ]; then
+			CODE="$(get_or_create_code || true)"
+			[ -z "$CODE" ] && { sleep "$POLL_BASE"; continue; }
+
+			JSON="$(fetch_json "$API_URL?code=$CODE&format=json" || true)"
+			OK="$(parse_ok "$JSON" || echo 0)"
+			if [ "$OK" = "1" ]; then
+				SUB="$(parse_sub_url "$JSON" || true)"
+				if [ -n "$SUB" ]; then
+					echo "$SUB" >"$SUB_FILE"
+					log "got subscription_url"
+					download_xray_conf "$SUB" && restart_xray || true
+					echo 1 >"$VPN_READY_FILE"
+					backoff=$POLL_BASE
+				fi
+			fi
+
+			if [ ! -s "$SUB_FILE" ]; then
+				# backoff ±15%
+				jup=$(( backoff + backoff * POLL_JIT / 100 ))
+				sleep "$(rand "$backoff" "$jup")"
+				backoff=$(( backoff + backoff/2 ))
+				[ "$backoff" -gt "$POLL_MAX" ] && backoff="$POLL_MAX"
+				continue
+			fi
 		fi
 
-		log "polling API for code=$CODE"
-		JSON=$(fetch_json "$API_URL?code=$CODE&format=json" || echo "")
-		if [ -z "$JSON" ]; then
-			log "API request failed, retry in ${POLL_INTERVAL_FAIL}s"
-			sleep "$POLL_INTERVAL_FAIL"
-			continue
-		fi
+		# 2) есть ссылка — проверяем 200/404
+		SUB_URL="$(cat "$SUB_FILE" 2>/dev/null || true)"
+		[ -z "$SUB_URL" ] && { rm -f "$SUB_FILE"; sleep "$POLL_BASE"; continue; }
 
-		OK=$(parse_ok "$JSON")
-		if [ "$OK" != "1" ]; then
-			log "API response ok=$OK, wait ${POLL_INTERVAL_FAIL}s"
-			sleep "$POLL_INTERVAL_FAIL"
-			continue
-		fi
-
-		SUB=$(parse_sub_url "$JSON" || echo "")
-		if [ -z "$SUB" ]; then
-			log "ok=1 but subscription_url missing, retry in ${POLL_INTERVAL_FAIL}s"
-			sleep "$POLL_INTERVAL_FAIL"
-			continue
-		fi
-
-		printf '%s\n' "$SUB" >"$SUB_FILE"
-		rm -f "$VPN_READY_FILE"
-		log "received subscription url"
-
-		if ! download_xray_conf "$SUB"; then
-			rm -f "$SUB_FILE"
-			log "config download failed, retry in ${POLL_INTERVAL_FAIL}s"
-			sleep "$POLL_INTERVAL_FAIL"
-			continue
-		fi
-
-		if restart_xray; then
-			printf '1\n' >"$VPN_READY_FILE"
+		HTTP_CODE="$(http_code "$SUB_URL")"
+		if [ "$HTTP_CODE" = "200" ]; then
+			[ -s "$VPN_READY_FILE" ] || echo 1 >"$VPN_READY_FILE"
+			[ -s "$XRAY_CONF" ] || { download_xray_conf "$SUB_URL" && restart_xray || true; }
+			# джиттер: ±(OK_JIT_MIN..OK_JIT_MAX)
+			OFF="$(rand "$OK_JIT_MIN" "$OK_JIT_MAX")"
+			SIGN="$(rand 0 1)"
+			if [ "$SIGN" -eq 0 ]; then OFF=$(( -OFF )); fi
+			SLEEP_TIME=$(( OK_INTERVAL + OFF ))
+			[ "$SLEEP_TIME" -lt 60 ] && SLEEP_TIME=60
+			sleep "$SLEEP_TIME"
 		else
-			rm -f "$VPN_READY_FILE"
+			log "subscription invalid (code=$HTTP_CODE) → reset"
+			rm -f "$VPN_READY_FILE" "$SUB_FILE"
+			stop_xray
+			sleep "$FAIL_INTERVAL"
 		fi
-
-		sleep "$POLL_INTERVAL_OK"
 	done
 }
 
 ensure_prereqs
 ensure_state_dir
-
-log "shpun-agent started"
+log "shpun-agent started ($HTTP_TOOL)"
 main_loop
