@@ -313,45 +313,33 @@ return view.extend({
             if (l2tp)  l2tp.style.display  = (proto === 'l2tp') ? 'block' : 'none';
         }
 
-        /* === Улучшенная обработка API (фикс под LuCI) === */
+        /* === Универсальный парсер ответа (поймать HTML/403) === */
         function handleApiResponse(res) {
-            if (!res) {
-                throw new Error(_('Нет ответа от сервера'));
-            }
+            if (!res) throw new Error(_('Нет ответа от сервера'));
 
             var status = (typeof res.status === 'number') ? res.status : 200;
+            if (status === 403) {
+                throw new Error(_('Ошибка 403: нет доступа. Проверьте авторизацию в LuCI и CSRF-токен.'));
+            }
             if (status !== 200) {
                 throw new Error(_('Ошибка сервера: ') + status);
             }
 
-            // ВАЖНО: в LuCI это не функция. text/responseText — СТРОКА.
             var text = '';
-            if (typeof res === 'string') {
-                text = res;
-            } else if (typeof res.text === 'string') {
-                text = res.text;
-            } else if (typeof res.responseText === 'string') {
-                text = res.responseText;
-            } else if (res.body && typeof res.body === 'string') {
-                text = res.body;
-            } else {
-                text = '';
-            }
-
+            if (typeof res === 'string') text = res;
+            else if (typeof res.text === 'string') text = res.text;
+            else if (typeof res.responseText === 'string') text = res.responseText;
+            else if (res.body && typeof res.body === 'string') text = res.body;
             text = (text || '').trim();
 
-            // Проверяем, не HTML ли это (например, страница логина)
-            if (!text) {
-                throw new Error(_('Пустой ответ сервера'));
-            }
+            if (!text) throw new Error(_('Пустой ответ сервера'));
             if (text.startsWith('<!DOCTYPE') || text.startsWith('<html')) {
-                throw new Error(_('Сервер вернул HTML страницу. Возможно, проблема с авторизацией или API endpoint не существует.'));
+                throw new Error(_('Сервер вернул HTML-страницу (возможна потеря авторизации или неверный путь API).'));
             }
 
-            try {
-                return JSON.parse(text);
-            } catch (e) {
-                console.error('JSON parse error:', e, 'Response:', text.substring(0, 200));
+            try { return JSON.parse(text); }
+            catch (e) {
+                console.error('JSON parse error:', e, text.substring(0, 200));
                 throw new Error(_('Сервер вернул некорректный JSON: ') + text.substring(0, 120));
             }
         }
@@ -361,7 +349,6 @@ return view.extend({
         var wanApplyBtn = root.querySelector('#wan-apply');
         var wanSkipBtn  = root.querySelector('#wan-skip');
 
-        // Стартовое состояние
         updateWanFields('dhcp');
 
         root.querySelectorAll('input[name="wan_proto"]').forEach(function(r) {
@@ -409,8 +396,7 @@ return view.extend({
                     data.ipaddr  = ip.trim();
                     data.netmask = msk.trim();
                     data.gateway = gw.trim();
-                    if (dns.trim())
-                        data.dns = dns.trim();
+                    if (dns.trim()) data.dns = dns.trim();
                 }
                 else if (proto === 'l2tp') {
                     var srv   = (root.querySelector('#l2tp-server') || {}).value || '';
@@ -429,26 +415,24 @@ return view.extend({
 
                 setBusy(wanApplyBtn, true);
 
-                request.post(L.url('admin/network/shpun/api/apply_wan'), data, { timeout: 15000 })
+                // CSRF Токен обязателен для /admin/*
+                request.post(L.url('admin/network/shpun/api/apply_wan'), data, {
+                        timeout: 15000,
+                        headers: { 'X-CSRF-Token': L.env.token }
+                    })
                     .then(handleApiResponse)
                     .then(function(result) {
-                        console.log('WAN Result:', result);
                         if (result && result.ok === 1) {
                             showSuccess(_('Настройки WAN успешно применены! Перезапускаем сеть...'));
-                            setTimeout(function() {
-                                showStep(2);
-                            }, 1500);
+                            setTimeout(function() { showStep(2); }, 1500);
                         } else {
                             throw new Error((result && result.error) || _('Неизвестная ошибка сервера'));
                         }
                     })
                     .catch(function(e) {
-                        console.error('WAN apply error:', e);
                         showError(_('Не удалось применить настройки WAN: ') + e.message);
                     })
-                    .finally(function() {
-                        setBusy(wanApplyBtn, false);
-                    });
+                    .finally(function() { setBusy(wanApplyBtn, false); });
             };
         }
 
@@ -475,33 +459,26 @@ return view.extend({
                     return;
                 }
 
-                var data = {
-                    ssid: ssid.trim(),
-                    key:  key
-                };
-
+                var data = { ssid: ssid.trim(), key: key };
                 setBusy(wifiApplyBtn, true);
 
-                request.post(L.url('admin/network/shpun/api/apply_wifi'), data, { timeout: 15000 })
+                request.post(L.url('admin/network/shpun/api/apply_wifi'), data, {
+                        timeout: 15000,
+                        headers: { 'X-CSRF-Token': L.env.token }
+                    })
                     .then(handleApiResponse)
                     .then(function(result) {
-                        console.log('WiFi Result:', result);
                         if (result && result.ok === 1) {
                             showSuccess(_('Настройки Wi-Fi успешно применены!'));
-                            setTimeout(function() {
-                                showStep(3);
-                            }, 800);
+                            setTimeout(function() { showStep(3); }, 800);
                         } else {
                             throw new Error((result && result.error) || _('Неизвестная ошибка сервера'));
                         }
                     })
                     .catch(function(e) {
-                        console.error('WiFi apply error:', e);
                         showError(_('Не удалось применить настройки Wi-Fi: ') + e.message);
                     })
-                    .finally(function() {
-                        setBusy(wifiApplyBtn, false);
-                    });
+                    .finally(function() { setBusy(wifiApplyBtn, false); });
             };
         }
 
@@ -527,11 +504,12 @@ return view.extend({
             var spinner = root.querySelector('#vpn-spinner');
             var st      = root.querySelector('#vpn-status-text');
 
-            request.get(L.url('admin/network/shpun/api/state'), { timeout: 10000 })
+            request.get(L.url('admin/network/shpun/api/state'), {
+                    timeout: 10000,
+                    headers: { 'X-CSRF-Token': L.env.token }
+                })
                 .then(handleApiResponse)
                 .then(function(d) {
-                    console.log('State response:', d);
-
                     if (d.code) {
                         var codeText = root.querySelector('#router-code');
                         if (codeText) codeText.textContent = d.code;
@@ -569,11 +547,8 @@ return view.extend({
                     }
                 })
                 .catch(function(e) {
-                    console.error('State fetch error:', e);
                     if (spinner) spinner.style.display = 'none';
-                    if (st) {
-                        st.textContent = _('Ошибка связи: ') + e.message;
-                    }
+                    if (st) st.textContent = _('Ошибка связи: ') + e.message;
                     setTimeout(updateState, 8000);
                 });
         }
