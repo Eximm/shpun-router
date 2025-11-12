@@ -1,13 +1,54 @@
 'use strict';
 'require view';
-'require request';
+// 'require request'; // не нужен, но можно оставить если хотите
 
 return view.extend({
-    load: function() {
+    load: function () {
         return Promise.resolve();
     },
 
-    render: function() {
+    render: function () {
+        /* ===== helpers: безопасные API-вызовы под /admin/* ===== */
+        async function processResponseJSON(res) {
+            if (!res) throw new Error(_('Нет ответа от сервера'));
+            if (res.status === 403) throw new Error(_('Ошибка 403: нет доступа. Проверьте авторизацию в LuCI и CSRF-токен.'));
+            if (!res.ok) throw new Error(_('Ошибка сервера: ') + res.status);
+
+            const text = (await res.text()).trim();
+
+            if (!text) throw new Error(_('Пустой ответ сервера'));
+            if (text.startsWith('<!DOCTYPE') || text.startsWith('<html')) {
+                throw new Error(_('Сервер вернул HTML-страницу (возможна потеря авторизации или неверный путь API).'));
+            }
+
+            try { return JSON.parse(text); }
+            catch (e) {
+                console.error('JSON parse error:', e, text.slice(0, 200));
+                throw new Error(_('Сервер вернул некорректный JSON: ') + text.slice(0, 120));
+            }
+        }
+
+        function apiPost(urlStr, data) {
+            return fetch(urlStr, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-Token': L.env.token
+                },
+                body: JSON.stringify(data || {})
+            }).then(processResponseJSON);
+        }
+
+        function apiGet(urlStr) {
+            return fetch(urlStr, {
+                method: 'GET',
+                credentials: 'same-origin',
+                headers: { 'X-CSRF-Token': L.env.token }
+            }).then(processResponseJSON);
+        }
+
+        /* ===== UI ===== */
         const root = E('div', { id: 'shpun-wizard', 'class': 'cbi-section' }, [
             E('style', {}, [String.raw`
 #shpun-wizard { max-width: 720px; margin: 0 auto; }
@@ -261,37 +302,26 @@ return view.extend({
             ])
         ]);
 
-        /* === Вспомогательные функции === */
-
+        /* ===== вспомогательные UI-функции ===== */
         function showStep(n) {
-            root.querySelectorAll('.step').forEach(function(el, i) {
+            root.querySelectorAll('.step').forEach(function (el, i) {
                 el.classList.toggle('active', i === (n - 1));
             });
         }
-
         function showError(msg) {
             var box = root.querySelector('#shpun-error');
-            if (box) {
-                box.textContent = msg;
-                box.style.display = 'block';
-            }
+            if (box) { box.textContent = msg; box.style.display = 'block'; }
             root.querySelector('#shpun-success').style.display = 'none';
         }
-
         function showSuccess(msg) {
             var box = root.querySelector('#shpun-success');
-            if (box) {
-                box.textContent = msg;
-                box.style.display = 'block';
-            }
+            if (box) { box.textContent = msg; box.style.display = 'block'; }
             root.querySelector('#shpun-error').style.display = 'none';
         }
-
         function clearMessages() {
             root.querySelector('#shpun-error').style.display = 'none';
             root.querySelector('#shpun-success').style.display = 'none';
         }
-
         function setBusy(btn, busy) {
             if (!btn) return;
             btn.disabled = !!busy;
@@ -302,70 +332,32 @@ return view.extend({
                 btn.textContent = btn.dataset.origText;
             }
         }
-
         function updateWanFields(proto) {
             var pppoe = root.querySelector('#pppoe-fields');
             var stat  = root.querySelector('#static-fields');
             var l2tp  = root.querySelector('#l2tp-fields');
-
             if (pppoe) pppoe.style.display = (proto === 'pppoe') ? 'block' : 'none';
             if (stat)  stat.style.display  = (proto === 'static') ? 'block' : 'none';
             if (l2tp)  l2tp.style.display  = (proto === 'l2tp') ? 'block' : 'none';
         }
 
-        /* === Универсальный парсер ответа (поймать HTML/403) === */
-        function handleApiResponse(res) {
-            if (!res) throw new Error(_('Нет ответа от сервера'));
-
-            var status = (typeof res.status === 'number') ? res.status : 200;
-            if (status === 403) {
-                throw new Error(_('Ошибка 403: нет доступа. Проверьте авторизацию в LuCI и CSRF-токен.'));
-            }
-            if (status !== 200) {
-                throw new Error(_('Ошибка сервера: ') + status);
-            }
-
-            var text = '';
-            if (typeof res === 'string') text = res;
-            else if (typeof res.text === 'string') text = res.text;
-            else if (typeof res.responseText === 'string') text = res.responseText;
-            else if (res.body && typeof res.body === 'string') text = res.body;
-            text = (text || '').trim();
-
-            if (!text) throw new Error(_('Пустой ответ сервера'));
-            if (text.startsWith('<!DOCTYPE') || text.startsWith('<html')) {
-                throw new Error(_('Сервер вернул HTML-страницу (возможна потеря авторизации или неверный путь API).'));
-            }
-
-            try { return JSON.parse(text); }
-            catch (e) {
-                console.error('JSON parse error:', e, text.substring(0, 200));
-                throw new Error(_('Сервер вернул некорректный JSON: ') + text.substring(0, 120));
-            }
-        }
-
-        /* === Логика WAN === */
-
+        /* ===== WAN ===== */
         var wanApplyBtn = root.querySelector('#wan-apply');
         var wanSkipBtn  = root.querySelector('#wan-skip');
 
         updateWanFields('dhcp');
-
-        root.querySelectorAll('input[name="wan_proto"]').forEach(function(r) {
-            r.addEventListener('change', function() {
+        root.querySelectorAll('input[name="wan_proto"]').forEach(function (r) {
+            r.addEventListener('change', function () {
                 clearMessages();
                 updateWanFields(this.value);
             });
         });
 
         if (wanApplyBtn) {
-            wanApplyBtn.onclick = function() {
+            wanApplyBtn.onclick = function () {
                 clearMessages();
                 var protoInput = root.querySelector('input[name="wan_proto"]:checked');
-                if (!protoInput) {
-                    showError(_('Выберите тип подключения WAN'));
-                    return;
-                }
+                if (!protoInput) return showError(_('Выберите тип подключения WAN'));
 
                 var proto = protoInput.value;
                 var data = { proto: proto };
@@ -373,158 +365,111 @@ return view.extend({
                 if (proto === 'pppoe') {
                     var user = (root.querySelector('#pppoe-user') || {}).value || '';
                     var pass = (root.querySelector('#pppoe-pass') || {}).value || '';
-
-                    if (!user || !pass) {
-                        showError(_('Для PPPoE необходимо указать логин и пароль'));
-                        return;
-                    }
-
+                    if (!user || !pass) return showError(_('Для PPPoE необходимо указать логин и пароль'));
                     data.user = user.trim();
                     data.pass = pass;
-                }
-                else if (proto === 'static') {
+                } else if (proto === 'static') {
                     var ip  = (root.querySelector('#static-ip')   || {}).value || '';
                     var msk = (root.querySelector('#static-mask') || {}).value || '';
                     var gw  = (root.querySelector('#static-gw')   || {}).value || '';
                     var dns = (root.querySelector('#static-dns')  || {}).value || '';
-
-                    if (!ip.trim() || !msk.trim() || !gw.trim()) {
-                        showError(_('Для статического IP необходимо указать IP, маску и шлюз'));
-                        return;
-                    }
-
+                    if (!ip.trim() || !msk.trim() || !gw.trim())
+                        return showError(_('Для статического IP необходимо указать IP, маску и шлюз'));
                     data.ipaddr  = ip.trim();
                     data.netmask = msk.trim();
                     data.gateway = gw.trim();
                     if (dns.trim()) data.dns = dns.trim();
-                }
-                else if (proto === 'l2tp') {
-                    var srv   = (root.querySelector('#l2tp-server') || {}).value || '';
-                    var user2 = (root.querySelector('#l2tp-user')   || {}).value || '';
-                    var pass2 = (root.querySelector('#l2tp-pass')   || {}).value || '';
-
-                    if (!srv.trim() || !user2.trim() || !pass2) {
-                        showError(_('Для L2TP необходимо указать сервер, логин и пароль'));
-                        return;
-                    }
-
+                } else if (proto === 'l2tp') {
+                    var srv  = (root.querySelector('#l2tp-server') || {}).value || '';
+                    var user = (root.querySelector('#l2tp-user')   || {}).value || '';
+                    var pass = (root.querySelector('#l2tp-pass')   || {}).value || '';
+                    if (!srv.trim() || !user.trim() || !pass)
+                        return showError(_('Для L2TP необходимо указать сервер, логин и пароль'));
                     data.server = srv.trim();
-                    data.user   = user2.trim();
-                    data.pass   = pass2;
+                    data.user   = user.trim();
+                    data.pass   = pass;
                 }
 
                 setBusy(wanApplyBtn, true);
-
-                // CSRF Токен обязателен для /admin/*
-                request.post(L.url('admin/network/shpun/api/apply_wan'), data, {
-                        timeout: 15000,
-                        headers: { 'X-CSRF-Token': L.env.token }
-                    })
-                    .then(handleApiResponse)
-                    .then(function(result) {
+                apiPost(L.url('admin/network/shpun/api/apply_wan'), data)
+                    .then(function (result) {
                         if (result && result.ok === 1) {
                             showSuccess(_('Настройки WAN успешно применены! Перезапускаем сеть...'));
-                            setTimeout(function() { showStep(2); }, 1500);
+                            setTimeout(function () { showStep(2); }, 1500);
                         } else {
                             throw new Error((result && result.error) || _('Неизвестная ошибка сервера'));
                         }
                     })
-                    .catch(function(e) {
-                        showError(_('Не удалось применить настройки WAN: ') + e.message);
-                    })
-                    .finally(function() { setBusy(wanApplyBtn, false); });
+                    .catch(function (e) { showError(_('Не удалось применить настройки WAN: ') + e.message); })
+                    .finally(function () { setBusy(wanApplyBtn, false); });
             };
         }
 
         if (wanSkipBtn) {
-            wanSkipBtn.onclick = function() {
+            wanSkipBtn.onclick = function () {
                 clearMessages();
                 showStep(2);
             };
         }
 
-        /* === Логика Wi-Fi === */
-
+        /* ===== Wi-Fi ===== */
         var wifiApplyBtn = root.querySelector('#wifi-apply');
         var wifiSkipBtn  = root.querySelector('#wifi-skip');
 
         if (wifiApplyBtn) {
-            wifiApplyBtn.onclick = function() {
+            wifiApplyBtn.onclick = function () {
                 clearMessages();
                 var ssid = (root.querySelector('#wifi-ssid') || {}).value || '';
                 var key  = (root.querySelector('#wifi-key')  || {}).value || '';
+                if (!ssid.trim()) return showError(_('SSID не может быть пустым'));
 
-                if (!ssid.trim()) {
-                    showError(_('SSID не может быть пустым'));
-                    return;
-                }
-
-                var data = { ssid: ssid.trim(), key: key };
                 setBusy(wifiApplyBtn, true);
-
-                request.post(L.url('admin/network/shpun/api/apply_wifi'), data, {
-                        timeout: 15000,
-                        headers: { 'X-CSRF-Token': L.env.token }
-                    })
-                    .then(handleApiResponse)
-                    .then(function(result) {
+                apiPost(L.url('admin/network/shpun/api/apply_wifi'), { ssid: ssid.trim(), key: key })
+                    .then(function (result) {
                         if (result && result.ok === 1) {
                             showSuccess(_('Настройки Wi-Fi успешно применены!'));
-                            setTimeout(function() { showStep(3); }, 800);
+                            setTimeout(function () { showStep(3); }, 800);
                         } else {
                             throw new Error((result && result.error) || _('Неизвестная ошибка сервера'));
                         }
                     })
-                    .catch(function(e) {
-                        showError(_('Не удалось применить настройки Wi-Fi: ') + e.message);
-                    })
-                    .finally(function() { setBusy(wifiApplyBtn, false); });
+                    .catch(function (e) { showError(_('Не удалось применить настройки Wi-Fi: ') + e.message); })
+                    .finally(function () { setBusy(wifiApplyBtn, false); });
             };
         }
 
         if (wifiSkipBtn) {
-            wifiSkipBtn.onclick = function() {
+            wifiSkipBtn.onclick = function () {
                 clearMessages();
                 showStep(3);
             };
         }
 
-        /* === Кнопка "Завершить" === */
-
+        /* ===== Завершение ===== */
         var finishBtn = root.querySelector('#finish-btn');
         if (finishBtn) {
-            finishBtn.onclick = function() {
+            finishBtn.onclick = function () {
                 window.location.href = L.url('admin/status/overview');
             };
         }
 
-        /* === Опрос состояния VPN === */
-
+        /* ===== Опрос состояния VPN ===== */
         function updateState() {
             var spinner = root.querySelector('#vpn-spinner');
             var st      = root.querySelector('#vpn-status-text');
 
-            request.get(L.url('admin/network/shpun/api/state'), {
-                    timeout: 10000,
-                    headers: { 'X-CSRF-Token': L.env.token }
-                })
-                .then(handleApiResponse)
-                .then(function(d) {
+            apiGet(L.url('admin/network/shpun/api/state'))
+                .then(function (d) {
                     if (d.code) {
                         var codeText = root.querySelector('#router-code');
                         if (codeText) codeText.textContent = d.code;
 
                         var botUsername = 'shpunvpn_bot';
-                        var tgUrl = 'https://t.me/' + botUsername +
-                            '?start=router_' + encodeURIComponent(d.code);
-                        var qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=' +
-                            encodeURIComponent(tgUrl);
+                        var tgUrl = 'https://t.me/' + botUsername + '?start=router_' + encodeURIComponent(d.code);
+                        var qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=' + encodeURIComponent(tgUrl);
 
                         var img = root.querySelector('#qr-img');
-                        if (img) {
-                            if (img.src !== qrUrl) img.src = qrUrl;
-                            img.style.display = 'block';
-                        }
+                        if (img) { if (img.src !== qrUrl) img.src = qrUrl; img.style.display = 'block'; }
                         var linkEl = root.querySelector('#tg-link');
                         if (linkEl) linkEl.href = tgUrl;
                     }
@@ -546,14 +491,15 @@ return view.extend({
                         setTimeout(updateState, 5000);
                     }
                 })
-                .catch(function(e) {
+                .catch(function (e) {
                     if (spinner) spinner.style.display = 'none';
                     if (st) st.textContent = _('Ошибка связи: ') + e.message;
                     setTimeout(updateState, 8000);
                 });
         }
 
-        // Инициализация
+        // init
+        updateWanFields('dhcp');
         showStep(1);
         updateState();
 
