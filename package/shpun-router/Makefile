@@ -3,7 +3,6 @@ include $(TOPDIR)/rules.mk
 PKG_NAME:=shpun-router
 PKG_VERSION:=1.0.0
 PKG_RELEASE:=1
-
 PKG_MAINTAINER:=Eximm
 PKG_LICENSE:=MIT
 PKGARCH:=all
@@ -20,12 +19,11 @@ endef
 
 define Package/shpun-router/description
  Оптимизированный лёгкий пакет Shpun Router:
-  • агент привязки к Shpun VPN (без внешних зависимостей)
-  • LuCI мастер настройки (контроллер + JS)
-  • автозапуск агента и обновление интерфейса LuCI
+  • агент привязки
+  • LuCI мастер (контроллер + JS)
+  • автозапуск агента и обновление LuCI
 endef
 
-# сохраняемый конфиг (если появится)
 define Package/shpun-router/conffiles
 /etc/shpun/agent.conf
 endef
@@ -43,29 +41,32 @@ define Package/shpun-router/install
 	$(INSTALL_BIN) ./files/etc/init.d/shpun-agent \
 		$(1)/etc/init.d/shpun-agent
 
-	# агент и скрипты
+	# agent
 	$(INSTALL_DIR) $(1)/etc/shpun
 	$(INSTALL_BIN) ./files/etc/shpun/agent.sh \
 		$(1)/etc/shpun/agent.sh
 	$(INSTALL_BIN) ./files/etc/shpun/gen_code.sh \
 		$(1)/etc/shpun/gen_code.sh
-
-	# дефолтный конфиг (может быть пустым)
 	- [ -f ./files/etc/shpun/agent.conf ] && \
 	  $(INSTALL_DATA) ./files/etc/shpun/agent.conf \
 	  $(1)/etc/shpun/agent.conf || true
 
-	# контроллер LuCI
+	# LuCI controller
 	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/controller
 	$(INSTALL_DATA) ./files/usr/lib/lua/luci/controller/shpun.lua \
 		$(1)/usr/lib/lua/luci/controller/shpun.lua
 
-	# JS-мастер (новые LuCI вьюхи)
+	# LuCI menu (НЕ УБИРАЕМ — именно оно добавляет пункт в Network)
+	$(INSTALL_DIR) $(1)/usr/share/luci/menu.d
+	$(INSTALL_DATA) ./files/usr/share/luci/menu.d/shpun.json \
+		$(1)/usr/share/luci/menu.d/shpun.json
+
+	# JS view (wizard)
 	$(INSTALL_DIR) $(1)/www/luci-static/resources/view/shpun
 	$(INSTALL_DATA) ./files/www/luci-static/resources/view/shpun/wizard.js \
 		$(1)/www/luci-static/resources/view/shpun/wizard.js
 
-	# виджет статуса (если нужен)
+	# (опционально) виджет статуса — оставляем условно
 	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/view/status/include
 	- [ -f ./files/usr/lib/lua/luci/view/status/include/20_shpunvpn.htm ] && \
 	  $(INSTALL_DATA) ./files/usr/lib/lua/luci/view/status/include/20_shpunvpn.htm \
@@ -77,16 +78,10 @@ define Package/shpun-router/postinst
 [ -n "$$IPKG_INSTROOT" ] || {
     mkdir -p /etc/shpun
     touch /etc/shpun/first_run
-
-    # включаем и запускаем агента
     /etc/init.d/shpun-agent enable 2>/dev/null || true
     /etc/init.d/shpun-agent restart 2>/dev/null || true
-
-    # мягкий перезапуск uhttpd для применения LuCI
-    /etc/init.d/uhttpd reload 2>/dev/null || \
-    /etc/init.d/uhttpd restart 2>/dev/null || true
-
-    logger -t shpun-router "Shpun Router установлен: агент активирован, LuCI обновлён"
+    rm -f /tmp/luci-indexcache /tmp/luci-modulecache/* 2>/dev/null || true
+    /etc/init.d/uhttpd reload 2>/dev/null || /etc/init.d/uhttpd restart 2>/dev/null || true
 }
 exit 0
 endef
