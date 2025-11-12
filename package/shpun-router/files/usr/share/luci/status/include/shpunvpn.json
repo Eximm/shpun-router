@@ -1,5 +1,5 @@
 {
-	"file": "20_shpunvpn.htm",
-	"title": "Shpun VPN",
-	"order": 60
+  "title": "Shpun VPN",
+  "order": 60,
+  "file": "status/include/20_shpunvpn.htm"
 }

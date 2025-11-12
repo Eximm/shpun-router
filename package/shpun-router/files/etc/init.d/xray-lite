@@ -1,0 +1,109 @@
+#!/bin/sh /etc/rc.common
+# xray-lite: download-and-run VPN binary into /tmp on each boot (for 8MB flash)
+# shellcheck disable=SC2034,SC2164
+START=50
+STOP=50
+
+CONF="/etc/shpun/agent.conf"     # read XR_BINARY_URL / XR_BINARY_SHA256 from here
+BIN="/tmp/xrbin"
+PID="/var/run/xray-lite.pid"
+LOGTAG="xray-lite"
+CONF_X="/etc/xray/config.json"
+RETRY=5
+SLEEP=10
+
+log(){ logger -t "$LOGTAG" "$*"; }
+
+getvar(){ awk -F= -v k="$1" '$1==k{val=$2} END{gsub(/^[ \t"]+|[ \t"]+$/,"",val); print val}' "$CONF" 2>/dev/null; }
+
+sha_ok(){
+  f="$1"; sum="$2"
+  [ -z "$sum" ] && { log "no SHA256 provided, skip verify"; return 0; }
+  if command -v sha256sum >/dev/null 2>&1; then
+    echo "$sum  $f" | sha256sum -c - >/dev/null 2>&1
+  elif command -v openssl >/dev/null 2>&1; then
+    [ "$(openssl dgst -sha256 "$f" 2>/dev/null | awk '{print $2}')" = "$sum" ]
+  else
+    log "no sha256 tool, cannot verify"
+    return 0
+  fi
+}
+
+download(){
+  url="$1"; out="$2"
+  rm -f "$out"
+  i=0
+  while [ $i -lt $RETRY ]; do
+    if command -v uclient-fetch >/dev/null 2>&1; then
+      uclient-fetch -qO "$out" -T 30 "$url" || true
+    elif command -v wget >/dev/null 2>&1; then
+      wget -qO "$out" "$url" || true
+    elif command -v curl >/dev/null 2>&1; then
+      curl -fsSL -o "$out" "$url" || true
+    else
+      log "no HTTP client available"; return 1
+    fi
+    [ -s "$out" ] && return 0
+    i=$((i+1)); sleep $SLEEP
+  done
+  return 1
+}
+
+running(){
+  [ -f "$PID" ] && pid="$(cat "$PID" 2>/dev/null)" && [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+start(){
+  # prefer system xray if present
+  if [ -x /usr/bin/xray ] || [ -f /etc/init.d/xray ]; then
+    log "system xray present -> /etc/init.d/xray start"
+    [ -f /etc/init.d/xray ] && /etc/init.d/xray start
+    return 0
+  fi
+
+  url="$(getvar XR_BINARY_URL)"
+  sha="$(getvar XR_BINARY_SHA256)"
+
+  [ -s "$CONF_X" ] || { log "no $CONF_X, cannot start"; return 1; }
+  [ -n "$url" ] || { log "XR_BINARY_URL not set in $CONF — idle"; return 0; }
+
+  if running; then log "already running (pid $(cat "$PID"))"; return 0; fi
+
+  log "downloading $url -> $BIN"
+  if ! download "$url" "$BIN"; then log "download failed"; return 1; fi
+  chmod +x "$BIN" || true
+
+  if ! sha_ok "$BIN" "$sha"; then
+    log "SHA256 mismatch, abort"; rm -f "$BIN"; return 1
+  fi
+
+  # try xray-style first, else sing-box-style
+  if "$BIN" -version >/dev/null 2>&1; then
+    "$BIN" -c "$CONF_X" >/tmp/xray-lite.log 2>&1 &
+  else
+    "$BIN" run -c "$CONF_X" >/tmp/xray-lite.log 2>&1 &
+  fi
+  echo $! >"$PID"
+  sleep 1
+  if running; then log "started (pid $(cat "$PID"))"; else log "failed, see /tmp/xray-lite.log"; fi
+}
+
+stop(){
+  if running; then
+    pid="$(cat "$PID")"
+    kill "$pid" 2>/dev/null || true
+    sleep 1
+    kill -9 "$pid" 2>/dev/null || true
+    log "stopped (pid $pid)"
+  fi
+  rm -f "$PID"
+  [ -f /etc/init.d/xray ] && /etc/init.d/xray stop 2>/dev/null || true
+}
+
+restart(){ stop; sleep 1; start; }
+
+status(){
+  if running; then echo "running (pid $(cat "$PID"))"; return 0; fi
+  if [ -f /etc/init.d/xray ]; then /etc/init.d/xray status; return $?; fi
+  echo "not running"; return 1
+}
