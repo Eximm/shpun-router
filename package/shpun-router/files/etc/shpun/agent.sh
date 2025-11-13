@@ -1,5 +1,5 @@
 #!/bin/sh
-# shpun-agent — получает subscription_url и поднимает VPN через внешний движок
+# shpun-agent — получает subscription_url и управляет VPN-движком (sing-box / любой другой)
 set -eu
 
 STATE_DIR="/etc/shpun"
@@ -8,17 +8,19 @@ SUB_FILE="$STATE_DIR/subscription_url"
 VPN_READY_FILE="$STATE_DIR/vpn_ready"
 CONF="$STATE_DIR/agent.conf"
 
+# Публичный API в биллинге
 API_URL="https://bill.shpyn.online/shm/v1/public/router_public"
 
-POLL_BASE=30
-POLL_MAX=$((10*60))
-POLL_JIT=15
+# интервалы опроса/проверки
+POLL_BASE=30              # базовый интервал ожидания, пока нет SUB
+POLL_MAX=$((10*60))       # максимум для бэкоффа
+POLL_JIT=15               # джиттер в процентах
 
-OK_INTERVAL=$((6*60*60))
+OK_INTERVAL=$((6*60*60))  # пере-проверка живости SUB
 OK_JIT_MIN=$((10*60))
 OK_JIT_MAX=$((30*60))
 
-FAIL_INTERVAL=60
+FAIL_INTERVAL=60          # задержка после невалидной подписки
 LOCK="/var/run/shpun-agent.lock"
 
 log() {
@@ -45,9 +47,16 @@ http_get() { uclient-fetch -qO- -T 20 "$1"; }
 http_fetch() { uclient-fetch -qO "$2" -T 30 "$1"; }
 http_ok() { uclient-fetch -qO /dev/null -T 15 "$1" >/dev/null 2>&1; }
 
-randu() { dd if=/dev/urandom bs=2 count=1 2>/dev/null | od -An -tu2 | tr -d ' '; }
+# --- генерация случайных чисел БЕЗ od/hexdump ---
+randu() {
+    # cksum читает немного данных из /dev/urandom и выводит 32-битное число
+    cksum /dev/urandom | awk '{ print $1 }'
+}
+
 randr() {
-    min="$1"; max="$2"; span=$((max - min + 1))
+    min="$1"
+    max="$2"
+    span=$((max - min + 1))
     n="$(randu)"
     echo $(( min + (n % span) ))
 }
@@ -172,9 +181,10 @@ mark_ready() {
 
 ensure() {
     need uclient-fetch
-    need od
     need sed
+    need awk
     need sha256sum
+    need cksum
 
     mkdir -p "$STATE_DIR"
 
@@ -195,6 +205,7 @@ main_loop() {
     backoff=$POLL_BASE
 
     while :; do
+        # 1) если нет subscription_url — пытаемся его получить по коду
         if [ ! -s "$SUB_FILE" ]; then
             CODE="$(get_code || true)"
             [ -z "$CODE" ] && { sleep "$POLL_BASE"; continue; }
@@ -227,10 +238,12 @@ main_loop() {
             fi
         fi
 
+        # 2) subscription_url есть — проверяем, что он жив
         SUB_URL="$(cat "$SUB_FILE" 2>/dev/null || true)"
         [ -z "$SUB_URL" ] && { rm -f "$SUB_FILE"; sleep "$POLL_BASE"; continue; }
 
         if http_ok "$SUB_URL"; then
+            # если конфиг ещё не скачан — пробуем скачать
             if [ ! -s "$ENGINE_CONFIG" ]; then
                 changed=0
                 if dl_conf "$SUB_URL"; then :; else rc=$?; [ "$rc" -eq 2 ] && changed=1; fi
@@ -254,6 +267,8 @@ main_loop() {
         fi
     done
 }
+
+# ---------- entrypoint ----------
 
 lock
 ensure
