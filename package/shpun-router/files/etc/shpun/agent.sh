@@ -1,5 +1,8 @@
 #!/bin/sh
 # shpun-agent — получает subscription_url и управляет VPN-движком (sing-box / любой другой)
+
+# shellcheck shell=sh
+
 set -eu
 
 STATE_DIR="/etc/shpun"
@@ -43,7 +46,7 @@ need() {
     command -v "$1" >/dev/null 2>&1 || { log "missing $1"; exit 1; }
 }
 
-# таймауты подтянутся из конфига, но функции используют значения в момент вызова
+# таймауты подтягиваются из конфига
 http_get() {
     t="${DOWNLOAD_READ_TIMEOUT:-20}"
     uclient-fetch -qO- -T "$t" "$1"
@@ -59,14 +62,11 @@ http_ok() {
     uclient-fetch -qO /dev/null -T "$t" "$1" >/dev/null 2>&1
 }
 
-# --- генерация случайных чисел БЕЗ od/hexdump/cksum ---
-# выдаёт строку из случайных цифр
+# --- генерация случайных чисел без od/hexdump/cksum ---
 randu() {
-    # берём немного /dev/urandom, фильтруем только цифры
     tr -dc '0-9' </dev/urandom 2>/dev/null | head -c 9
 }
 
-# случайное число в диапазоне [min; max]
 randr() {
     min="$1"
     max="$2"
@@ -206,8 +206,7 @@ ensure() {
     engine_check || log "engine check failed (will still handle subscription)"
 }
 
-# ВНИМАНИЕ: код генерирует ВНЕШНИЙ скрипт/мастер (gen_code.sh / wizard),
-# агент ТОЛЬКО читает готовый /etc/shpun/router_code и ничего сам не генерирует.
+# Код генерирует wizard/gen_code.sh, агент только читает готовый файл.
 get_code() {
     if [ ! -s "$CODE_FILE" ]; then
         log "router_code not set, waiting for setup..."
@@ -231,8 +230,14 @@ main_loop() {
             if [ -n "$SUB" ]; then
                 echo "$SUB" >"$SUB_FILE"
                 log "got subscription_url"
+
                 changed=0
-                if dl_conf "$SUB"; then :; else rc=$?; [ "$rc" -eq 2 ] && changed=1; fi
+                if dl_conf "$SUB"; then
+                    :
+                else
+                    rc=$?
+                    [ "$rc" -eq 2 ] && changed=1
+                fi
 
                 if [ "$changed" -eq 1 ]; then
                     engine_check || true
@@ -261,7 +266,13 @@ main_loop() {
             # если конфиг ещё не скачан — пробуем скачать
             if [ ! -s "$ENGINE_CONFIG" ]; then
                 changed=0
-                if dl_conf "$SUB_URL"; then :; else rc=$?; [ "$rc" -eq 2 ] && changed=1; fi
+                if dl_conf "$SUB_URL"; then
+                    :
+                else
+                    rc=$?
+                    [ "$rc" -eq 2 ] && changed=1
+                fi
+
                 [ "$changed" -eq 1 ] && { engine_check || true; svc_restart || true; }
             fi
 
