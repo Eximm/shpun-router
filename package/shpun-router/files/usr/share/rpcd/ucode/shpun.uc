@@ -35,7 +35,22 @@ const methods = {
 	 */
 	state: {
 		call: function(params) {
-			const code  = readfile(CODE_FILE) ?? "";
+			let code = readfile(CODE_FILE);
+
+			/* генерим код, если его ещё нет */
+			if (!code || !length(trim(code))) {
+				const p = popen("/etc/shpun/gen_code.sh", "r");
+				if (p) {
+					const out = p.read('all');
+					p.close();
+					if (out)
+						code = trim(out);
+				}
+			}
+
+			if (!code || !length(trim(code)))
+				code = "";
+
 			const sub   = readfile(SUB_FILE);
 			const ready = readfile(READY_FILE);
 
@@ -63,7 +78,7 @@ const methods = {
 		call: function(params) {
 			const u = cursor();
 
-			const proto   = params.proto ?? "dhcp";
+			const proto    = params.proto    ?? "dhcp";
 			const username = params.username ?? "";
 			const password = params.password ?? "";
 			const ipaddr   = params.ipaddr   ?? "";

@@ -16,14 +16,14 @@ define Package/shpun-router
   CATEGORY:=Network
   SUBMENU:=VPN
   TITLE:=Shpun Router integration (optimized)
-  # Минимальные зависимости: LuCI, uclient-fetch и ucode с модулем uci
-  DEPENDS:=+luci-base +uclient-fetch +ucode-mod-uci
+  # Зависимости: LuCI, uclient-fetch и стек ucode+rpcd
+  DEPENDS:=+luci-base +uclient-fetch +ucode +ucode-mod-uci +rpcd-mod-ucode
 endef
 
 define Package/shpun-router/description
  Оптимизированный лёгкий пакет Shpun Router:
   • агент привязки (shpun-agent)
-  • LuCI мастер (JS + RPC backend)
+  • LuCI мастер (JS + ucode RPC backend)
   • виджет статуса VPN
   • запуск внешнего VPN-движка (shpun-vpn)
 endef
@@ -98,7 +98,7 @@ define Package/shpun-router/postinst
     /etc/init.d/shpun-agent restart 2>/dev/null || true
     /etc/init.d/shpun-vpn enable 2>/dev/null || true
 
-    # Перезапуск rpcd, чтобы подхватить новый ucode backend и ACL
+    # Перезапуск rpcd, чтобы подхватить ucode backend и ACL
     /etc/init.d/rpcd restart 2>/dev/null || true
 
     # Очистка кэша LuCI и рестарт веб-интерфейса
