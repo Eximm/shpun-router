@@ -1,7 +1,5 @@
 #!/bin/sh
 # shpun-agent — получает subscription_url и управляет VPN-движком (sing-box / любой другой)
-# shellcheck shell=sh
-# shellcheck disable=SC3043  # BusyBox ash поддерживает 'local', хотя это не POSIX
 set -eu
 
 STATE_DIR="/etc/shpun"
@@ -47,17 +45,17 @@ need() {
 
 # таймауты подтянутся из конфига, но функции используют значения в момент вызова
 http_get() {
-    local t="${DOWNLOAD_READ_TIMEOUT:-20}"
+    t="${DOWNLOAD_READ_TIMEOUT:-20}"
     uclient-fetch -qO- -T "$t" "$1"
 }
 
 http_fetch() {
-    local t="${DOWNLOAD_READ_TIMEOUT:-30}"
+    t="${DOWNLOAD_READ_TIMEOUT:-30}"
     uclient-fetch -qO "$2" -T "$t" "$1"
 }
 
 http_ok() {
-    local t="${DOWNLOAD_CONNECT_TIMEOUT:-15}"
+    t="${DOWNLOAD_CONNECT_TIMEOUT:-15}"
     uclient-fetch -qO /dev/null -T "$t" "$1" >/dev/null 2>&1
 }
 
@@ -204,16 +202,17 @@ ensure() {
 
     mkdir -p "$STATE_DIR"
 
-    [ -x /etc/shpun/gen_code.sh ] || { log "gen_code.sh missing"; exit 1; }
-
     load_conf
     engine_check || log "engine check failed (will still handle subscription)"
 }
 
+# ВНИМАНИЕ: код генерирует ВНЕШНИЙ скрипт/мастер (gen_code.sh / wizard),
+# агент ТОЛЬКО читает готовый /etc/shpun/router_code и ничего сам не генерирует.
 get_code() {
-    [ -s "$CODE_FILE" ] || {
-        /etc/shpun/gen_code.sh >/dev/null 2>&1 || { log "code gen failed"; return 1; }
-    }
+    if [ ! -s "$CODE_FILE" ]; then
+        log "router_code not set, waiting for setup..."
+        return 1
+    fi
     cat "$CODE_FILE"
 }
 
