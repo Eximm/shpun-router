@@ -11,7 +11,6 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      # SDK для OpenWrt 24.10.3, target ath79/generic
       SDK_URL: https://downloads.openwrt.org/releases/24.10.3/targets/ath79/generic/openwrt-sdk-24.10.3-ath79-generic_gcc-13.3.0_musl.Linux-x86_64.tar.zst
       SDK_DIR: openwrt-sdk-24.10.3-ath79-generic_gcc-13.3.0_musl.Linux-x86_64
       PACKAGE_NAME: shpun-router
@@ -27,14 +26,14 @@ jobs:
             build-essential libncurses5-dev gawk unzip file \
             libssl-dev wget python3 zstd
 
-      # 🧊 Кэшируем уже распакованный SDK
+      # 🧊 Кэшируем уже распакованный и сконфигурированный SDK
       - name: Cache OpenWrt SDK
         id: cache-sdk
         uses: actions/cache@v4
         with:
+          # ВАЖНО: путь именно sdk, и ключ фиксированный
           path: sdk
-          # Если сменишь версию SDK_URL/SDK_DIR — увеличь версию v1 -> v2
-          key: ${{ runner.os }}-openwrt-sdk-${{ env.SDK_DIR }}-v1
+          key: linux-openwrt-sdk-24.10.3-ath79-v1
 
       - name: Download & unpack OpenWrt SDK (on cache miss)
         if: steps.cache-sdk.outputs.cache-hit != 'true'
@@ -45,13 +44,16 @@ jobs:
           mv "$SDK_DIR" sdk
           ls -la sdk
 
-      # Конфигурируем SDK только один раз — без feeds
+      # Базовая конфигурация SDK — только один раз при cache miss
       - name: Configure SDK (only once)
         if: steps.cache-sdk.outputs.cache-hit != 'true'
         working-directory: sdk
         run: |
-          # базовый дефолтный конфиг
+          # дефолтный .config
           make defconfig
+
+      - name: Debug cache hit
+        run: echo "SDK cache hit = ${{ steps.cache-sdk.outputs.cache-hit }}"
 
       - name: SDK info
         working-directory: sdk
@@ -66,13 +68,14 @@ jobs:
           cp -r package/${PACKAGE_NAME} sdk/package/
           ls -la sdk/package/${PACKAGE_NAME}
 
+      # Автоматически обновляем номер релиза
       - name: Patch PKG_RELEASE with GitHub run number
         run: |
           sed -i "s/^PKG_RELEASE:=.*/PKG_RELEASE:=${GITHUB_RUN_NUMBER}/" sdk/package/${PACKAGE_NAME}/Makefile
           echo "Patched PKG_RELEASE=${GITHUB_RUN_NUMBER}"
           grep PKG_RELEASE sdk/package/${PACKAGE_NAME}/Makefile || true
 
-      # Чистим только наш пакет (можно и убрать, если прям хочется максимальной скорости)
+      # Чистим только наш пакет (по желанию можно убрать)
       - name: Clean package before build
         working-directory: sdk
         run: |
