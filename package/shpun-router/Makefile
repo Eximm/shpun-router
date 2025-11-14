@@ -16,13 +16,14 @@ define Package/shpun-router
   CATEGORY:=Network
   SUBMENU:=VPN
   TITLE:=Shpun Router integration (optimized)
-  DEPENDS:=+luci-base +uclient-fetch +luci-lua-runtime
+  # Минимальные зависимости: LuCI, uclient-fetch и ucode с модулем uci
+  DEPENDS:=+luci-base +uclient-fetch +ucode-mod-uci
 endef
 
 define Package/shpun-router/description
  Оптимизированный лёгкий пакет Shpun Router:
   • агент привязки (shpun-agent)
-  • LuCI мастер (контроллер + JS)
+  • LuCI мастер (JS + RPC backend)
   • виджет статуса VPN
   • запуск внешнего VPN-движка (shpun-vpn)
 endef
@@ -57,17 +58,12 @@ define Package/shpun-router/install
 	$(INSTALL_DATA) ./files/etc/shpun/agent.conf \
 		$(1)/etc/shpun/agent.conf
 
-	# --- LuCI контроллер ---
-	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/controller
-	$(INSTALL_DATA) ./files/usr/lib/lua/luci/controller/shpun.lua \
-		$(1)/usr/lib/lua/luci/controller/shpun.lua
-
 	# --- LuCI меню ---
 	$(INSTALL_DIR) $(1)/usr/share/luci/menu.d
 	$(INSTALL_DATA) ./files/usr/share/luci/menu.d/shpun.json \
 		$(1)/usr/share/luci/menu.d/shpun.json
 
-	# --- LuCI мастер ---
+	# --- LuCI мастер (JS view) ---
 	$(INSTALL_DIR) $(1)/www/luci-static/resources/view/shpun
 	$(INSTALL_DATA) ./files/www/luci-static/resources/view/shpun/wizard.js \
 		$(1)/www/luci-static/resources/view/shpun/wizard.js
@@ -79,6 +75,16 @@ define Package/shpun-router/install
 	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/view/status/include
 	$(INSTALL_DATA) ./files/usr/lib/lua/luci/view/status/include/20_shpunvpn.htm \
 		$(1)/usr/lib/lua/luci/view/status/include/20_shpunvpn.htm
+
+	# --- RPC backend (ucode) ---
+	$(INSTALL_DIR) $(1)/usr/share/rpcd/ucode
+	$(INSTALL_BIN) ./files/usr/share/rpcd/ucode/shpun.uc \
+		$(1)/usr/share/rpcd/ucode/shpun.uc
+
+	# --- ACL для RPC backend ---
+	$(INSTALL_DIR) $(1)/usr/share/rpcd/acl.d
+	$(INSTALL_DATA) ./files/usr/share/rpcd/acl.d/shpun.json \
+		$(1)/usr/share/rpcd/acl.d/shpun.json
 endef
 
 define Package/shpun-router/postinst
@@ -91,6 +97,9 @@ define Package/shpun-router/postinst
     /etc/init.d/shpun-agent enable 2>/dev/null || true
     /etc/init.d/shpun-agent restart 2>/dev/null || true
     /etc/init.d/shpun-vpn enable 2>/dev/null || true
+
+    # Перезапуск rpcd, чтобы подхватить новый ucode backend и ACL
+    /etc/init.d/rpcd restart 2>/dev/null || true
 
     # Очистка кэша LuCI и рестарт веб-интерфейса
     rm -f /tmp/luci-indexcache /tmp/luci-modulecache/* 2>/dev/null || true

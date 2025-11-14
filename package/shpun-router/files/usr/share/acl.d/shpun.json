@@ -1,0 +1,17 @@
+{
+  "shpun": {
+    "description": "Access to Shpun Router wizard backend",
+    "read": {
+      "ubus": {
+        "shpun": [ "state" ]
+      },
+      "uci": [ "network", "wireless" ]
+    },
+    "write": {
+      "ubus": {
+        "shpun": [ "apply_wan", "apply_wifi" ]
+      },
+      "uci": [ "network", "wireless" ]
+    }
+  }
+}
