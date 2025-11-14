@@ -16,7 +16,7 @@ define Package/shpun-router
   CATEGORY:=Network
   SUBMENU:=VPN
   TITLE:=Shpun Router integration (optimized)
-  DEPENDS:=+luci-base +uclient-fetch +lua
+  DEPENDS:=+luci-base +uclient-fetch +luci-lua-runtime
 endef
 
 define Package/shpun-router/description
