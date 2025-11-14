@@ -1,5 +1,7 @@
 #!/bin/sh
 # shpun-agent — получает subscription_url и управляет VPN-движком (sing-box / любой другой)
+# shellcheck shell=sh
+# shellcheck disable=SC3043  # BusyBox ash поддерживает 'local', хотя это не POSIX
 set -eu
 
 STATE_DIR="/etc/shpun"
@@ -43,21 +45,36 @@ need() {
     command -v "$1" >/dev/null 2>&1 || { log "missing $1"; exit 1; }
 }
 
-http_get() { uclient-fetch -qO- -T 20 "$1"; }
-http_fetch() { uclient-fetch -qO "$2" -T 30 "$1"; }
-http_ok() { uclient-fetch -qO /dev/null -T 15 "$1" >/dev/null 2>&1; }
-
-# --- генерация случайных чисел БЕЗ od/hexdump ---
-randu() {
-    # cksum читает немного данных из /dev/urandom и выводит 32-битное число
-    cksum /dev/urandom | awk '{ print $1 }'
+# таймауты подтянутся из конфига, но функции используют значения в момент вызова
+http_get() {
+    local t="${DOWNLOAD_READ_TIMEOUT:-20}"
+    uclient-fetch -qO- -T "$t" "$1"
 }
 
+http_fetch() {
+    local t="${DOWNLOAD_READ_TIMEOUT:-30}"
+    uclient-fetch -qO "$2" -T "$t" "$1"
+}
+
+http_ok() {
+    local t="${DOWNLOAD_CONNECT_TIMEOUT:-15}"
+    uclient-fetch -qO /dev/null -T "$t" "$1" >/dev/null 2>&1
+}
+
+# --- генерация случайных чисел БЕЗ od/hexdump/cksum ---
+# выдаёт строку из случайных цифр
+randu() {
+    # берём немного /dev/urandom, фильтруем только цифры
+    tr -dc '0-9' </dev/urandom 2>/dev/null | head -c 9
+}
+
+# случайное число в диапазоне [min; max]
 randr() {
     min="$1"
     max="$2"
     span=$((max - min + 1))
     n="$(randu)"
+    [ -z "$n" ] && n=0
     echo $(( min + (n % span) ))
 }
 
@@ -184,7 +201,6 @@ ensure() {
     need sed
     need awk
     need sha256sum
-    need cksum
 
     mkdir -p "$STATE_DIR"
 
