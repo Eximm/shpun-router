@@ -313,29 +313,33 @@ return view.extend({
 
         /* ===== State polling (VPN) ===== */
         function updateState(){
-            const spinner=root.querySelector('#vpn-spinner');
-            const st     =root.querySelector('#vpn-status-text');
+            const spinner = root.querySelector('#vpn-spinner');
+            const st      = root.querySelector('#vpn-status-text');
 
             callState()
                 .then(d => {
-                    if (d.code) {
-                        const codeText=root.querySelector('#router-code');
-                        if (codeText) codeText.textContent = d.code;
+                    if (d && d.code) {
+                        const codeText  = root.querySelector('#router-code');
+                        const cleanCode = String(d.code).replace(/\s+$/, ''); // убираем \n и пробелы в конце
+                        if (codeText) codeText.textContent = cleanCode || '—';
 
                         const bot = 'shpunvpn_bot';
                         const tg  = 'https://t.me/' + bot;
                         const qr  = 'https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=' + encodeURIComponent(tg);
 
-                        const img=root.querySelector('#qr-img');
-                        if (img){ if (img.src!==qr) img.src=qr; img.style.display='block'; }
+                        const img = root.querySelector('#qr-img');
+                        if (img) {
+                            if (img.src !== qr) img.src = qr;
+                            img.style.display = 'block';
+                        }
 
                         // href уже прописан в разметке, можно не трогать
-                        const a  = root.querySelector('#tg-link');
+                        const a = root.querySelector('#tg-link');
                         if (a && !a.href) a.href = tg;
                     }
 
                     if (st && spinner) {
-                        if (!d.has_sub) {
+                        if (!d || !d.has_sub) {
                             st.textContent = _('Ожидаем привязку в биллинге…');
                             spinner.style.display='inline-block';
                             setTimeout(updateState, 5000);
