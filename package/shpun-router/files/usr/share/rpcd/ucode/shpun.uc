@@ -1,211 +1,193 @@
-#!/usr/bin/ucode
-
 'use strict';
-
-/*
- * Backend для Shpun Router:
- *  - state: читает / генерирует код, смотрит подписку и vpn_ready
- *  - apply_wan: настраивает WAN через UCI
- *  - apply_wifi: включает Wi-Fi и задаёт SSID/ключ
- */
 
 import { open } from 'fs';
 import { cursor } from 'uci';
 
-const STATE_DIR  = "/etc/shpun";
-const CODE_FILE  = STATE_DIR + "/router_code";
-const SUB_FILE   = STATE_DIR + "/subscription_url";
-const READY_FILE = STATE_DIR + "/vpn_ready";
+/* пути */
+const DIR   = "/etc/shpun";
+const CODE  = DIR + "/router_code";
+const SUB   = DIR + "/subscription_url";
+const READY = DIR + "/vpn_ready";
 
-/* --- helpers --- */
-
+/* безопасное чтение файла */
 function readfile(path) {
-	const f = open(path, "r");
-	if (!f)
+	try {
+		let f = open(path, "r");
+		if (!f) return null;
+		let d = f.read("all");
+		f.close();
+		return d || "";
+	} catch (e) {
 		return null;
-
-	let data = f.read("all");
-	f.close();
-
-	if (!data)
-		return "";
-
-	/* убираем \n/\r/пробелы по краям */
-	return ucode.trim(data);
+	}
 }
 
-/* --- ubus methods --- */
+return {
 
-const methods = {
+	shpun: {
 
-	/* ===== shpun.state =====
-	 *  code        : строка кода (если нет - генерируем через gen_code.sh)
-	 *  has_sub     : есть ли subscription_url
-	 *  subscription_url : сама ссылка
-	 *  vpn_ready   : true, если файл vpn_ready существует
-	 */
-	state: {
-		call: function() {
-			let code = readfile(CODE_FILE);
+		/* --- PING --- */
+		ping: {
+			call: function(req, msg) {
+				return { ok: 1, msg: "shpun ucode pong" };
+			}
+		},
 
-			/* если кода ещё нет — пробуем сгенерировать */
-			if (!code || code == "") {
-				const p = popen("/etc/shpun/gen_code.sh", "r");
-				if (p) {
-					const out = p.read("all");
-					p.close();
-					if (out)
-						code = ucode.trim(out);
+		/* --- STATE (3-й шаг VPN / код роутера) --- */
+		state: {
+			call: function(req, msg) {
+				let code_raw = readfile(CODE);
+				let sub_raw  = readfile(SUB);
+				let ready    = readfile(READY);
+
+				let code = code_raw ? code_raw : "";
+				let sub  = sub_raw  ? sub_raw  : "";
+
+				return {
+					code: code,
+					has_sub: (sub != ""),
+					subscription_url: sub,
+					vpn_ready: (ready !== null)
+				};
+			}
+		},
+
+		/* --- APPLY_WAN (1-й шаг мастера) --- */
+		apply_wan: {
+			args: {
+				proto:    "String",
+				username: "String",
+				password: "String",
+				ipaddr:   "String",
+				netmask:  "String",
+				gateway:  "String",
+				dns:      "String",
+				server:   "String"
+			},
+			call: function(req, p) {
+				let u = cursor();
+
+				/* грузим network */
+				u.load("network");
+
+				let proto    = p.proto    || "dhcp";
+				let username = p.username || "";
+				let password = p.password || "";
+				let ipaddr   = p.ipaddr   || "";
+				let netmask  = p.netmask  || "";
+				let gateway  = p.gateway  || "";
+				let dns      = p.dns      || "";
+				let server   = p.server   || "";
+
+				u.set("network", "wan", "proto", proto);
+
+				if (proto == "pppoe") {
+					u.set("network", "wan", "username", username);
+					u.set("network", "wan", "password", password);
+
+					u.delete("network", "wan", "ipaddr");
+					u.delete("network", "wan", "netmask");
+					u.delete("network", "wan", "gateway");
+					u.delete("network", "wan", "dns");
+					u.delete("network", "wan", "server");
 				}
-			}
+				else if (proto == "static") {
+					u.set("network", "wan", "ipaddr",  ipaddr);
+					u.set("network", "wan", "netmask", netmask);
+					u.set("network", "wan", "gateway", gateway);
 
-			if (!code)
-				code = "";
+					if (dns != "")
+						u.set("network", "wan", "dns", dns);
+					else
+						u.delete("network", "wan", "dns");
 
-			const sub_raw   = readfile(SUB_FILE);
-			const ready_raw = readfile(READY_FILE);
+					u.delete("network", "wan", "username");
+					u.delete("network", "wan", "password");
+					u.delete("network", "wan", "server");
+				}
+				else if (proto == "l2tp") {
+					u.set("network", "wan", "server",   server);
+					u.set("network", "wan", "username", username);
+					u.set("network", "wan", "password", password);
 
-			const sub    = sub_raw ? sub_raw : "";
-			const hasSub = (sub != "");
-			const vpnOk  = (ready_raw != null); /* факт существования файла */
+					u.delete("network", "wan", "ipaddr");
+					u.delete("network", "wan", "netmask");
+					u.delete("network", "wan", "gateway");
+					u.delete("network", "wan", "dns");
+				}
+				else {
+					/* dhcp по умолчанию */
+					u.delete("network", "wan", "username");
+					u.delete("network", "wan", "password");
+					u.delete("network", "wan", "ipaddr");
+					u.delete("network", "wan", "netmask");
+					u.delete("network", "wan", "gateway");
+					u.delete("network", "wan", "dns");
+					u.delete("network", "wan", "server");
+				}
 
-			return {
-				code: code,
-				has_sub: hasSub,
-				subscription_url: sub,
-				vpn_ready: vpnOk
-			};
-		}
-	},
-
-	/* ===== shpun.apply_wan =====
-	 * Параметры:
-	 *  proto    : "dhcp" | "pppoe" | "static" | "l2tp"
-	 *  username : логин (pppoe/l2tp)
-	 *  password : пароль (pppoe/l2tp)
-	 *  ipaddr   : IP (static)
-	 *  netmask  : маска (static)
-	 *  gateway  : шлюз (static)
-	 *  dns      : DNS (static)
-	 *  server   : адрес сервера (l2tp)
-	 */
-	apply_wan: {
-		args: {
-			proto:    "String",
-			username: "String",
-			password: "String",
-			ipaddr:   "String",
-			netmask:  "String",
-			gateway:  "String",
-			dns:      "String",
-			server:   "String"
-		},
-		call: function(params) {
-			let u = cursor();
-
-			let proto    = params.proto    || "dhcp";
-			let username = params.username || "";
-			let password = params.password || "";
-			let ipaddr   = params.ipaddr   || "";
-			let netmask  = params.netmask  || "";
-			let gateway  = params.gateway  || "";
-			let dns      = params.dns      || "";
-			let server   = params.server   || "";
-
-			let opts = { proto: proto };
-
-			if (proto == "pppoe") {
-				opts.username = username;
-				opts.password = password;
-			}
-			else if (proto == "static") {
-				opts.ipaddr  = ipaddr;
-				opts.netmask = netmask;
-				opts.gateway = gateway;
-
-				if (dns && dns != "")
-					opts.dns = dns;
-			}
-			else if (proto == "l2tp") {
-				opts.server   = server;
-				opts.username = username;
-				opts.password = password;
-			}
-			else {
-				opts.proto = "dhcp";
-			}
-
-			u.set("network", "wan", opts);
-			u.commit("network");
-			u.unload();
-
-			const p = popen("/etc/init.d/network restart >/dev/null 2>&1 &", "r");
-			if (p) p.close();
-
-			return { ok: 1 };
-		}
-	},
-
-	/* ===== shpun.apply_wifi =====
-	 * Параметры:
-	 *  ssid : имя сети
-	 *  key  : пароль (может быть пустым)
-	 */
-	apply_wifi: {
-		args: {
-			ssid: "String",
-			key:  "String"
-		},
-		call: function(params) {
-			let u    = cursor();
-			let ssid = params.ssid || "";
-			let key  = params.key  || "";
-
-			if (!ssid || ssid == "")
-				return { ok: 0, error: "empty_ssid" };
-
-			let iface_name = null;
-
-			/* включаем wifi-iface и запоминаем первый AP */
-			u.foreach("wireless", "wifi-iface", function(s) {
-				if (!iface_name && s.mode == "ap")
-					iface_name = s[".name"];
-
-				if (s.disabled == "1" || s.disabled == 1)
-					u.set("wireless", s[".name"], { disabled: "0" });
-			});
-
-			/* включаем wifi-device'ы */
-			u.foreach("wireless", "wifi-device", function(s) {
-				if (s.disabled == "1" || s.disabled == 1)
-					u.set("wireless", s[".name"], { disabled: "0" });
-			});
-
-			if (!iface_name) {
+				u.commit("network");
 				u.unload();
-				return { ok: 0, error: "no_ap_iface" };
+
+				return { ok: 1 };
 			}
+		},
 
-			let opts = { ssid: ssid };
+		/* --- APPLY_WIFI (2-й шаг мастера) --- */
+		apply_wifi: {
+			args: {
+				ssid: "String",
+				key:  "String"
+			},
+			call: function(req, p) {
+				let u = cursor();
+				u.load("wireless");
 
-			if (key && key != "") {
-				opts.encryption = "psk2";
-				opts.key        = key;
+				let ssid = p.ssid || "";
+				let key  = p.key  || "";
+
+				if (!ssid)
+					ssid = "Shpun-Router";
+
+				let iface = null;
+
+				/* включаем iface'ы и ищем первый AP */
+				u.foreach("wireless", "wifi-iface", function(s) {
+					if (!iface && s.mode == "ap")
+						iface = s[".name"];
+
+					if (s.disabled == "1" || s.disabled == 1)
+						u.set("wireless", s[".name"], "disabled", "0");
+				});
+
+				/* включаем radio-устройства */
+				u.foreach("wireless", "wifi-device", function(s) {
+					if (s.disabled == "1" || s.disabled == 1)
+						u.set("wireless", s[".name"], "disabled", "0");
+				});
+
+				if (!iface) {
+					u.unload();
+					return { ok: 0, error: "no_ap_iface" };
+				}
+
+				/* SSID + ключ / открытая сеть */
+				u.set("wireless", iface, "ssid", ssid);
+
+				if (key != "") {
+					u.set("wireless", iface, "encryption", "psk2");
+					u.set("wireless", iface, "key", key);
+				}
+				else {
+					u.set("wireless", iface, "encryption", "none");
+					u.delete("wireless", iface, "key");
+				}
+
+				u.commit("wireless");
+				u.unload();
+
+				return { ok: 1 };
 			}
-			else {
-				opts.encryption = "none";
-			}
-
-			u.set("wireless", iface_name, opts);
-			u.commit("wireless");
-			u.unload();
-
-			const p = popen("/sbin/wifi up >/dev/null 2>&1 || /etc/init.d/network reload >/dev/null 2>&1 &", "r");
-			if (p) p.close();
-
-			return { ok: 1 };
 		}
 	}
 };
-
-return { "shpun": methods };

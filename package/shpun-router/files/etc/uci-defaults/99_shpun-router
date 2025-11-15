@@ -1,0 +1,12 @@
+#!/bin/sh
+
+# Register shpun ucode backend in rpcd
+uci -q delete rpcd.shpun
+uci set rpcd.shpun=ucode
+uci set rpcd.shpun.script='/usr/share/rpcd/ucode/shpun.uc'
+uci commit rpcd
+
+# Restart rpcd to apply
+/etc/init.d/rpcd restart 2>/dev/null || true
+
+exit 0
