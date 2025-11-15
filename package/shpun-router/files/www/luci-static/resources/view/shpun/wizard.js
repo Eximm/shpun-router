@@ -9,7 +9,7 @@ var callShpunState = rpc.declare({
 	expect: { '': {} }
 });
 
-// WAN / Wi-Fi будем вызывать напрямую, как из консоли (v2 через rpc.call)
+// ВАЖНО: вызывем ubus так же, как из консоли
 function rpcApplyWan(params) {
 	return rpc.call('shpun', 'apply_wan', params || {});
 }
@@ -443,7 +443,7 @@ return view.extend({
 
 		var qrLink = E('a', {
 			href: 'https://t.me/shpunvpn_bot',
-			arget: '_blank'
+			target: '_blank'
 		}, [ qrImg ]);
 
 		var finishBtn = E('button', {
