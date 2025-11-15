@@ -9,16 +9,17 @@ const CODE  = DIR + "/router_code";
 const SUB   = DIR + "/subscription_url";
 const READY = DIR + "/vpn_ready";
 
-/* безопасное чтение файла */
+/* безопасное чтение файла, без ошибок */
 function readfile(path) {
 	try {
 		let f = open(path, "r");
-		if (!f) return null;
+		if (!f)
+			return "";
 		let d = f.read("all");
 		f.close();
-		return d || "";
+		return d ? d : "";
 	} catch (e) {
-		return null;
+		return "";
 	}
 }
 
@@ -36,19 +37,24 @@ return {
 		/* --- STATE (3-й шаг VPN / код роутера) --- */
 		state: {
 			call: function(req, msg) {
-				let code_raw = readfile(CODE);
-				let sub_raw  = readfile(SUB);
-				let ready    = readfile(READY);
+				try {
+					let code_raw = readfile(CODE);
+					let sub_raw  = readfile(SUB);
+					let ready    = readfile(READY);
 
-				let code = code_raw ? code_raw : "";
-				let sub  = sub_raw  ? sub_raw  : "";
+					let code = code_raw ? code_raw : "";
+					let sub  = sub_raw  ? sub_raw  : "";
 
-				return {
-					code: code,
-					has_sub: (sub != ""),
-					subscription_url: sub,
-					vpn_ready: (ready !== null)
-				};
+					return {
+						code: code,
+						has_sub: (sub != ""),
+						subscription_url: sub,
+						vpn_ready: (ready != "")
+					};
+				}
+				catch (e) {
+					return { ok: 0, error: String(e) };
+				}
 			}
 		},
 
@@ -65,71 +71,77 @@ return {
 				server:   "String"
 			},
 			call: function(req, p) {
-				let u = cursor();
+				try {
+					let u = cursor();
 
-				/* грузим network */
-				u.load("network");
+					u.load("network");
 
-				let proto    = p.proto    || "dhcp";
-				let username = p.username || "";
-				let password = p.password || "";
-				let ipaddr   = p.ipaddr   || "";
-				let netmask  = p.netmask  || "";
-				let gateway  = p.gateway  || "";
-				let dns      = p.dns      || "";
-				let server   = p.server   || "";
+					let proto    = (p && p.proto)    ? p.proto    : "dhcp";
+					let username = (p && p.username) ? p.username : "";
+					let password = (p && p.password) ? p.password : "";
+					let ipaddr   = (p && p.ipaddr)   ? p.ipaddr   : "";
+					let netmask  = (p && p.netmask)  ? p.netmask  : "";
+					let gateway  = (p && p.gateway)  ? p.gateway  : "";
+					let dns      = (p && p.dns)      ? p.dns      : "";
+					let server   = (p && p.server)   ? p.server   : "";
 
-				u.set("network", "wan", "proto", proto);
+					/* на всякий случай убедимся, что секция wan существует */
+					u.set("network", "wan", "proto", proto);
 
-				if (proto == "pppoe") {
-					u.set("network", "wan", "username", username);
-					u.set("network", "wan", "password", password);
+					if (proto == "pppoe") {
+						u.set("network", "wan", "username", username);
+						u.set("network", "wan", "password", password);
 
-					u.delete("network", "wan", "ipaddr");
-					u.delete("network", "wan", "netmask");
-					u.delete("network", "wan", "gateway");
-					u.delete("network", "wan", "dns");
-					u.delete("network", "wan", "server");
-				}
-				else if (proto == "static") {
-					u.set("network", "wan", "ipaddr",  ipaddr);
-					u.set("network", "wan", "netmask", netmask);
-					u.set("network", "wan", "gateway", gateway);
-
-					if (dns != "")
-						u.set("network", "wan", "dns", dns);
-					else
+						u.delete("network", "wan", "ipaddr");
+						u.delete("network", "wan", "netmask");
+						u.delete("network", "wan", "gateway");
 						u.delete("network", "wan", "dns");
+						u.delete("network", "wan", "server");
+					}
+					else if (proto == "static") {
+						u.set("network", "wan", "ipaddr",  ipaddr);
+						u.set("network", "wan", "netmask", netmask);
+						u.set("network", "wan", "gateway", gateway);
 
-					u.delete("network", "wan", "username");
-					u.delete("network", "wan", "password");
-					u.delete("network", "wan", "server");
+						if (dns != "")
+							u.set("network", "wan", "dns", dns);
+						else
+							u.delete("network", "wan", "dns");
+
+						u.delete("network", "wan", "username");
+						u.delete("network", "wan", "password");
+						u.delete("network", "wan", "server");
+					}
+					else if (proto == "l2tp") {
+						u.set("network", "wan", "server",   server);
+						u.set("network", "wan", "username", username);
+						u.set("network", "wan", "password", password);
+
+						u.delete("network", "wan", "ipaddr");
+						u.delete("network", "wan", "netmask");
+						u.delete("network", "wan", "gateway");
+						u.delete("network", "wan", "dns");
+					}
+					else {
+						/* dhcp по умолчанию */
+						u.delete("network", "wan", "username");
+						u.delete("network", "wan", "password");
+						u.delete("network", "wan", "ipaddr");
+						u.delete("network", "wan", "netmask");
+						u.delete("network", "wan", "gateway");
+						u.delete("network", "wan", "dns");
+						u.delete("network", "wan", "server");
+						u.set("network", "wan", "proto", "dhcp");
+					}
+
+					u.commit("network");
+					u.unload();
+
+					return { ok: 1 };
 				}
-				else if (proto == "l2tp") {
-					u.set("network", "wan", "server",   server);
-					u.set("network", "wan", "username", username);
-					u.set("network", "wan", "password", password);
-
-					u.delete("network", "wan", "ipaddr");
-					u.delete("network", "wan", "netmask");
-					u.delete("network", "wan", "gateway");
-					u.delete("network", "wan", "dns");
+				catch (e) {
+					return { ok: 0, error: String(e) };
 				}
-				else {
-					/* dhcp по умолчанию */
-					u.delete("network", "wan", "username");
-					u.delete("network", "wan", "password");
-					u.delete("network", "wan", "ipaddr");
-					u.delete("network", "wan", "netmask");
-					u.delete("network", "wan", "gateway");
-					u.delete("network", "wan", "dns");
-					u.delete("network", "wan", "server");
-				}
-
-				u.commit("network");
-				u.unload();
-
-				return { ok: 1 };
 			}
 		},
 
@@ -140,53 +152,58 @@ return {
 				key:  "String"
 			},
 			call: function(req, p) {
-				let u = cursor();
-				u.load("wireless");
+				try {
+					let u = cursor();
+					u.load("wireless");
 
-				let ssid = p.ssid || "";
-				let key  = p.key  || "";
+					let ssid = (p && p.ssid) ? p.ssid : "";
+					let key  = (p && p.key)  ? p.key  : "";
 
-				if (!ssid)
-					ssid = "Shpun-Router";
+					if (!ssid || ssid == "")
+						ssid = "Shpun-Router";
 
-				let iface = null;
+					let iface = null;
 
-				/* включаем iface'ы и ищем первый AP */
-				u.foreach("wireless", "wifi-iface", function(s) {
-					if (!iface && s.mode == "ap")
-						iface = s[".name"];
+					/* включаем iface'ы и ищем первый AP */
+					u.foreach("wireless", "wifi-iface", function(s) {
+						if (!iface && s.mode == "ap")
+							iface = s[".name"];
 
-					if (s.disabled == "1" || s.disabled == 1)
-						u.set("wireless", s[".name"], "disabled", "0");
-				});
+						if (s.disabled == "1" || s.disabled == 1)
+							u.set("wireless", s[".name"], "disabled", "0");
+					});
 
-				/* включаем radio-устройства */
-				u.foreach("wireless", "wifi-device", function(s) {
-					if (s.disabled == "1" || s.disabled == 1)
-						u.set("wireless", s[".name"], "disabled", "0");
-				});
+					/* включаем radio-устройства */
+					u.foreach("wireless", "wifi-device", function(s) {
+						if (s.disabled == "1" || s.disabled == 1)
+							u.set("wireless", s[".name"], "disabled", "0");
+					});
 
-				if (!iface) {
+					if (!iface) {
+						u.unload();
+						return { ok: 0, error: "no_ap_iface" };
+					}
+
+					/* SSID + ключ / открытая сеть */
+					u.set("wireless", iface, "ssid", ssid);
+
+					if (key && key != "") {
+						u.set("wireless", iface, "encryption", "psk2");
+						u.set("wireless", iface, "key", key);
+					}
+					else {
+						u.set("wireless", iface, "encryption", "none");
+						u.delete("wireless", iface, "key");
+					}
+
+					u.commit("wireless");
 					u.unload();
-					return { ok: 0, error: "no_ap_iface" };
+
+					return { ok: 1 };
 				}
-
-				/* SSID + ключ / открытая сеть */
-				u.set("wireless", iface, "ssid", ssid);
-
-				if (key != "") {
-					u.set("wireless", iface, "encryption", "psk2");
-					u.set("wireless", iface, "key", key);
+				catch (e) {
+					return { ok: 0, error: String(e) };
 				}
-				else {
-					u.set("wireless", iface, "encryption", "none");
-					u.delete("wireless", iface, "key");
-				}
-
-				u.commit("wireless");
-				u.unload();
-
-				return { ok: 1 };
 			}
 		}
 	}

@@ -12,14 +12,12 @@ var callShpunState = rpc.declare({
 var callApplyWan = rpc.declare({
 	object: 'shpun',
 	method: 'apply_wan',
-	params: ['proto', 'username', 'password', 'ipaddr', 'netmask', 'gateway', 'dns', 'server'],
 	expect: { '': {} }
 });
 
 var callApplyWifi = rpc.declare({
 	object: 'shpun',
 	method: 'apply_wifi',
-	params: ['ssid', 'key'],
 	expect: { '': {} }
 });
 
@@ -249,9 +247,10 @@ return view.extend({
 				};
 
 				callApplyWan(params).then(function (res) {
+					console.log('shpun.apply_wan result:', res);
 					wanSaveBtn.disabled = false;
 
-					if (res && res.ok === 1) {
+					if (res && res.ok == 1) {
 						ui.addNotification(null, E('p', {}, ['WAN настройки сохранены. Переходим к Wi-Fi.']));
 						showStep(2);
 					}
@@ -263,6 +262,7 @@ return view.extend({
 					}
 				}).catch(function (err) {
 					wanSaveBtn.disabled = false;
+					console.log('shpun.apply_wan RPC error:', err);
 					ui.addNotification('error', E('p', {}, [
 						'RPC ошибка apply_wan: ', String(err)
 					]));
@@ -341,9 +341,10 @@ return view.extend({
 				};
 
 				callApplyWifi(params).then(function (res) {
+					console.log('shpun.apply_wifi result:', res);
 					wifiSaveBtn.disabled = false;
 
-					if (res && res.ok === 1) {
+					if (res && res.ok == 1) {
 						ui.addNotification(null, E('p', {}, ['Wi-Fi настроен. Переходим к VPN.']));
 						showStep(3);
 					}
@@ -355,6 +356,7 @@ return view.extend({
 					}
 				}).catch(function (err) {
 					wifiSaveBtn.disabled = false;
+					console.log('shpun.apply_wifi RPC error:', err);
 					ui.addNotification('error', E('p', {}, [
 						'RPC ошибка apply_wifi: ', String(err)
 					]));
@@ -403,21 +405,18 @@ return view.extend({
 
 		function updateVpnStatus(st) {
 			if (!st.has_sub) {
-				// код ещё не привязан к подписке
 				setText(statusText, 'Код ещё не привязан к подписке.');
 				setText(statusDetails,
 					'Добавьте этот код в боте или в интерфейсе услуги Shpun VPN. ' +
 					'После привязки статус здесь обновится автоматически.');
 			}
 			else if (!st.vpn_ready) {
-				// код уже привязан, роутер настраивает VPN
 				setText(statusText, 'Код привязан. Готовим VPN…');
 				setText(statusDetails,
 					'Роутер загружает настройки и подключается к серверу. ' +
 					'Обычно это занимает до одной минуты.');
 			}
 			else {
-				// всё готово
 				setText(statusText, 'VPN подключён и работает ✅');
 				setText(statusDetails,
 					'Интернет с этого роутера теперь проходит через Shpun VPN.');
