@@ -4,7 +4,7 @@
 
 /*
  * Backend для Shpun Router:
- *  - state: читает файлы состояния в /etc/shpun
+ *  - state: читает / генерирует код, смотрит подписку и vpn_ready
  *  - apply_wan: настраивает WAN через UCI
  *  - apply_wifi: включает Wi-Fi и задаёт SSID/ключ
  */
@@ -37,51 +37,80 @@ function readfile(path) {
 /* --- ubus methods --- */
 
 const methods = {
-	/* ===== shpun.state ===== */
+
+	/* ===== shpun.state =====
+	 *  code        : строка кода (если нет - генерируем через gen_code.sh)
+	 *  has_sub     : есть ли subscription_url
+	 *  subscription_url : сама ссылка
+	 *  vpn_ready   : true, если файл vpn_ready существует
+	 */
 	state: {
 		call: function() {
-			const code_raw  = readfile(CODE_FILE);
+			let code = readfile(CODE_FILE);
+
+			/* если кода ещё нет — пробуем сгенерировать */
+			if (!code || code == "") {
+				const p = popen("/etc/shpun/gen_code.sh", "r");
+				if (p) {
+					const out = p.read("all");
+					p.close();
+					if (out)
+						code = ucode.trim(out);
+				}
+			}
+
+			if (!code)
+				code = "";
+
 			const sub_raw   = readfile(SUB_FILE);
 			const ready_raw = readfile(READY_FILE);
 
-			const code = code_raw ? code_raw : "";
-			const sub  = sub_raw  ? sub_raw  : "";
-
-			const has_sub = (sub != "");
-			const vpn_ok  = (ready_raw != null);
+			const sub    = sub_raw ? sub_raw : "";
+			const hasSub = (sub != "");
+			const vpnOk  = (ready_raw != null); /* просто факт существования файла */
 
 			return {
 				code: code,
-				has_sub: has_sub,
+				has_sub: hasSub,
 				subscription_url: sub,
-				vpn_ready: vpn_ok
+				vpn_ready: vpnOk
 			};
 		}
 	},
 
-	/* ===== shpun.apply_wan ===== */
+	/* ===== shpun.apply_wan =====
+	 * Параметры:
+	 *  proto    : "dhcp" | "pppoe" | "static" | "l2tp"
+	 *  username : логин (pppoe/l2tp)
+	 *  password : пароль (pppoe/l2tp)
+	 *  ipaddr   : IP (static)
+	 *  netmask  : маска (static)
+	 *  gateway  : шлюз (static)
+	 *  dns      : DNS (static)
+	 *  server   : адрес сервера (l2tp)
+	 */
 	apply_wan: {
 		args: {
-			proto:    "",
-			username: "",
-			password: "",
-			ipaddr:   "",
-			netmask:  "",
-			gateway:  "",
-			dns:      "",
-			server:   ""
+			proto:    "String",
+			username: "String",
+			password: "String",
+			ipaddr:   "String",
+			netmask:  "String",
+			gateway:  "String",
+			dns:      "String",
+			server:   "String"
 		},
-		call: function(args, req) {
+		call: function(params) {
 			let u = cursor();
 
-			let proto    = args.proto    || "dhcp";
-			let username = args.username || "";
-			let password = args.password || "";
-			let ipaddr   = args.ipaddr   || "";
-			let netmask  = args.netmask  || "";
-			let gateway  = args.gateway  || "";
-			let dns      = args.dns      || "";
-			let server   = args.server   || "";
+			let proto    = params.proto    || "dhcp";
+			let username = params.username || "";
+			let password = params.password || "";
+			let ipaddr   = params.ipaddr   || "";
+			let netmask  = params.netmask  || "";
+			let gateway  = params.gateway  || "";
+			let dns      = params.dns      || "";
+			let server   = params.server   || "";
 
 			let opts = { proto: proto };
 
@@ -110,23 +139,27 @@ const methods = {
 			u.commit("network");
 			u.unload();
 
-			let p = popen("/etc/init.d/network restart >/dev/null 2>&1 &", "r");
+			const p = popen("/etc/init.d/network restart >/dev/null 2>&1 &", "r");
 			if (p) p.close();
 
 			return { ok: 1 };
 		}
 	},
 
-	/* ===== shpun.apply_wifi ===== */
+	/* ===== shpun.apply_wifi =====
+	 * Параметры:
+	 *  ssid : имя сети
+	 *  key  : пароль (может быть пустым)
+	 */
 	apply_wifi: {
 		args: {
-			ssid: "",
-			key:  ""
+			ssid: "String",
+			key:  "String"
 		},
-		call: function(args, req) {
+		call: function(params) {
 			let u    = cursor();
-			let ssid = args.ssid || "";
-			let key  = args.key  || "";
+			let ssid = params.ssid || "";
+			let key  = params.key  || "";
 
 			if (!ssid || ssid == "")
 				return { ok: 0, error: "empty_ssid" };
@@ -167,7 +200,7 @@ const methods = {
 			u.commit("wireless");
 			u.unload();
 
-			let p = popen("/sbin/wifi up >/dev/null 2>&1 || /etc/init.d/network reload >/dev/null 2>&1 &", "r");
+			const p = popen("/sbin/wifi up >/dev/null 2>&1 || /etc/init.d/network reload >/dev/null 2>&1 &", "r");
 			if (p) p.close();
 
 			return { ok: 1 };
