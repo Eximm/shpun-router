@@ -9,19 +9,14 @@ var callShpunState = rpc.declare({
 	expect: { '': {} }
 });
 
-var callShpunApplyWan = rpc.declare({
-	object: 'shpun',
-	method: 'apply_wan',
-	params: [ 'proto', 'username', 'password', 'ipaddr', 'netmask', 'gateway', 'dns', 'server' ],
-	expect: { '': {} }
-});
+// WAN / Wi-Fi будем вызывать напрямую, как из консоли (v2 через rpc.call)
+function rpcApplyWan(params) {
+	return rpc.call('shpun', 'apply_wan', params || {});
+}
 
-var callShpunApplyWifi = rpc.declare({
-	object: 'shpun',
-	method: 'apply_wifi',
-	params: [ 'ssid', 'key' ],
-	expect: { '': {} }
-});
+function rpcApplyWifi(params) {
+	return rpc.call('shpun', 'apply_wifi', params || {});
+}
 
 var callNetworkReload = rpc.declare({
 	object: 'network',
@@ -257,7 +252,7 @@ return view.extend({
 					server:   wanServer.value || ''
 				};
 
-				callShpunApplyWan(params).then(function (res) {
+				rpcApplyWan(params).then(function (res) {
 					console.log('shpun.apply_wan result:', res);
 					wanSaveBtn.disabled = false;
 
@@ -354,7 +349,7 @@ return view.extend({
 					key:  wifiKey.value  || ''
 				};
 
-				callShpunApplyWifi(params).then(function (res) {
+				rpcApplyWifi(params).then(function (res) {
 					console.log('shpun.apply_wifi result:', res);
 					wifiSaveBtn.disabled = false;
 

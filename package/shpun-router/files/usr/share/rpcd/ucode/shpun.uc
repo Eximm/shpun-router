@@ -71,7 +71,10 @@ return {
 			},
 			call: function(request) {
 				try {
-					let p = request.args || {};
+					/* поддерживаем и объект, и массив args[0] */
+					let p = (request && request.args && request.args[0])
+						? request.args[0]
+						: (request && request.args) ? request.args : {};
 					let u = cursor();
 
 					u.load("network");
@@ -151,7 +154,10 @@ return {
 			},
 			call: function(request) {
 				try {
-					let p = request.args || {};
+					/* поддерживаем и объект, и массив args[0] */
+					let p = (request && request.args && request.args[0])
+						? request.args[0]
+						: (request && request.args) ? request.args : {};
 					let u = cursor();
 					u.load("wireless");
 
