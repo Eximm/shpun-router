@@ -24,7 +24,6 @@ var callApplyWifi = rpc.declare({
 });
 
 return view.extend({
-	// убираем стандартные кнопки LuCI
 	handleSaveApply: null,
 	handleSave: null,
 	handleReset: null,
@@ -42,7 +41,7 @@ return view.extend({
 		var pollTimer = null;
 		var stepIndicators = [];
 
-		/* ================== хелперы ================== */
+		/* ================== helpers ================== */
 
 		function setText(el, txt) {
 			while (el.firstChild)
@@ -71,6 +70,24 @@ return view.extend({
 			updateStepIndicators(step);
 		}
 
+		function makeField(label, inputEl, hint, refSetter) {
+			var nodes = [
+				E('div', { 'class': 'shpun-label' }, [label]),
+				inputEl
+			];
+
+			if (hint) {
+				nodes.push(E('div', { 'class': 'shpun-hint' }, [hint]));
+			}
+
+			var wrap = E('div', { 'class': 'shpun-field' }, nodes);
+
+			if (refSetter)
+				refSetter(wrap);
+
+			return wrap;
+		}
+
 		/* ================== Шаг 1: WAN ================== */
 
 		var wanProto = 'dhcp';
@@ -88,10 +105,10 @@ return view.extend({
 			}, [label]);
 		}
 
-		var protoDhcpBtn  = makeProtoButton('dhcp',  'DHCP (авто)');
-		var protoPppoeBtn = makeProtoButton('pppoe', 'PPPoE');
-		var protoStaticBtn = makeProtoButton('static', 'Static IP');
-		var protoL2tpBtn  = makeProtoButton('l2tp',  'L2TP');
+		var protoDhcpBtn   = makeProtoButton('dhcp',  'DHCP (авто)');
+		var protoPppoeBtn  = makeProtoButton('pppoe', 'PPPoE');
+		var protoStaticBtn = makeProtoButton('static','Static IP');
+		var protoL2tpBtn   = makeProtoButton('l2tp',  'L2TP');
 
 		var protoButtons = [protoDhcpBtn, protoPppoeBtn, protoStaticBtn, protoL2tpBtn];
 
@@ -103,24 +120,68 @@ return view.extend({
 			}
 		}
 
-		var wanUser   = E('input', { id: 'shpun-wan-username', 'class': 'cbi-input-text', type: 'text' });
-		var wanPass   = E('input', { id: 'shpun-wan-password', 'class': 'cbi-input-text', type: 'password' });
-		var wanIp     = E('input', { id: 'shpun-wan-ipaddr',   'class': 'cbi-input-text', type: 'text' });
-		var wanMask   = E('input', { id: 'shpun-wan-netmask',  'class': 'cbi-input-text', type: 'text' });
-		var wanGw     = E('input', { id: 'shpun-wan-gateway',  'class': 'cbi-input-text', type: 'text' });
-		var wanDns    = E('input', { id: 'shpun-wan-dns',      'class': 'cbi-input-text', type: 'text' });
-		var wanServer = E('input', { id: 'shpun-wan-server',   'class': 'cbi-input-text', type: 'text' });
+		var wanUser   = E('input', {
+			id: 'shpun-wan-username',
+			'class': 'cbi-input-text',
+			type: 'text',
+			placeholder: 'например, user@isp'
+		});
+
+		var wanPass   = E('input', {
+			id: 'shpun-wan-password',
+			'class': 'cbi-input-text',
+			type: 'password',
+			placeholder: 'пароль из договора'
+		});
+
+		var wanIp     = E('input', {
+			id: 'shpun-wan-ipaddr',
+			'class': 'cbi-input-text',
+			type: 'text',
+			placeholder: 'например, 192.168.0.2'
+		});
+
+		var wanMask   = E('input', {
+			id: 'shpun-wan-netmask',
+			'class': 'cbi-input-text',
+			type: 'text',
+			placeholder: 'например, 255.255.255.0'
+		});
+
+		var wanGw     = E('input', {
+			id: 'shpun-wan-gateway',
+			'class': 'cbi-input-text',
+			type: 'text',
+			placeholder: 'обычно 192.168.0.1'
+		});
+
+		var wanDns    = E('input', {
+			id: 'shpun-wan-dns',
+			'class': 'cbi-input-text',
+			type: 'text',
+			placeholder: 'например, 8.8.8.8 1.1.1.1'
+		});
+
+		var wanServer = E('input', {
+			id: 'shpun-wan-server',
+			'class': 'cbi-input-text',
+			type: 'text',
+			placeholder: 'например, vpn.isp.example'
+		});
 
 		var wanUserWrap, wanPassWrap, wanIpWrap, wanMaskWrap, wanGwWrap, wanDnsWrap, wanServerWrap;
 
-		function makeField(label, inputEl, refSetter) {
-			var wrap = E('div', { 'class': 'shpun-field' }, [
-				E('div', { 'class': 'shpun-label' }, [label]),
-				inputEl
-			]);
-			refSetter(wrap);
-			return wrap;
-		}
+		var wanForm = E('div', { 'class': 'shpun-form-vertical' }, [
+			makeField('Логин', wanUser, 'Логин из договора с провайдером (для PPPoE/L2TP).', function (w) { wanUserWrap = w; }),
+			makeField('Пароль', wanPass, 'Пароль от интернет-подключения.', function (w) { wanPassWrap = w; }),
+			makeField('IP-адрес', wanIp, 'Статический IP, который выдал провайдер.', function (w) { wanIpWrap = w; }),
+			makeField('Маска сети', wanMask, 'Например, 255.255.255.0.', function (w) { wanMaskWrap = w; }),
+			makeField('Шлюз', wanGw, 'Обычно IP роутера провайдера (часто 192.168.0.1).', function (w) { wanGwWrap = w; }),
+			makeField('DNS-сервер(а)', wanDns, 'Можно указать DNS провайдера или публичные (8.8.8.8 1.1.1.1).', function (w) { wanDnsWrap = w; }),
+			makeField('L2TP сервер', wanServer, 'Адрес L2TP сервера от провайдера.', function (w) { wanServerWrap = w; })
+		]);
+
+		var wanHelpBox = E('div', { 'class': 'shpun-help-box' }, []);
 
 		function updateWanFieldsVisibility() {
 			var isPPPoE = (wanProto === 'pppoe');
@@ -136,33 +197,22 @@ return view.extend({
 			if (wanDnsWrap)  wanDnsWrap.style.display  = isStatic ? '' : 'none';
 
 			if (wanServerWrap) wanServerWrap.style.display = isL2TP ? '' : 'none';
+
+			var help = '';
+			if (wanProto === 'dhcp') {
+				help = 'DHCP — самый простой вариант: роутер автоматически получает настройки от провайдера. Обычно ничего заполнять не нужно.';
+			}
+			else if (wanProto === 'pppoe') {
+				help = 'PPPoE — используется, если провайдер выдал логин и пароль для подключения к интернету.';
+			}
+			else if (wanProto === 'static') {
+				help = 'Static IP — провайдер выдал вам конкретный IP-адрес, маску, шлюз и DNS. Заполните их по данным из договора.';
+			}
+			else if (wanProto === 'l2tp') {
+				help = 'L2TP — для подключения к L2TP-серверу провайдера. Нужны адрес сервера, логин и пароль.';
+			}
+			setText(wanHelpBox, help);
 		}
-
-		var wanFormGrid = E('div', { 'class': 'shpun-form-grid' }, [
-			// сюда потом подложим wrap'ы
-		]);
-
-		wanFormGrid.appendChild(
-			makeField('Логин', wanUser, function (w) { wanUserWrap = w; })
-		);
-		wanFormGrid.appendChild(
-			makeField('Пароль', wanPass, function (w) { wanPassWrap = w; })
-		);
-		wanFormGrid.appendChild(
-			makeField('IP-адрес', wanIp, function (w) { wanIpWrap = w; })
-		);
-		wanFormGrid.appendChild(
-			makeField('Маска сети', wanMask, function (w) { wanMaskWrap = w; })
-		);
-		wanFormGrid.appendChild(
-			makeField('Шлюз', wanGw, function (w) { wanGwWrap = w; })
-		);
-		wanFormGrid.appendChild(
-			makeField('DNS-сервер(а)', wanDns, function (w) { wanDnsWrap = w; })
-		);
-		wanFormGrid.appendChild(
-			makeField('L2TP сервер', wanServer, function (w) { wanServerWrap = w; })
-		);
 
 		var wanSaveBtn = E('button', {
 			'class': 'cbi-button cbi-button-apply',
@@ -214,14 +264,15 @@ return view.extend({
 
 		var wanStep = E('div', { id: 'shpun-step-wan' }, [
 			E('h2', {}, ['Шаг 1: Подключение к интернету (WAN)']),
-			E('p', { 'class': 'shpun-note' }, ['Выберите тип подключения к провайдеру и при необходимости укажите параметры.']),
+			E('p', { 'class': 'shpun-note' }, ['Выберите тип подключения к провайдеру. Если не уверены — оставьте DHCP.']),
 			E('div', { 'class': 'shpun-proto-group' }, [
 				protoDhcpBtn,
 				protoPppoeBtn,
 				protoStaticBtn,
 				protoL2tpBtn
 			]),
-			wanFormGrid,
+			wanHelpBox,
+			wanForm,
 			E('div', { 'class': 'shpun-actions' }, [
 				wanSkipBtn,
 				wanSaveBtn
@@ -234,15 +285,25 @@ return view.extend({
 			id: 'shpun-wifi-ssid',
 			'class': 'cbi-input-text',
 			type: 'text',
-			placeholder: 'Shpun-Router'
+			placeholder: 'например, Shpun-Router'
 		});
 
 		var wifiKey = E('input', {
 			id: 'shpun-wifi-key',
 			'class': 'cbi-input-text',
 			type: 'text',
-			placeholder: 'пароль Wi-Fi (можно оставить пустым)'
+			placeholder: 'минимум 8 символов'
 		});
+
+		var wifiHelpBox = E('div', { 'class': 'shpun-help-box' }, [
+			'SSID — имя вашей Wi-Fi сети. Пароль можно оставить пустым (открытая сеть, не рекомендуется). ',
+			'Рекомендуется использовать пароль от 8 символов с буквами и цифрами.'
+		]);
+
+		var wifiForm = E('div', { 'class': 'shpun-form-vertical' }, [
+			makeField('SSID', wifiSsid, 'Имя сети, которое увидят устройства (например, Shpun-Router).', null),
+			makeField('Пароль', wifiKey, 'Оставьте пустым для открытой сети, либо задайте надёжный пароль.', null)
+		]);
 
 		var wifiSaveBtn = E('button', {
 			'class': 'cbi-button cbi-button-apply',
@@ -253,7 +314,7 @@ return view.extend({
 
 				var params = {
 					ssid: wifiSsid.value || '',
-					key: wifiKey.value || ''
+					key:  wifiKey.value  || ''
 				};
 
 				callApplyWifi(params).then(function (res) {
@@ -296,11 +357,8 @@ return view.extend({
 
 		var wifiStep = E('div', { id: 'shpun-step-wifi', style: 'display:none' }, [
 			E('h2', {}, ['Шаг 2: Настройка Wi-Fi']),
-			E('p', { 'class': 'shpun-note' }, ['Укажите имя сети (SSID) и пароль. Пустой пароль — открытая сеть.']),
-			E('div', { 'class': 'shpun-form-grid' }, [
-				makeField('SSID', wifiSsid, function () { }),
-				makeField('Пароль', wifiKey, function () { })
-			]),
+			wifiHelpBox,
+			wifiForm,
 			E('div', { 'class': 'shpun-actions' }, [
 				wifiBackBtn,
 				wifiSkipBtn,
@@ -308,7 +366,7 @@ return view.extend({
 			])
 		]);
 
-		/* ================== Шаг 3: VPN ================== */
+		/* ================== Шаг 3: VPN (как раньше) ================== */
 
 		var cleanCode = (state.code || '').replace(/[\r\n\s]+/g, '');
 
@@ -322,16 +380,24 @@ return view.extend({
 
 		function updateVpnStatus(st) {
 			if (!st.has_sub) {
-				setText(statusText, 'Ожидаем привязку в биллинге…');
-				setText(statusDetails, 'Введите код в боте или в интерфейсе услуги Shpun VPN. Агент опрашивает router_public.');
+				// код ещё не привязан к подписке
+				setText(statusText, 'Код ещё не привязан к подписке.');
+				setText(statusDetails,
+					'Добавьте этот код в боте или в интерфейсе услуги Shpun VPN. ' +
+					'После привязки статус здесь обновится автоматически.');
 			}
 			else if (!st.vpn_ready) {
-				setText(statusText, 'Подписка найдена, VPN запускается…');
-				setText(statusDetails, 'Агент скачивает движок и конфигурацию, затем стартует shpun-vpn.');
+				// код уже привязан, роутер настраивает VPN
+				setText(statusText, 'Код привязан. Готовим VPN…');
+				setText(statusDetails,
+					'Роутер загружает настройки и подключается к серверу. ' +
+					'Обычно это занимает до одной минуты.');
 			}
 			else {
-				setText(statusText, 'VPN настроен и работает ✅');
-				setText(statusDetails, st.subscription_url ? ('subscription_url: ' + st.subscription_url) : '');
+				// всё готово
+				setText(statusText, 'VPN подключён и работает ✅');
+				setText(statusDetails,
+					'Интернет с этого роутера теперь проходит через Shpun VPN.');
 			}
 		}
 
@@ -384,7 +450,7 @@ return view.extend({
 			])
 		]);
 
-		/* ================== polling state ================== */
+		/* ================== polling ================== */
 
 		function startPolling() {
 			if (pollTimer)
@@ -456,28 +522,31 @@ return view.extend({
 		/* ================== оформление ================== */
 
 		var style = E('style', {}, [[
-			'.shpun-card { max-width: 960px; margin: 1.5em auto; padding: 24px 24px 20px 24px; border-radius: 10px; ',
+			'.shpun-card { max-width: 960px; margin: 1.5em auto; padding: 24px 24px 20px 24px; border-radius: 10px;',
 			'  background: rgba(0,0,0,0.35); box-shadow: 0 0 18px rgba(0,0,0,0.55); }',
 			'.shpun-card h1 { margin-top: 0; margin-bottom: 0.4em; }',
 			'.shpun-stepper { display:flex; justify-content:space-between; margin:1em 0 1.5em 0; gap:10px; }',
-			'.shpun-step-indicator { flex:1; text-align:center; cursor:pointer; padding:8px 4px; border-radius:6px; border:1px solid rgba(255,255,255,0.15); ',
+			'.shpun-step-indicator { flex:1; text-align:center; cursor:pointer; padding:8px 4px; border-radius:6px; border:1px solid rgba(255,255,255,0.15);',
 			'  background:rgba(0,0,0,0.25); }',
 			'.shpun-step-indicator.shpun-step-active { background:rgba(66,139,202,0.35); border-color:#428bca; }',
 			'.shpun-step-circle { width:24px; height:24px; line-height:24px; margin:0 auto 4px auto; border-radius:50%; border:1px solid currentColor; }',
 			'.shpun-step-label { font-size:90%; opacity:0.9; }',
 			'.shpun-note { margin-bottom: 0.8em; opacity: 0.9; }',
-			'.shpun-form-grid { display:flex; flex-wrap:wrap; gap:16px 24px; margin-top: 1em; }',
-			'.shpun-field { flex:1 1 260px; display:flex; flex-direction:column; }',
+			'.shpun-help-box { margin-top:0.8em; padding:8px 10px; border-radius:6px; border:1px solid rgba(255,255,255,0.2);',
+			'  background:rgba(0,0,0,0.35); font-size:85%; opacity:0.95; }',
+			'.shpun-form-vertical { display:flex; flex-direction:column; gap:12px; margin-top: 1em; }',
+			'.shpun-field { display:flex; flex-direction:column; }',
 			'.shpun-label { font-weight:600; margin-bottom:4px; font-size:90%; }',
-			'.shpun-field .cbi-input-text { max-width: 260px; }',
+			'.shpun-hint { margin-top:3px; font-size:80%; opacity:0.8; }',
+			'.shpun-field .cbi-input-text { max-width: 320px; }',
 			'.shpun-proto-group { display:flex; flex-wrap:wrap; gap:10px; margin-top: 0.8em; }',
-			'.shpun-proto-btn { flex:0 0 auto; padding:6px 10px; border-radius:16px; border:1px solid rgba(255,255,255,0.25); background:rgba(0,0,0,0.3); ',
+			'.shpun-proto-btn { flex:0 0 auto; padding:6px 10px; border-radius:16px; border:1px solid rgba(255,255,255,0.25); background:rgba(0,0,0,0.3);',
 			'  cursor:pointer; font-size:90%; }',
 			'.shpun-proto-active { background:#428bca; border-color:#428bca; }',
 			'.shpun-actions { display:flex; justify-content:flex-end; gap:10px; margin-top: 1.4em; }',
 			'.shpun-code-box { padding:10px 14px; border-radius:8px; border:1px solid rgba(255,255,255,0.25); background:rgba(0,0,0,0.35); margin-bottom: 1em; }',
 			'.shpun-code-label { font-size:80%; text-transform:uppercase; opacity:0.8; }',
-			'.shpun-code-value { font-size:140%; font-weight:bold; margin-top:2px; letter-spacing:0.08em; }',
+			'.shpun-code-value { font-size:140%; font-weight:bold; margin-top:4px; letter-spacing:0.08em; }',
 			'.shpun-vpn-grid { display:flex; flex-wrap:wrap; gap:18px 24px; margin-top: 1em; }',
 			'.shpun-vpn-left { flex: 1 1 260px; }',
 			'.shpun-vpn-right { flex: 0 0 220px; display:flex; flex-direction:column; align-items:center; }',
