@@ -67,7 +67,7 @@ const methods = {
 
 			const sub    = sub_raw ? sub_raw : "";
 			const hasSub = (sub != "");
-			const vpnOk  = (ready_raw != null); /* просто факт существования файла */
+			const vpnOk  = (ready_raw != null); /* факт существования файла */
 
 			return {
 				code: code,

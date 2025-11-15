@@ -156,7 +156,12 @@ return view.extend({
                     E('p', { 'class':'shpun-muted' }, [
                         _('Откройте бота, выберите свою услугу и вручную введите код роутера.')
                     ]),
-                    E('a', { id:'tg-link', href:'#', target:'_blank' }, [
+                    E('a', {
+                        id: 'tg-link',
+                        href: 'https://t.me/shpunvpn_bot',
+                        target: '_blank',
+                        rel: 'noreferrer noopener'
+                    }, [
                         _('Открыть бота Shpun VPN')
                     ]),
                     E('br'),
@@ -323,8 +328,10 @@ return view.extend({
 
                         const img=root.querySelector('#qr-img');
                         if (img){ if (img.src!==qr) img.src=qr; img.style.display='block'; }
-                        const a  =root.querySelector('#tg-link');
-                        if (a) a.href=tg;
+
+                        // href уже прописан в разметке, можно не трогать
+                        const a  = root.querySelector('#tg-link');
+                        if (a && !a.href) a.href = tg;
                     }
 
                     if (st && spinner) {
