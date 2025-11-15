@@ -8,18 +8,20 @@ SERVICE_DAEMONIZE=0
 CONF="/etc/shpun/agent.conf"
 
 load_conf() {
+	# shellcheck disable=SC1090,SC1091
 	[ -f "$CONF" ] && . "$CONF"
 }
 
 start_service() {
 	load_conf
 
-	[ -z "$ENGINE_BIN" ] && return 1
-	[ -z "$ENGINE_CONFIG" ] && return 1
+	[ -z "$ENGINE_BIN" ] && return 0
+	[ -z "$ENGINE_CONFIG" ] && return 0
 
+	# если движка ещё нет — просто ждём, агент его докачает
 	if [ ! -x "$ENGINE_BIN" ]; then
-		echo "shpun-vpn: engine binary not found or not executable: $ENGINE_BIN" >&2
-		return 1
+		logger -t shpun-vpn "engine binary not found yet: $ENGINE_BIN (waiting for shpun-agent)"
+		return 0
 	fi
 
 	procd_open_instance
@@ -31,6 +33,6 @@ start_service() {
 }
 
 stop_service() {
-	# можно просто убить по имени бинарника
-	[ -n "$ENGINE_BIN" ] && procd_killall "$ENGINE_BIN"
+	# procd сам всё почистит, можно доп. killall при желании
+	:
 }

@@ -1,11 +1,14 @@
 #!/bin/sh
 #
-# shpun-agent (упрощённый)
+# shpun-agent
 #   - получает / генерирует код роутера;
 #   - опрашивает router_public по этому коду;
-#   - при ok=1 + subscription_url пишет файлы
-#     /etc/shpun/subscription_url и /etc/shpun/vpn_ready.
-# shellcheck disable=SC2034,SC1090,SC1091
+#   - при ok=1 + subscription_url:
+#       * сохраняет ссылку
+#       * качает VPN-движок
+#       * качает конфиг
+#       * рестартует shpun-vpn
+#       * ставит vpn_ready
 
 STATE_DIR="/etc/shpun"
 CODE_FILE="$STATE_DIR/router_code"
@@ -22,8 +25,13 @@ log() {
 }
 
 load_conf() {
+	# shellcheck disable=SC1090,SC1091
 	[ -f "$CONF" ] && . "$CONF"
-	[ -z "$API_URL" ] && API_URL="$API_URL_DEFAULT"
+
+	[ -z "$API_URL" ]        && API_URL="$API_URL_DEFAULT"
+	[ -z "$ENGINE_NAME" ]    && ENGINE_NAME="sing-box"
+	[ -z "$ENGINE_BIN" ]     && ENGINE_BIN="/tmp/sing-box"
+	[ -z "$ENGINE_CONFIG" ]  && ENGINE_CONFIG="/etc/shpun/sing-box.json"
 }
 
 ensure_state_dir() {
@@ -64,9 +72,75 @@ get_code() {
 	return 0
 }
 
+engine_download() {
+	if [ -z "$ENGINE_URL" ]; then
+		log "ENGINE_URL not set, skip engine download"
+		return 1
+	fi
+
+	if [ -x "$ENGINE_BIN" ]; then
+		log "engine already present: $ENGINE_BIN"
+		return 0
+	fi
+
+	log "downloading engine from $ENGINE_URL to $ENGINE_BIN"
+	if ! uclient-fetch -qO "$ENGINE_BIN" "$ENGINE_URL" 2>/dev/null; then
+		log "failed to download engine"
+		rm -f "$ENGINE_BIN"
+		return 1
+	fi
+
+	if ! chmod +x "$ENGINE_BIN" 2>/dev/null; then
+		log "failed to chmod +x engine"
+		rm -f "$ENGINE_BIN"
+		return 1
+	fi
+
+	if [ -n "$ENGINE_SHA256" ]; then
+		sum="$(sha256sum "$ENGINE_BIN" 2>/dev/null | awk '{print $1}')"
+		if [ "$sum" != "$ENGINE_SHA256" ]; then
+			log "engine sha256 mismatch: got=$sum expected=$ENGINE_SHA256, removing"
+			rm -f "$ENGINE_BIN"
+			return 1
+		fi
+	fi
+
+	log "engine downloaded and ready: $ENGINE_BIN"
+	return 0
+}
+
+config_download() {
+	sub="$1"
+
+	if [ -z "$sub" ]; then
+		log "config_download: empty subscription_url"
+		return 1
+	fi
+
+	log "downloading config to $ENGINE_CONFIG from $sub"
+	if ! uclient-fetch -qO "$ENGINE_CONFIG" "$sub" 2>/dev/null; then
+		log "failed to download config"
+		rm -f "$ENGINE_CONFIG"
+		return 1
+	fi
+
+	log "config saved to $ENGINE_CONFIG"
+	return 0
+}
+
+restart_vpn() {
+	if [ -x /etc/init.d/shpun-vpn ]; then
+		log "restarting shpun-vpn"
+		/etc/init.d/shpun-vpn restart 2>/dev/null || log "failed to restart shpun-vpn"
+	else
+		log "shpun-vpn init script not found"
+	fi
+}
+
 fetch_subscription_once() {
-	[ -z "$CLEAN_CODE" ] && return 1
-	[ -z "$API_URL" ] && return 1
+	if [ -z "$CLEAN_CODE" ] || [ -z "$API_URL" ]; then
+		return 1
+	fi
 
 	URL="${API_URL}?code=${CLEAN_CODE}&format=json"
 
@@ -97,7 +171,22 @@ fetch_subscription_once() {
 	printf '%s\n' "$SUB" >"$SUB_FILE"
 	log "subscription_url saved to $SUB_FILE"
 
-	# позже сюда можно добавить скачивание конфига/движка
+	# === качаем движок ===
+	if ! engine_download; then
+		log "engine_download failed, will retry later"
+		return 1
+	fi
+
+	# === качаем конфиг ===
+	if ! config_download "$SUB"; then
+		log "config_download failed, will retry later"
+		return 1
+	fi
+
+	# === перезапускаем shpun-vpn ===
+	restart_vpn
+
+	# === помечаем vpn_ready ===
 	touch "$VPN_READY_FILE"
 	log "vpn_ready marked in $VPN_READY_FILE"
 
@@ -112,20 +201,20 @@ poll_subscription_loop() {
 	fi
 
 	while :; do
-		get_code || {
+		if ! get_code; then
 			log "failed to get code, retry in 15s"
 			sleep 15
 			continue
-		}
+		fi
 
 		log "router code: $CODE (clean: $CLEAN_CODE)"
 
-		fetch_subscription_once && {
+		if fetch_subscription_once; then
 			# успех
 			return 0
-		}
+		fi
 
-		log "no subscription yet, retry in 20s"
+		log "no subscription or engine/config yet, retry in 20s"
 		sleep 20
 	done
 }
@@ -134,11 +223,11 @@ main_loop() {
 	load_conf
 	ensure_state_dir
 
-	log "shpun-agent started (simple mode, API_URL=$API_URL)"
+	log "shpun-agent started (with engine management, API_URL=$API_URL)"
 
 	poll_subscription_loop
 
-	# можно добавить периодическую проверку подписки, пока просто ждём и выходим
+	# можно добавить периодические проверки, пока просто ждём
 	sleep 600
 }
 
