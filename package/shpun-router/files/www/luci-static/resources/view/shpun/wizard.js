@@ -264,10 +264,9 @@ return view.extend({
 
 		var qrImg = E('img', {
 			'style': 'margin-top:1em; max-width:200px;',
-			'src': cleanCode
-				? 'https://api.qrserver.com/v1/create-qr-code/?size=200x200&data='
-					+ encodeURIComponent('https://t.me/shpunvpn_bot?start=' + cleanCode)
-				: ''
+			// QR всегда просто на бота, без кода в параметрах
+			'src': 'https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=' +
+				encodeURIComponent('https://t.me/shpunvpn_bot')
 		});
 
 		var finishBtn = E('button', {
@@ -359,3 +358,4 @@ return view.extend({
 		]);
 	}
 });
+
