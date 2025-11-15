@@ -9,6 +9,21 @@ var callShpunState = rpc.declare({
 	expect: { '': {} }
 });
 
+/* --- RPC для WAN и Wi-Fi --- */
+var callApplyWan = rpc.declare({
+	object: 'shpun',
+	method: 'apply_wan',
+	params: [ 'proto', 'username', 'password', 'ipaddr', 'netmask', 'gateway', 'dns', 'server' ],
+	expect: { '': {} }
+});
+
+var callApplyWifi = rpc.declare({
+	object: 'shpun',
+	method: 'apply_wifi',
+	params: [ 'ssid', 'key' ],
+	expect: { '': {} }
+});
+
 // ВАЖНО: вызывем ubus так же, как из консоли
 function rpcApplyWan(params) {
 	return rpc.call('shpun', 'apply_wan', params || {});
@@ -241,18 +256,16 @@ return view.extend({
 
 				wanSaveBtn.disabled = true;
 
-				var params = {
-					proto: wanProto,
-					username: wanUser.value || '',
-					password: wanPass.value || '',
-					ipaddr:   wanIp.value   || '',
-					netmask:  wanMask.value || '',
-					gateway:  wanGw.value   || '',
-					dns:      wanDns.value  || '',
-					server:   wanServer.value || ''
-				};
-
-				rpcApplyWan(params).then(function (res) {
+				callApplyWan(
+					wanProto,
+					wanUser.value || '',
+					wanPass.value || '',
+					wanIp.value   || '',
+					wanMask.value || '',
+					wanGw.value   || '',
+					wanDns.value  || '',
+					wanServer.value || ''
+				).then(function (res) {
 					console.log('shpun.apply_wan result:', res);
 					wanSaveBtn.disabled = false;
 
@@ -344,12 +357,10 @@ return view.extend({
 
 				wifiSaveBtn.disabled = true;
 
-				var params = {
-					ssid: wifiSsid.value || '',
-					key:  wifiKey.value  || ''
-				};
-
-				rpcApplyWifi(params).then(function (res) {
+				callApplyWifi(
+					wifiSsid.value || '',
+					wifiKey.value  || ''
+				).then(function (res) {
 					console.log('shpun.apply_wifi result:', res);
 					wifiSaveBtn.disabled = false;
 
