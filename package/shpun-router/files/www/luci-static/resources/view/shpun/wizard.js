@@ -9,20 +9,33 @@ var callShpunState = rpc.declare({
 	expect: { '': {} }
 });
 
-var callApplyWan = rpc.declare({
+var callShpunApplyWan = rpc.declare({
 	object: 'shpun',
 	method: 'apply_wan',
+	params: [ 'proto', 'username', 'password', 'ipaddr', 'netmask', 'gateway', 'dns', 'server' ],
 	expect: { '': {} }
 });
 
-var callApplyWifi = rpc.declare({
+var callShpunApplyWifi = rpc.declare({
 	object: 'shpun',
 	method: 'apply_wifi',
+	params: [ 'ssid', 'key' ],
+	expect: { '': {} }
+});
+
+var callNetworkReload = rpc.declare({
+	object: 'network',
+	method: 'reload',
+	expect: { '': {} }
+});
+
+var callWifiReload = rpc.declare({
+	object: 'network.wireless',
+	method: 'reload',
 	expect: { '': {} }
 });
 
 return view.extend({
-	// отключаем стандартные кнопки LuCI
 	handleSaveApply: null,
 	handleSave: null,
 	handleReset: null,
@@ -39,8 +52,6 @@ return view.extend({
 		var currentStep = 1;
 		var pollTimer = null;
 		var stepIndicators = [];
-
-		/* ================== helpers ================== */
 
 		function setText(el, txt) {
 			while (el.firstChild)
@@ -246,11 +257,14 @@ return view.extend({
 					server:   wanServer.value || ''
 				};
 
-				callApplyWan(params).then(function (res) {
+				callShpunApplyWan(params).then(function (res) {
 					console.log('shpun.apply_wan result:', res);
 					wanSaveBtn.disabled = false;
 
 					if (res && res.ok == 1) {
+						callNetworkReload().catch(function (e) {
+							console.log('network.reload error:', e);
+						});
 						ui.addNotification(null, E('p', {}, ['WAN настройки сохранены. Переходим к Wi-Fi.']));
 						showStep(2);
 					}
@@ -340,11 +354,14 @@ return view.extend({
 					key:  wifiKey.value  || ''
 				};
 
-				callApplyWifi(params).then(function (res) {
+				callShpunApplyWifi(params).then(function (res) {
 					console.log('shpun.apply_wifi result:', res);
 					wifiSaveBtn.disabled = false;
 
 					if (res && res.ok == 1) {
+						callWifiReload().catch(function (e) {
+							console.log('network.wireless.reload error:', e);
+						});
 						ui.addNotification(null, E('p', {}, ['Wi-Fi настроен. Переходим к VPN.']));
 						showStep(3);
 					}
@@ -431,7 +448,7 @@ return view.extend({
 
 		var qrLink = E('a', {
 			href: 'https://t.me/shpunvpn_bot',
-			target: '_blank'
+			arget: '_blank'
 		}, [ qrImg ]);
 
 		var finishBtn = E('button', {
@@ -479,8 +496,6 @@ return view.extend({
 			])
 		]);
 
-		/* ================== polling ================== */
-
 		function startPolling() {
 			if (pollTimer)
 				window.clearInterval(pollTimer);
@@ -506,8 +521,6 @@ return view.extend({
 			pollTimer = window.setInterval(doPoll, 5000);
 		}
 
-		/* ================== степпер ================== */
-
 		function makeStepIndicator(num, title) {
 			var el = E('div', {
 				'class': 'shpun-step-indicator',
@@ -531,8 +544,6 @@ return view.extend({
 			makeStepIndicator(3, 'VPN')
 		]);
 
-		/* ================== init ================== */
-
 		updateProtoButtons();
 		updateWanFieldsVisibility();
 
@@ -547,8 +558,6 @@ return view.extend({
 		window.setTimeout(function () {
 			showStep(1);
 		}, 0);
-
-		/* ================== оформление ================== */
 
 		var style = E('style', {}, [[
 			'.shpun-card { max-width: 960px; margin: 1.5em auto; padding: 24px 24px 20px 24px; border-radius: 10px;',

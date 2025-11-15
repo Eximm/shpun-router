@@ -24,19 +24,18 @@ function readfile(path) {
 }
 
 return {
-
 	shpun: {
 
 		/* --- PING --- */
 		ping: {
-			call: function(req, msg) {
+			call: function(req) {
 				return { ok: 1, msg: "shpun ucode pong" };
 			}
 		},
 
-		/* --- STATE (3-й шаг VPN / код роутера) --- */
+		/* --- STATE --- */
 		state: {
-			call: function(req, msg) {
+			call: function(req) {
 				try {
 					let code_raw = readfile(CODE);
 					let sub_raw  = readfile(SUB);
@@ -58,7 +57,7 @@ return {
 			}
 		},
 
-		/* --- APPLY_WAN (1-й шаг мастера) --- */
+		/* --- APPLY_WAN --- */
 		apply_wan: {
 			args: {
 				proto:    "String",
@@ -70,22 +69,22 @@ return {
 				dns:      "String",
 				server:   "String"
 			},
-			call: function(req, p) {
+			call: function(request) {
 				try {
+					let p = request.args || {};
 					let u = cursor();
 
 					u.load("network");
 
-					let proto    = (p && p.proto)    ? p.proto    : "dhcp";
-					let username = (p && p.username) ? p.username : "";
-					let password = (p && p.password) ? p.password : "";
-					let ipaddr   = (p && p.ipaddr)   ? p.ipaddr   : "";
-					let netmask  = (p && p.netmask)  ? p.netmask  : "";
-					let gateway  = (p && p.gateway)  ? p.gateway  : "";
-					let dns      = (p && p.dns)      ? p.dns      : "";
-					let server   = (p && p.server)   ? p.server   : "";
+					let proto    = p.proto    || "dhcp";
+					let username = p.username || "";
+					let password = p.password || "";
+					let ipaddr   = p.ipaddr   || "";
+					let netmask  = p.netmask  || "";
+					let gateway  = p.gateway  || "";
+					let dns      = p.dns      || "";
+					let server   = p.server   || "";
 
-					/* на всякий случай убедимся, что секция wan существует */
 					u.set("network", "wan", "proto", proto);
 
 					if (proto == "pppoe") {
@@ -123,7 +122,6 @@ return {
 						u.delete("network", "wan", "dns");
 					}
 					else {
-						/* dhcp по умолчанию */
 						u.delete("network", "wan", "username");
 						u.delete("network", "wan", "password");
 						u.delete("network", "wan", "ipaddr");
@@ -145,56 +143,60 @@ return {
 			}
 		},
 
-		/* --- APPLY_WIFI (2-й шаг мастера) --- */
+		/* --- APPLY_WIFI --- */
 		apply_wifi: {
 			args: {
 				ssid: "String",
 				key:  "String"
 			},
-			call: function(req, p) {
+			call: function(request) {
 				try {
+					let p = request.args || {};
 					let u = cursor();
 					u.load("wireless");
 
-					let ssid = (p && p.ssid) ? p.ssid : "";
-					let key  = (p && p.key)  ? p.key  : "";
+					let ssid = p.ssid || "";
+					let key  = p.key  || "";
 
 					if (!ssid || ssid == "")
 						ssid = "Shpun-Router";
 
-					let iface = null;
-
-					/* включаем iface'ы и ищем первый AP */
-					u.foreach("wireless", "wifi-iface", function(s) {
-						if (!iface && s.mode == "ap")
-							iface = s[".name"];
-
-						if (s.disabled == "1" || s.disabled == 1)
-							u.set("wireless", s[".name"], "disabled", "0");
-					});
-
-					/* включаем radio-устройства */
-					u.foreach("wireless", "wifi-device", function(s) {
-						if (s.disabled == "1" || s.disabled == 1)
-							u.set("wireless", s[".name"], "disabled", "0");
-					});
-
-					if (!iface) {
-						u.unload();
-						return { ok: 0, error: "no_ap_iface" };
+					/* 5 GHz: default_radio0, если есть и это AP */
+					let mode0 = u.get("wireless", "default_radio0", "mode");
+					if (mode0 == "ap") {
+						u.set("wireless", "default_radio0", "ssid", ssid);
+						if (key && key != "") {
+							u.set("wireless", "default_radio0", "encryption", "psk2");
+							u.set("wireless", "default_radio0", "key", key);
+						}
+						else {
+							u.set("wireless", "default_radio0", "encryption", "none");
+							u.delete("wireless", "default_radio0", "key");
+						}
 					}
 
-					/* SSID + ключ / открытая сеть */
-					u.set("wireless", iface, "ssid", ssid);
+					/* 2.4 GHz: default_radio1, если есть и это AP */
+					let mode1 = u.get("wireless", "default_radio1", "mode");
+					if (mode1 == "ap") {
+						u.set("wireless", "default_radio1", "ssid", ssid);
+						if (key && key != "") {
+							u.set("wireless", "default_radio1", "encryption", "psk2");
+							u.set("wireless", "default_radio1", "key", key);
+						}
+						else {
+							u.set("wireless", "default_radio1", "encryption", "none");
+							u.delete("wireless", "default_radio1", "key");
+						}
+					}
 
-					if (key && key != "") {
-						u.set("wireless", iface, "encryption", "psk2");
-						u.set("wireless", iface, "key", key);
-					}
-					else {
-						u.set("wireless", iface, "encryption", "none");
-						u.delete("wireless", iface, "key");
-					}
+					/* включим оба radio на всякий случай */
+					let r0 = u.get("wireless", "radio0", "disabled");
+					if (r0 == "1" || r0 == 1)
+						u.set("wireless", "radio0", "disabled", "0");
+
+					let r1 = u.get("wireless", "radio1", "disabled");
+					if (r1 == "1" || r1 == 1)
+						u.set("wireless", "radio1", "disabled", "0");
 
 					u.commit("wireless");
 					u.unload();
