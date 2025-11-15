@@ -36,12 +36,13 @@ return {
 		/* --- STATE (3-й шаг VPN / код роутера) --- */
 		state: {
 			call: function(req, msg) {
-				let code_raw = readfile(CODE);
-				let sub_raw  = readfile(SUB);
+				let code_raw = readfile(CODE) || "";
+				let sub_raw  = readfile(SUB)  || "";
 				let ready    = readfile(READY);
 
-				let code = code_raw ? code_raw : "";
-				let sub  = sub_raw  ? sub_raw  : "";
+				/* обрезаем \r, \n и пробелы в конце */
+				let code = code_raw.replace(/[\r\n\s]+$/, "");
+				let sub  = sub_raw.replace(/[\r\n\s]+$/, "");
 
 				return {
 					code: code,
