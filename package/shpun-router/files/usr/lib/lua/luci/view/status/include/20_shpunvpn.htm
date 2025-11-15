@@ -1,53 +1,27 @@
 <%
 local fs = require "nixio.fs"
 
-local STATE_DIR  = "/etc/shpun"
-local CODE_FILE  = STATE_DIR .. "/router_code"
-local SUB_FILE   = STATE_DIR .. "/subscription_url"
-local READY_FILE = STATE_DIR .. "/vpn_ready"
-
-local code  = fs.readfile(CODE_FILE) or ""
-local sub   = fs.readfile(SUB_FILE) or ""
-local ready = fs.readfile(READY_FILE) or ""
-
-code  = code:gsub("%s+$", "")
-sub   = sub:gsub("%s+$", "")
-ready = ready:gsub("%s+$", "")
+local state_dir = "/etc/shpun"
+local code  = fs.readfile(state_dir .. "/router_code") or ""
+local sub   = fs.readfile(state_dir .. "/subscription_url") or ""
+local ready = fs.readfile(state_dir .. "/vpn_ready") or ""
 %>
 
-<fieldset class="cbi-section">
-  <legend>Shpun VPN</legend>
-
-  <div class="cbi-value">
-    <label class="cbi-value-title">Код роутера</label>
-    <div class="cbi-value-field">
-      <% if code ~= "" then %>
-        <strong><%=code%></strong>
-      <% else %>
-        <em>ещё не сгенерирован</em>
-      <% end %>
-    </div>
-  </div>
-
-  <div class="cbi-value">
-    <label class="cbi-value-title">Подписка</label>
-    <div class="cbi-value-field">
-      <% if sub ~= "" then %>
-        <span style="color:#0a0;">привязана</span>
-      <% else %>
-        <span style="color:#a00;">не привязана</span>
-      <% end %>
-    </div>
-  </div>
-
-  <div class="cbi-value">
-    <label class="cbi-value-title">Состояние VPN</label>
-    <div class="cbi-value-field">
-      <% if ready ~= "" then %>
-        <span style="color:#0a0;">работает</span>
-      <% else %>
-        <span style="color:#a00;">неактивен</span>
-      <% end %>
-    </div>
-  </div>
-</fieldset>
+<div class="cbi-section">
+  <h3>Shpun VPN</h3>
+  <p><strong>Код роутера:</strong> <%=code%></p>
+  <p><strong>Подписка:</strong>
+    <% if sub ~= "" then %>
+      настроена
+    <% else %>
+      ещё не получена
+    <% end %>
+  </p>
+  <p><strong>Статус VPN:</strong>
+    <% if ready ~= "" then %>
+      VPN готов (vpn_ready)
+    <% else %>
+      ожидаем привязку / запуск VPN
+    <% end %>
+  </p>
+</div>

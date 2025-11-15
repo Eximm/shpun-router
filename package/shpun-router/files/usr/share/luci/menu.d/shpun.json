@@ -1,7 +1,7 @@
 {
-  "admin/network/shpun": {
-    "title": "Shpun VPN",
-    "order": 90,
+  "admin/network/shpun/wizard": {
+    "title": "Shpun Router",
+    "order": 50,
     "action": {
       "type": "view",
       "path": "shpun/wizard"

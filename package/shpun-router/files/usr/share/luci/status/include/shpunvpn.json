@@ -1,5 +1,10 @@
 {
-  "title": "Shpun VPN",
-  "order": 60,
-  "file": "status/include/20_shpunvpn.htm"
+  "status/include/shpunvpn": {
+    "title": "Shpun VPN",
+    "order": 20,
+    "action": {
+      "type": "template",
+      "path": "status/include/20_shpunvpn"
+    }
+  }
 }

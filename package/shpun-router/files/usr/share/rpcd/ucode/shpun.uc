@@ -2,6 +2,14 @@
 
 'use strict';
 
+/*
+ * Backend для Shpun Router:
+ *  - state: читает файлы состояния в /etc/shpun
+ *  - apply_wan: настраивает WAN через UCI
+ *  - apply_wifi: включает Wi-Fi и задаёт SSID/ключ
+ */
+
+import { open } from 'fs';
 import { cursor } from 'uci';
 
 const STATE_DIR  = "/etc/shpun";
@@ -9,83 +17,71 @@ const CODE_FILE  = STATE_DIR + "/router_code";
 const SUB_FILE   = STATE_DIR + "/subscription_url";
 const READY_FILE = STATE_DIR + "/vpn_ready";
 
-/* ===== helpers ===== */
+/* --- helpers --- */
 
 function readfile(path) {
-	const f = open(path, 'r');
-
+	const f = open(path, "r");
 	if (!f)
 		return null;
 
-	const data = f.read('all');
+	let data = f.read("all");
 	f.close();
 
-	return trim(data);
+	if (!data)
+		return "";
+
+	/* убираем \n/\r/пробелы по краям */
+	return ucode.trim(data);
 }
 
-/* ===== ubus methods ===== */
+/* --- ubus methods --- */
 
 const methods = {
-	/* === shpun.state ===
-	 * Возвращает состояние визарда / агента:
-	 *  - code            : строка кода роутера (или пусто)
-	 *  - has_sub         : true, если есть subscription_url
-	 *  - subscription_url: сама ссылка (можно не использовать на фронте)
-	 *  - vpn_ready       : true, если агент пометил vpn_ready
-	 */
+	/* ===== shpun.state ===== */
 	state: {
-		call: function(params) {
-			let code = readfile(CODE_FILE);
+		call: function() {
+			const code_raw  = readfile(CODE_FILE);
+			const sub_raw   = readfile(SUB_FILE);
+			const ready_raw = readfile(READY_FILE);
 
-			/* генерим код, если его ещё нет */
-			if (!code || !length(trim(code))) {
-				const p = popen("/etc/shpun/gen_code.sh", "r");
-				if (p) {
-					const out = p.read('all');
-					p.close();
-					if (out)
-						code = trim(out);
-				}
-			}
+			const code = code_raw ? code_raw : "";
+			const sub  = sub_raw  ? sub_raw  : "";
 
-			if (!code || !length(trim(code)))
-				code = "";
-
-			const sub   = readfile(SUB_FILE);
-			const ready = readfile(READY_FILE);
+			const has_sub = (sub != "");
+			const vpn_ok  = (ready_raw != null);
 
 			return {
 				code: code,
-				has_sub: sub != null && length(trim(sub)) > 0,
-				subscription_url: sub ?? "",
-				vpn_ready: ready != null && length(trim(ready)) > 0
+				has_sub: has_sub,
+				subscription_url: sub,
+				vpn_ready: vpn_ok
 			};
 		}
 	},
 
-	/* === shpun.apply_wan ===
-	 * Параметры (ожидаются из wizard.js):
-	 *  - proto    : "dhcp" | "pppoe" | "static" | "l2tp"
-	 *  - username : логин (pppoe/l2tp)
-	 *  - password : пароль (pppoe/l2tp)
-	 *  - ipaddr   : IP для static
-	 *  - netmask  : маска для static
-	 *  - gateway  : шлюз для static
-	 *  - dns      : строка DNS (может быть пустой)
-	 *  - server   : адрес сервера (l2tp)
-	 */
+	/* ===== shpun.apply_wan ===== */
 	apply_wan: {
-		call: function(params) {
-			const u = cursor();
+		args: {
+			proto:    "",
+			username: "",
+			password: "",
+			ipaddr:   "",
+			netmask:  "",
+			gateway:  "",
+			dns:      "",
+			server:   ""
+		},
+		call: function(args, req) {
+			let u = cursor();
 
-			const proto    = params.proto    ?? "dhcp";
-			const username = params.username ?? "";
-			const password = params.password ?? "";
-			const ipaddr   = params.ipaddr   ?? "";
-			const netmask  = params.netmask  ?? "";
-			const gateway  = params.gateway  ?? "";
-			const dns      = params.dns      ?? "";
-			const server   = params.server   ?? "";
+			let proto    = args.proto    || "dhcp";
+			let username = args.username || "";
+			let password = args.password || "";
+			let ipaddr   = args.ipaddr   || "";
+			let netmask  = args.netmask  || "";
+			let gateway  = args.gateway  || "";
+			let dns      = args.dns      || "";
+			let server   = args.server   || "";
 
 			let opts = { proto: proto };
 
@@ -98,17 +94,15 @@ const methods = {
 				opts.netmask = netmask;
 				opts.gateway = gateway;
 
-				if (dns && length(trim(dns)))
+				if (dns && dns != "")
 					opts.dns = dns;
 			}
 			else if (proto == "l2tp") {
-				/* стандартный l2tp-клиент OpenWrt */
 				opts.server   = server;
 				opts.username = username;
 				opts.password = password;
 			}
 			else {
-				/* всё остальное трактуем как dhcp */
 				opts.proto = "dhcp";
 			}
 
@@ -116,65 +110,69 @@ const methods = {
 			u.commit("network");
 			u.unload();
 
-			/* рестартуем сеть в фоне */
-			const p = popen("/etc/init.d/network restart >/dev/null 2>&1 &", "r");
-			if (p)
-				p.close();
+			let p = popen("/etc/init.d/network restart >/dev/null 2>&1 &", "r");
+			if (p) p.close();
 
 			return { ok: 1 };
 		}
 	},
 
-	/* === shpun.apply_wifi ===
-	 * Параметры:
-	 *  - ssid : имя сети
-	 *  - key  : пароль (если пусто, делаем открытой)
-	 */
+	/* ===== shpun.apply_wifi ===== */
 	apply_wifi: {
-		call: function(params) {
-			const u = cursor();
+		args: {
+			ssid: "",
+			key:  ""
+		},
+		call: function(args, req) {
+			let u    = cursor();
+			let ssid = args.ssid || "";
+			let key  = args.key  || "";
 
-			const ssid = params.ssid ?? "";
-			const key  = params.key  ?? "";
+			if (!ssid || ssid == "")
+				return { ok: 0, error: "empty_ssid" };
 
 			let iface_name = null;
 
-			/* ищем первое iface с mode="ap" */
+			/* включаем wifi-iface и запоминаем первый AP */
 			u.foreach("wireless", "wifi-iface", function(s) {
-				if (s.mode == "ap" && !iface_name)
+				if (!iface_name && s.mode == "ap")
 					iface_name = s[".name"];
+
+				if (s.disabled == "1" || s.disabled == 1)
+					u.set("wireless", s[".name"], { disabled: "0" });
 			});
 
-			if (!iface_name)
+			/* включаем wifi-device'ы */
+			u.foreach("wireless", "wifi-device", function(s) {
+				if (s.disabled == "1" || s.disabled == 1)
+					u.set("wireless", s[".name"], { disabled: "0" });
+			});
+
+			if (!iface_name) {
+				u.unload();
 				return { ok: 0, error: "no_ap_iface" };
+			}
 
-			let opts = {};
+			let opts = { ssid: ssid };
 
-			if (ssid && length(trim(ssid)))
-				opts.ssid = ssid;
-
-			if (key && length(trim(key))) {
+			if (key && key != "") {
 				opts.encryption = "psk2";
-				opts.key = key;
+				opts.key        = key;
 			}
 			else {
-				/* открытая сеть */
 				opts.encryption = "none";
-				u.delete("wireless", iface_name, "key");
 			}
 
 			u.set("wireless", iface_name, opts);
 			u.commit("wireless");
 			u.unload();
 
-			const p = popen("/etc/init.d/network reload >/dev/null 2>&1 &", "r");
-			if (p)
-				p.close();
+			let p = popen("/sbin/wifi up >/dev/null 2>&1 || /etc/init.d/network reload >/dev/null 2>&1 &", "r");
+			if (p) p.close();
 
 			return { ok: 1 };
 		}
 	}
 };
 
-/* регистрируем ubus-объект "shpun" */
 return { "shpun": methods };

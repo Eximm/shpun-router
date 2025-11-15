@@ -1,9 +1,11 @@
 #!/bin/sh
-# shpun-agent — получает subscription_url и управляет VPN-движком (sing-box / любой другой)
-
-# shellcheck shell=sh
-
-set -eu
+#
+# shpun-agent (упрощённый)
+#   - получает / генерирует код роутера;
+#   - опрашивает router_public по этому коду;
+#   - при ok=1 + subscription_url пишет файлы
+#     /etc/shpun/subscription_url и /etc/shpun/vpn_ready.
+# shellcheck disable=SC2034,SC1090,SC1091
 
 STATE_DIR="/etc/shpun"
 CODE_FILE="$STATE_DIR/router_code"
@@ -11,292 +13,133 @@ SUB_FILE="$STATE_DIR/subscription_url"
 VPN_READY_FILE="$STATE_DIR/vpn_ready"
 CONF="$STATE_DIR/agent.conf"
 
-# Публичный API в биллинге
-API_URL="https://bill.shpyn.online/shm/v1/public/router_public"
+LOG_TAG="shpun-agent"
 
-# интервалы опроса/проверки
-POLL_BASE=30              # базовый интервал ожидания, пока нет SUB
-POLL_MAX=$((10*60))       # максимум для бэкоффа
-POLL_JIT=15               # джиттер в процентах
-
-OK_INTERVAL=$((6*60*60))  # пере-проверка живости SUB
-OK_JIT_MIN=$((10*60))
-OK_JIT_MAX=$((30*60))
-
-FAIL_INTERVAL=60          # задержка после невалидной подписки
-LOCK="/var/run/shpun-agent.lock"
+API_URL_DEFAULT="https://bill.shpyn.online/shm/v1/public/router_public"
 
 log() {
-    logger -t shpun-agent "$*"
-    [ -n "${AGENT_LOG:-}" ] && echo "$(date '+%F %T') $*" >>"$AGENT_LOG"
+	logger -t "$LOG_TAG" "$*"
 }
-
-cleanup() { rm -f "$LOCK"; exit 0; }
-trap cleanup INT TERM
-
-lock() {
-    if [ -e "$LOCK" ]; then
-        old="$(cat "$LOCK" 2>/dev/null || echo 0)"
-        kill -0 "$old" 2>/dev/null && exit 0
-    fi
-    echo $$ >"$LOCK"
-}
-
-need() {
-    command -v "$1" >/dev/null 2>&1 || { log "missing $1"; exit 1; }
-}
-
-# таймауты подтягиваются из конфига
-http_get() {
-    t="${DOWNLOAD_READ_TIMEOUT:-20}"
-    uclient-fetch -qO- -T "$t" "$1"
-}
-
-http_fetch() {
-    t="${DOWNLOAD_READ_TIMEOUT:-30}"
-    uclient-fetch -qO "$2" -T "$t" "$1"
-}
-
-http_ok() {
-    t="${DOWNLOAD_CONNECT_TIMEOUT:-15}"
-    uclient-fetch -qO /dev/null -T "$t" "$1" >/dev/null 2>&1
-}
-
-# --- генерация случайных чисел без od/hexdump/cksum ---
-randu() {
-    tr -dc '0-9' </dev/urandom 2>/dev/null | head -c 9
-}
-
-randr() {
-    min="$1"
-    max="$2"
-    span=$((max - min + 1))
-    n="$(randu)"
-    [ -z "$n" ] && n=0
-    echo $(( min + (n % span) ))
-}
-
-json_ok()  { echo "$1" | sed -n 's/.*"ok":[ ]*\([0-9]\+\).*/\1/p'; }
-json_sub() { echo "$1" | sed -n 's/.*"subscription_url":"\([^"]*\)".*/\1/p'; }
-
-# ---------- ENGINE-зависимая часть ----------
 
 load_conf() {
-    [ -f "$CONF" ] || { log "config $CONF not found"; exit 1; }
-    # shellcheck disable=SC1090
-    . "$CONF"
-
-    : "${ENGINE_NAME:=engine}"
-    : "${ENGINE_BIN:=/usr/bin/sing-box}"
-    : "${ENGINE_CONFIG:=/etc/shpun/sing-box.json}"
-    : "${ENGINE_URL:=}"
-    : "${ENGINE_SHA256:=}"
-    : "${DOWNLOAD_CONNECT_TIMEOUT:=10}"
-    : "${DOWNLOAD_READ_TIMEOUT:=60}"
-    : "${ENGINE_SERVICE_INIT:=}"
+	[ -f "$CONF" ] && . "$CONF"
+	[ -z "$API_URL" ] && API_URL="$API_URL_DEFAULT"
 }
 
-engine_download() {
-    [ -n "$ENGINE_URL" ] || { log "ENGINE_URL not set"; return 1; }
-
-    tmp="${ENGINE_BIN}.tmp.$$"
-    log "downloading $ENGINE_NAME from $ENGINE_URL"
-    http_fetch "$ENGINE_URL" "$tmp" || { log "download failed"; rm -f "$tmp"; return 1; }
-
-    if [ -n "$ENGINE_SHA256" ] && [ "$ENGINE_SHA256" != "PUT_REAL_SHA256_HERE" ]; then
-        echo "$ENGINE_SHA256  $tmp" | sha256sum -c - >/dev/null 2>&1 || {
-            log "sha256 mismatch for $ENGINE_NAME"
-            rm -f "$tmp"
-            return 1
-        }
-    else
-        log "WARNING: ENGINE_SHA256 not set or placeholder, skipping hash check"
-    fi
-
-    mkdir -p "$(dirname "$ENGINE_BIN")"
-    mv "$tmp" "$ENGINE_BIN"
-    chmod +x "$ENGINE_BIN"
-    log "$ENGINE_NAME installed to $ENGINE_BIN"
-    return 0
+ensure_state_dir() {
+	mkdir -p "$STATE_DIR" 2>/dev/null || {
+		log "failed to create $STATE_DIR"
+		exit 1
+	}
 }
 
-engine_check() {
-    if [ ! -x "$ENGINE_BIN" ]; then
-        log "engine binary missing: $ENGINE_BIN"
-        engine_download || return 1
-    fi
-
-    if [ -n "$ENGINE_SHA256" ] && [ "$ENGINE_SHA256" != "PUT_REAL_SHA256_HERE" ]; then
-        cur="$(sha256sum "$ENGINE_BIN" | awk '{print $1}')"
-        if [ "$cur" != "$ENGINE_SHA256" ]; then
-            log "engine sha256 mismatch (have $cur, want $ENGINE_SHA256), re-downloading"
-            engine_download || return 1
-        fi
-    fi
-
-    return 0
-}
-
-dl_conf() {
-    url="$1"
-    tmp="$ENGINE_CONFIG.tmp"
-
-    http_fetch "$url" "$tmp" || { rm -f "$tmp"; return 1; }
-    [ -s "$tmp" ] || { rm -f "$tmp"; return 1; }
-
-    mkdir -p "$(dirname "$ENGINE_CONFIG")"
-
-    if [ -f "$ENGINE_CONFIG" ] && cmp -s "$tmp" "$ENGINE_CONFIG"; then
-        rm -f "$tmp"
-        return 0    # без изменений
-    fi
-
-    mv "$tmp" "$ENGINE_CONFIG"
-    return 2        # конфиг обновился
-}
-
-svc_status() {
-    if [ -n "$ENGINE_SERVICE_INIT" ] && [ -x "$ENGINE_SERVICE_INIT" ]; then
-        "$ENGINE_SERVICE_INIT" status 2>/dev/null | grep -qi running && return 0
-    fi
-    return 1
-}
-
-svc_restart() {
-    if [ -n "$ENGINE_SERVICE_INIT" ] && [ -x "$ENGINE_SERVICE_INIT" ]; then
-        "$ENGINE_SERVICE_INIT" enable >/dev/null 2>&1 || true
-        "$ENGINE_SERVICE_INIT" restart >/dev/null 2>&1 || true
-        return 0
-    fi
-    log "ENGINE_SERVICE_INIT not set, cannot restart $ENGINE_NAME automatically"
-    return 1
-}
-
-wait_running() {
-    i=0
-    while [ $i -lt 15 ]; do
-        svc_status && return 0
-        sleep 1
-        i=$((i+1))
-    done
-    return 1
-}
-
-mark_ready() {
-    if wait_running; then
-        echo 1 >"$VPN_READY_FILE"
-        log "vpn_ready=1"
-    else
-        rm -f "$VPN_READY_FILE"
-        log "vpn still not running"
-    fi
-}
-
-# ---------- общая логика агента ----------
-
-ensure() {
-    need uclient-fetch
-    need sed
-    need awk
-    need sha256sum
-
-    mkdir -p "$STATE_DIR"
-
-    load_conf
-    engine_check || log "engine check failed (will still handle subscription)"
-}
-
-# Код генерирует wizard/gen_code.sh, агент только читает готовый файл.
 get_code() {
-    if [ ! -s "$CODE_FILE" ]; then
-        log "router_code not set, waiting for setup..."
-        return 1
-    fi
-    cat "$CODE_FILE"
+	# если файл уже есть — читаем
+	if [ -s "$CODE_FILE" ]; then
+		CODE="$(cat "$CODE_FILE" 2>/dev/null || true)"
+	else
+		# иначе пробуем сгенерировать
+		if [ -x /etc/shpun/gen_code.sh ]; then
+			CODE="$(/etc/shpun/gen_code.sh 2>/dev/null | head -n1 || true)"
+		fi
+		[ -n "$CODE" ] && echo "$CODE" >"$CODE_FILE"
+	fi
+
+	# убираем переводы строк
+	CODE="$(printf '%s' "$CODE" | tr -d '\r\n')"
+
+	if [ -z "$CODE" ]; then
+		log "router code is empty"
+		return 1
+	fi
+
+	# clean_code: только A-Z0-9, без дефиса
+	CLEAN_CODE="$(printf '%s' "$CODE" | tr -dc 'A-Z0-9')"
+
+	if [ -z "$CLEAN_CODE" ]; then
+		log "clean code is empty after filtering: $CODE"
+		return 1
+	fi
+
+	return 0
+}
+
+fetch_subscription_once() {
+	[ -z "$CLEAN_CODE" ] && return 1
+	[ -z "$API_URL" ] && return 1
+
+	URL="${API_URL}?code=${CLEAN_CODE}&format=json"
+
+	log "query router_public: $URL"
+	BODY="$(uclient-fetch -qO- "$URL" 2>/dev/null || true)"
+
+	if [ -z "$BODY" ]; then
+		log "empty response from router_public"
+		return 1
+	fi
+
+	OK="$(printf '%s' "$BODY" | jsonfilter -e '@.ok' 2>/dev/null || echo "")"
+
+	if [ "$OK" != "1" ]; then
+		ERR="$(printf '%s' "$BODY" | jsonfilter -e '@.error' 2>/dev/null || echo "")"
+		[ -z "$ERR" ] && ERR="unknown_error"
+		log "router_public error: ok=$OK, error=$ERR"
+		return 1
+	fi
+
+	SUB="$(printf '%s' "$BODY" | jsonfilter -e '@.subscription_url' 2>/dev/null || echo "")"
+
+	if [ -z "$SUB" ]; then
+		log "router_public ok=1 but subscription_url is empty"
+		return 1
+	fi
+
+	printf '%s\n' "$SUB" >"$SUB_FILE"
+	log "subscription_url saved to $SUB_FILE"
+
+	# позже сюда можно добавить скачивание конфига/движка
+	touch "$VPN_READY_FILE"
+	log "vpn_ready marked in $VPN_READY_FILE"
+
+	return 0
+}
+
+poll_subscription_loop() {
+	# если уже всё есть — выходим
+	if [ -s "$SUB_FILE" ] && [ -s "$VPN_READY_FILE" ]; then
+		log "subscription already present and vpn_ready set, exiting"
+		return 0
+	fi
+
+	while :; do
+		get_code || {
+			log "failed to get code, retry in 15s"
+			sleep 15
+			continue
+		}
+
+		log "router code: $CODE (clean: $CLEAN_CODE)"
+
+		fetch_subscription_once && {
+			# успех
+			return 0
+		}
+
+		log "no subscription yet, retry in 20s"
+		sleep 20
+	done
 }
 
 main_loop() {
-    backoff=$POLL_BASE
+	load_conf
+	ensure_state_dir
 
-    while :; do
-        # 1) если нет subscription_url — пытаемся его получить по коду
-        if [ ! -s "$SUB_FILE" ]; then
-            CODE="$(get_code || true)"
-            [ -z "$CODE" ] && { sleep "$POLL_BASE"; continue; }
+	log "shpun-agent started (simple mode, API_URL=$API_URL)"
 
-            JSON="$(http_get "$API_URL?code=$CODE&format=json" || true)"
-            [ "$(json_ok "$JSON")" = "1" ] && SUB="$(json_sub "$JSON" || true)" || SUB=""
+	poll_subscription_loop
 
-            if [ -n "$SUB" ]; then
-                echo "$SUB" >"$SUB_FILE"
-                log "got subscription_url"
-
-                changed=0
-                if dl_conf "$SUB"; then
-                    :
-                else
-                    rc=$?
-                    [ "$rc" -eq 2 ] && changed=1
-                fi
-
-                if [ "$changed" -eq 1 ]; then
-                    engine_check || true
-                    svc_restart || true
-                    mark_ready
-                else
-                    mark_ready
-                fi
-                backoff=$POLL_BASE
-            fi
-
-            if [ ! -s "$SUB_FILE" ]; then
-                max=$((backoff + backoff * POLL_JIT / 100))
-                sleep "$(randr "$backoff" "$max")"
-                backoff=$(( backoff + backoff/2 ))
-                [ "$backoff" -gt "$POLL_MAX" ] && backoff="$POLL_MAX"
-                continue
-            fi
-        fi
-
-        # 2) subscription_url есть — проверяем, что он жив
-        SUB_URL="$(cat "$SUB_FILE" 2>/dev/null || true)"
-        [ -z "$SUB_URL" ] && { rm -f "$SUB_FILE"; sleep "$POLL_BASE"; continue; }
-
-        if http_ok "$SUB_URL"; then
-            # если конфиг ещё не скачан — пробуем скачать
-            if [ ! -s "$ENGINE_CONFIG" ]; then
-                changed=0
-                if dl_conf "$SUB_URL"; then
-                    :
-                else
-                    rc=$?
-                    [ "$rc" -eq 2 ] && changed=1
-                fi
-
-                [ "$changed" -eq 1 ] && { engine_check || true; svc_restart || true; }
-            fi
-
-            mark_ready
-
-            off="$(randr "$OK_JIT_MIN" "$OK_JIT_MAX")"
-            [ "$(randr 0 1)" -eq 0 ] && off=$((-off))
-            t=$(( OK_INTERVAL + off ))
-            [ "$t" -lt 60 ] && t=60
-            sleep "$t"
-        else
-            log "subscription invalid -> reset"
-            rm -f "$VPN_READY_FILE" "$SUB_FILE"
-            if [ -n "$ENGINE_SERVICE_INIT" ] && [ -x "$ENGINE_SERVICE_INIT" ]; then
-                "$ENGINE_SERVICE_INIT" stop >/dev/null 2>&1 || true
-            fi
-            sleep "$FAIL_INTERVAL"
-        fi
-    done
+	# можно добавить периодическую проверку подписки, пока просто ждём и выходим
+	sleep 600
 }
 
-# ---------- entrypoint ----------
-
-lock
-ensure
-log "shpun-agent started (ENGINE_NAME=${ENGINE_NAME:-unknown})"
-main_loop
+main_loop "$@"

@@ -4,14 +4,12 @@
     "read": {
       "ubus": {
         "shpun": [ "state", "apply_wan", "apply_wifi" ]
-      },
-      "uci": [ "network", "wireless" ]
+      }
     },
     "write": {
       "ubus": {
         "shpun": [ "state", "apply_wan", "apply_wifi" ]
-      },
-      "uci": [ "network", "wireless" ]
+      }
     }
   }
 }
