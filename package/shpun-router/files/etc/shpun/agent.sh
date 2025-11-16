@@ -98,12 +98,16 @@ engine_download() {
 
 	if [ -n "$ENGINE_SHA256" ]; then
 		sum="$(sha256sum "$ENGINE_BIN" 2>/dev/null | awk '{print $1}')"
-		if [ "$sum" != "$ENGINE_SHA256" ]; then
+		sum_lc="$(printf '%s' "$sum" | tr 'A-Z' 'a-z')"
+		ref_lc="$(printf '%s' "$ENGINE_SHA256" | tr 'A-Z' 'a-z')"
+
+		if [ "$sum_lc" != "$ref_lc" ]; then
 			log "engine sha256 mismatch: got=$sum expected=$ENGINE_SHA256, removing"
 			rm -f "$ENGINE_BIN"
 			return 1
 		fi
 	fi
+
 
 	log "engine downloaded and ready: $ENGINE_BIN"
 	return 0
