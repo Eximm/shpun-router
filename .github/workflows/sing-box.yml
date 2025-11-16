@@ -59,10 +59,8 @@ jobs:
       - name: Configure feeds and install sing-box
         working-directory: sdk
         run: |
-          # Фид packages уже есть в SDK, просто обновляем и ставим пакет
           ./scripts/feeds update packages
           ./scripts/feeds install sing-box
-
 
       - name: Build sing-box package
         working-directory: sdk
@@ -76,11 +74,14 @@ jobs:
           find bin -name "sing-box_*_mips_24kc.ipk" -print
 
       - name: Extract sing-box binary from ipk
+        working-directory: sdk
         run: |
-          mkdir -p output ipk-tmp
+          set -e
+
+          mkdir -p "$GITHUB_WORKSPACE/output" "$GITHUB_WORKSPACE/ipk-tmp"
 
           # Находим первый подходящий ipk
-          SING_IPK=$(find sdk/bin -name "sing-box_*_mips_24kc.ipk" | head -n1)
+          SING_IPK=$(find bin -name "sing-box_*_mips_24kc.ipk" | head -n1)
           echo "Using ipk: $SING_IPK"
 
           if [ -z "$SING_IPK" ]; then
@@ -88,23 +89,38 @@ jobs:
             exit 1
           fi
 
-          cd ipk-tmp
+          cd "$GITHUB_WORKSPACE/ipk-tmp"
 
-          # Пытаемся распаковать как tar-архив (новый формат ipk)
-          tar -xf "$GITHUB_WORKSPACE/$SING_IPK" || true
+          # .ipk — это ar-архив (как .deb)
+          ar x "$GITHUB_WORKSPACE/$SING_IPK"
 
-          # Если внутри появился data.tar.gz — значит это старый формат (tar внутри tar)
-          if [ -f data.tar.gz ]; then
-            tar -xf data.tar.gz
-          fi
+          # Ищем data.tar.*
+          DATA_TAR=$(ls data.tar.*)
+          echo "DATA_TAR = $DATA_TAR"
 
-          # Теперь бинарь должен лежать тут:
+          case "$DATA_TAR" in
+            *.gz)
+              tar -zxf "$DATA_TAR"
+              ;;
+            *.xz)
+              tar -Jxf "$DATA_TAR"
+              ;;
+            *.zst)
+              tar -I zstd -xf "$DATA_TAR"
+              ;;
+            *)
+              echo "Unknown data.tar.* compression: $DATA_TAR" >&2
+              exit 1
+              ;;
+          esac
+
+          # Копируем бинарник sing-box
           cp usr/bin/sing-box "$GITHUB_WORKSPACE/output/sing-box"
           chmod +x "$GITHUB_WORKSPACE/output/sing-box"
 
           cd "$GITHUB_WORKSPACE"
-          ls -la output
-
+          ls -lh output
+          file output/sing-box
 
       - name: Upload sing-box binary artifact
         uses: actions/upload-artifact@v4
