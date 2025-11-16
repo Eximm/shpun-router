@@ -77,7 +77,7 @@ jobs:
 
       - name: Extract sing-box binary from ipk
         run: |
-          mkdir -p output
+          mkdir -p output ipk-tmp
 
           # Находим первый подходящий ipk
           SING_IPK=$(find sdk/bin -name "sing-box_*_mips_24kc.ipk" | head -n1)
@@ -88,18 +88,23 @@ jobs:
             exit 1
           fi
 
-          # Распаковываем ipk: ar + tar
-          mkdir -p ipk-tmp
           cd ipk-tmp
-          ar x "$GITHUB_WORKSPACE/$SING_IPK"
-          tar -xf data.tar.gz
 
-          # Копируем бинарь
+          # Пытаемся распаковать как tar-архив (новый формат ipk)
+          tar -xf "$GITHUB_WORKSPACE/$SING_IPK" || true
+
+          # Если внутри появился data.tar.gz — значит это старый формат (tar внутри tar)
+          if [ -f data.tar.gz ]; then
+            tar -xf data.tar.gz
+          fi
+
+          # Теперь бинарь должен лежать тут:
           cp usr/bin/sing-box "$GITHUB_WORKSPACE/output/sing-box"
           chmod +x "$GITHUB_WORKSPACE/output/sing-box"
-          cd "$GITHUB_WORKSPACE"
 
+          cd "$GITHUB_WORKSPACE"
           ls -la output
+
 
       - name: Upload sing-box binary artifact
         uses: actions/upload-artifact@v4
