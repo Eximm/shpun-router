@@ -1,6 +1,8 @@
 #!/bin/sh
 
-# Register shpun ucode backend in rpcd
+# ==========================
+# 1. Register shpun ucode backend in rpcd
+# ==========================
 uci -q delete rpcd.shpun
 uci set rpcd.shpun=ucode
 uci set rpcd.shpun.script='/usr/share/rpcd/ucode/shpun.uc'
@@ -8,5 +10,39 @@ uci commit rpcd
 
 # Restart rpcd to apply
 /etc/init.d/rpcd restart 2>/dev/null || true
+
+
+# ==========================
+# 2. Configure dnsmasq to use sing-box DNS (127.0.0.1#5353)
+# ==========================
+# Используем первый dnsmasq-инстанс: dhcp.@dnsmasq[0]
+if uci -q get dhcp.@dnsmasq[0] >/dev/null 2>&1; then
+    # Не брать резолверы провайдера (/tmp/resolv.conf и т.п.)
+    uci set dhcp.@dnsmasq[0].noresolv='1'
+
+    # Чистим старые server-строки и прописываем sing-box как upstream
+    uci -q delete dhcp.@dnsmasq[0].server
+    uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5353'
+
+    uci commit dhcp
+
+    # Перезапускаем dnsmasq, чтобы он начал использовать sing-box
+    /etc/init.d/dnsmasq restart 2>/dev/null || true
+fi
+# В 99_shpun-router (ниже dnsmasq-блока)
+
+# Настроить интерфейс vpn -> tun0
+uci set network.vpn='interface'
+uci set network.vpn.proto='none'
+uci set network.vpn.ifname='tun0'
+uci commit network
+
+# Добавить vpn в зону wan
+uci add_list firewall.wan.network='vpn'
+uci commit firewall
+
+/etc/init.d/network restart 2>/dev/null || true
+/etc/init.d/firewall restart 2>/dev/null || true
+
 
 exit 0
