@@ -15,7 +15,7 @@ define Package/shpun-router
   CATEGORY:=Network
   SUBMENU:=VPN
   TITLE:=Shpun Router integration (ucode backend)
-  DEPENDS:=+luci-base +uclient-fetch +ucode +ucode-mod-fs +ucode-mod-uci +rpcd-mod-ucode
+  DEPENDS:=+luci-base +uclient-fetch +jsonfilter +ucode +ucode-mod-fs +ucode-mod-uci +rpcd-mod-ucode
 endef
 
 define Package/shpun-router/description
@@ -58,6 +58,8 @@ define Package/shpun-router/install
 		$(1)/etc/shpun/agent.sh
 	$(INSTALL_BIN) ./files/etc/shpun/gen_code.sh \
 		$(1)/etc/shpun/gen_code.sh
+	$(INSTALL_BIN) ./files/etc/shpun/build-config.sh \
+		$(1)/etc/shpun/build-config.sh
 	$(INSTALL_DATA) ./files/etc/shpun/agent.conf \
 		$(1)/etc/shpun/agent.conf
 

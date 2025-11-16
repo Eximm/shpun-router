@@ -1,22 +1,28 @@
 #!/bin/sh
 #
-# shpun-agent
+# shpun-agent (новая схема с проверкой подписки)
 #
 # Логика:
 #   1) Получаем / читаем router_code.
-#   2) Если subscription_url ещё нет:
+#   2) Если subscription.json ещё нет:
 #       - чистим код до A-Z0-9 (AAAA-AAAA -> AAAAAAAA)
-#       - долбим router_public?code=<CLEAN_CODE>&format=json, пока не получим ok=1+subscription_url
-#       - сохраняем subscription_url
-#   3) Если subscription_url уже есть:
-#       - докачиваем движок и конфиг, стартуем shpun-vpn
-#       - ставим vpn_ready
-#       - периодически (SUB_CHECK_INTERVAL) проверяем, что subscription_url ещё жива
-#         (если нет — сбрасываем SUB_FILE + VPN_READY_FILE и ждём новую привязку)
+#       - дергаем router_public?code=<CLEAN_CODE>&format=json
+#       - из ответа берём config_url (router_config) и скачиваем subscription.json
+#   3) Если subscription.json уже есть:
+#       - докачиваем движок (ENGINE_URL из agent.conf)
+#       - вызываем /etc/shpun/build-config.sh -> генерим sing-box.json
+#       - стартуем shpun-vpn, ставим vpn_ready
+#   4) Периодически (SUB_CHECK_INTERVAL) валидируем подписку:
+#       - читаем uid/usi из subscription.json
+#       - вызываем router_config?uid=<uid>&usi=<usi>&code=<CLEAN_CODE>
+#       - если ok=1 — подписка жива, обновляем subscription.json
+#       - если ok!=1 (pair_not_found, no_links_in_service и т.п.) — сбрасываем VPN:
+#           * удаляем subscription.json и vpn_ready
+#           * ждём новую привязку (шаг 2)
 
 STATE_DIR="/etc/shpun"
 CODE_FILE="$STATE_DIR/router_code"
-SUB_FILE="$STATE_DIR/subscription_url"
+SUB_FILE="$STATE_DIR/subscription.json"
 VPN_READY_FILE="$STATE_DIR/vpn_ready"
 LAST_CHECK_FILE="$STATE_DIR/last_sub_check"
 CONF="$STATE_DIR/agent.conf"
@@ -108,8 +114,9 @@ engine_download() {
 	# Проверка SHA256 (опциональная, регистр не важен)
 	if [ -n "$ENGINE_SHA256" ]; then
 		sum="$(sha256sum "$ENGINE_BIN" 2>/dev/null | awk '{print $1}')"
-		sum_lc="$(printf '%s' "$sum" | tr 'A-Z' 'a-z')"
-		ref_lc="$(printf '%s' "$ENGINE_SHA256" | tr 'A-Z' 'a-z')"
+		sum_lc="$(printf '%s' "$sum" | tr '[:upper:]' '[:lower:]')"
+		ref_lc="$(printf '%s' "$ENGINE_SHA256" | tr '[:upper:]' '[:lower:]')"
+
 
 		if [ "$sum_lc" != "$ref_lc" ]; then
 			log "engine sha256 mismatch: got=$sum expected=$ENGINE_SHA256, removing"
@@ -122,25 +129,6 @@ engine_download() {
 	return 0
 }
 
-config_download() {
-	sub="$1"
-
-	if [ -z "$sub" ]; then
-		log "config_download: empty subscription_url"
-		return 1
-	fi
-
-	log "downloading config to $ENGINE_CONFIG from $sub"
-	if ! uclient-fetch -qO "$ENGINE_CONFIG" "$sub" 2>/dev/null; then
-		log "failed to download config"
-		rm -f "$ENGINE_CONFIG"
-		return 1
-	fi
-
-	log "config saved to $ENGINE_CONFIG"
-	return 0
-}
-
 restart_vpn() {
 	if [ -x /etc/init.d/shpun-vpn ]; then
 		log "restarting shpun-vpn"
@@ -150,7 +138,7 @@ restart_vpn() {
 	fi
 }
 
-# --- режим ожидания временного ключа / первой подписки --- #
+# --- запрос router_public и скачивание subscription.json через router_config --- #
 fetch_subscription_once() {
 	if [ -z "$CLEAN_CODE" ] || [ -z "$API_URL" ]; then
 		return 1
@@ -175,32 +163,73 @@ fetch_subscription_once() {
 		return 1
 	fi
 
-	SUB="$(printf '%s' "$BODY" | jsonfilter -e '@.subscription_url' 2>/dev/null || echo "")"
+	CONFIG_PATH="$(printf '%s' "$BODY" | jsonfilter -e '@.config_url' 2>/dev/null || echo "")"
 
-	if [ -z "$SUB" ]; then
-		log "router_public ok=1 but subscription_url is empty"
+	if [ -z "$CONFIG_PATH" ]; then
+		log "router_public ok=1 but config_url is empty"
 		return 1
 	fi
 
-	printf '%s\n' "$SUB" >"$SUB_FILE"
-	log "subscription_url saved to $SUB_FILE"
+	# Собираем полный URL до router_config на том же хосте, что и API_URL
+	BASE_URL="${API_URL%/shm/v1/public/router_public}"
+	CONFIG_URL="${BASE_URL}${CONFIG_PATH}"
 
-	# сброс таймера проверки подписки
+	log "fetching subscription from $CONFIG_URL"
+
+	TMP_SUB="${SUB_FILE}.tmp"
+
+	if ! uclient-fetch -qO "$TMP_SUB" "${CONFIG_URL}&format=json" 2>/dev/null; then
+		log "failed to download subscription json"
+		rm -f "$TMP_SUB"
+		return 1
+	fi
+
+	mv "$TMP_SUB" "$SUB_FILE"
+	log "subscription json saved to $SUB_FILE"
+
 	date +%s >"$LAST_CHECK_FILE"
 
-	# дальше обработаем через ensure_vpn_from_subscription
 	return 0
 }
 
+# --- создание VPN по уже имеющемуся subscription.json --- #
+ensure_vpn_from_subscription() {
+	if [ ! -s "$SUB_FILE" ]; then
+		log "ensure_vpn_from_subscription: $SUB_FILE not found"
+		return 1
+	fi
+
+	if ! engine_download; then
+		log "engine_download failed in ensure_vpn_from_subscription"
+		return 1
+	fi
+
+	if [ ! -x /etc/shpun/build-config.sh ]; then
+		log "/etc/shpun/build-config.sh not found or not executable"
+		return 1
+	fi
+
+	log "building sing-box config from subscription.json"
+	if ! /etc/shpun/build-config.sh; then
+		log "build-config.sh failed"
+		return 1
+	fi
+
+	restart_vpn
+
+	touch "$VPN_READY_FILE"
+	log "vpn_ready marked in $VPN_READY_FILE"
+
+	return 0
+}
+
+# --- режим ожидания первой подписки --- #
 poll_subscription_loop() {
-	# если subscription_url уже есть — не трогаем router_public вообще
+	# если subscription.json уже есть — не трогаем router_public вообще
 	if [ -s "$SUB_FILE" ]; then
-		SUB="$(cat "$SUB_FILE" 2>/dev/null || echo "")"
-		if [ -n "$SUB" ]; then
-			log "subscription_url already present, skipping router_public"
-			ensure_vpn_from_subscription "$SUB"
-			return 0
-		fi
+		log "subscription.json already present, skipping router_public"
+		ensure_vpn_from_subscription
+		return 0
 	fi
 
 	while :; do
@@ -213,9 +242,8 @@ poll_subscription_loop() {
 		log "router code: $CODE (clean: $CLEAN_CODE)"
 
 		if fetch_subscription_once; then
-			# получили subscription_url, дальше создаём VPN на её основе
-			SUB="$(cat "$SUB_FILE" 2>/dev/null || echo "")"
-			ensure_vpn_from_subscription "$SUB"
+			# получили subscription.json, дальше создаём VPN на её основе
+			ensure_vpn_from_subscription
 			return 0
 		fi
 
@@ -224,40 +252,9 @@ poll_subscription_loop() {
 	done
 }
 
-# --- работа по уже известной subscription_url --- #
-ensure_vpn_from_subscription() {
-	sub="$1"
-
-	if [ -z "$sub" ]; then
-		log "ensure_vpn_from_subscription: empty subscription_url"
-		return 1
-	fi
-
-	log "ensuring VPN from subscription_url"
-
-	if ! engine_download; then
-		log "engine_download failed in ensure_vpn_from_subscription"
-		return 1
-	fi
-
-	if ! config_download "$sub"; then
-		log "config_download failed in ensure_vpn_from_subscription"
-		return 1
-	fi
-
-	restart_vpn
-
-	touch "$VPN_READY_FILE"
-	log "vpn_ready marked in $VPN_READY_FILE"
-
-	return 0
-}
-
+# --- периодическая проверка: подписка всё ещё валидна в хранилище? --- #
 check_subscription_alive() {
 	[ ! -s "$SUB_FILE" ] && return 0
-
-	sub="$(cat "$SUB_FILE" 2>/dev/null || echo "")"
-	[ -z "$sub" ] && return 0
 
 	now_ts="$(date +%s)"
 	last_ts=0
@@ -268,18 +265,56 @@ check_subscription_alive() {
 		return 0
 	fi
 
-	log "checking subscription_url still valid..."
-	if uclient-fetch -qO- "$sub" >/dev/null 2>&1; then
-		log "subscription_url OK"
+	# читаем uid/usi из subscription.json
+	UID_SUB="$(jsonfilter -i "$SUB_FILE" -e '@.uid' 2>/dev/null || echo "")"
+	USI_SUB="$(jsonfilter -i "$SUB_FILE" -e '@.usi' 2>/dev/null || echo "")"
+
+	if [ -z "$UID_SUB" ] || [ -z "$USI_SUB" ]; then
+		log "check_subscription_alive: uid/usi missing in subscription.json"
 		echo "$now_ts" >"$LAST_CHECK_FILE"
 		return 0
 	fi
 
-	log "subscription_url seems invalid, resetting VPN state"
+	if ! get_code; then
+		log "check_subscription_alive: failed to get code"
+		echo "$now_ts" >"$LAST_CHECK_FILE"
+		return 0
+	fi
+
+	BASE_URL="${API_URL%/shm/v1/public/router_public}"
+	CHECK_URL="${BASE_URL}/shm/v1/public/router_config?uid=${UID_SUB}&usi=${USI_SUB}&code=${CLEAN_CODE}&format=json"
+
+	log "checking subscription via $CHECK_URL"
+
+	TMP_SUB="${SUB_FILE}.tmp"
+	BODY="$(uclient-fetch -qO "$TMP_SUB" "$CHECK_URL" 2>/dev/null || true)"
+
+	if [ -z "$BODY" ]; then
+		log "check_subscription_alive: empty response from router_config"
+		rm -f "$TMP_SUB"
+		echo "$now_ts" >"$LAST_CHECK_FILE"
+		return 0
+	fi
+
+	OK="$(printf '%s' "$BODY" | jsonfilter -e '@.ok' 2>/dev/null || echo "")"
+
+	if [ "$OK" = "1" ]; then
+		# подписка жива — обновляем файл (вдруг links/лимиты поменялись)
+		mv "$TMP_SUB" "$SUB_FILE"
+		log "subscription_alive: ok=1, subscription.json refreshed"
+		echo "$now_ts" >"$LAST_CHECK_FILE"
+		return 0
+	fi
+
+	ERR="$(printf '%s' "$BODY" | jsonfilter -e '@.error' 2>/dev/null || echo "unknown_error")"
+	log "subscription_invalid: ok=$OK, error=$ERR — resetting VPN state"
+
+	rm -f "$TMP_SUB"
 	rm -f "$VPN_READY_FILE"
 	rm -f "$SUB_FILE"
+
 	echo "$now_ts" >"$LAST_CHECK_FILE"
-	echo "subscription_invalid" >"$STATE_DIR/vpn_error"
+	echo "$ERR" >"$STATE_DIR/vpn_error"
 
 	return 1
 }
@@ -293,17 +328,16 @@ main_loop() {
 	while :; do
 		load_conf
 
-		# 1) если ещё нет subscription_url — ждём её через router_public
+		# 1) если ещё нет subscription.json — ждём её через router_public/router_config
 		if [ ! -s "$SUB_FILE" ]; then
 			poll_subscription_loop
 		else
-			# 2) если есть subscription_url, но нет vpn_ready — поднимаем VPN
+			# 2) если есть subscription.json, но нет vpn_ready — поднимаем VPN
 			if [ ! -s "$VPN_READY_FILE" ]; then
-				sub="$(cat "$SUB_FILE" 2>/dev/null || echo "")"
-				[ -n "$sub" ] && ensure_vpn_from_subscription "$sub"
+				ensure_vpn_from_subscription
 			fi
 
-			# 3) периодически проверяем, что подписка ещё жива
+			# 3) периодически проверяем валидность подписки через router_config
 			check_subscription_alive
 		fi
 
