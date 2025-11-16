@@ -96,17 +96,43 @@ jobs:
 
           cd "$GITHUB_WORKSPACE/ipk-tmp"
 
-          # 1) Пробуем как tar-архив (могут быть tar.gz/tar.xz/tar.zst)
+          # 1) Пробуем как tar-архив (в твоём случае это так и есть)
           if tar -tf "$SING_IPK" >/dev/null 2>&1; then
-            echo "Treating ipk as tar archive"
+            echo "Treating ipk as tar archive (outer layer)"
             tar -xf "$SING_IPK"
+
+            # После распаковки ожидаем data.tar.*
+            if ls data.tar.* 1>/dev/null 2>&1; then
+              DATA_TAR=$(ls data.tar.*)
+              echo "Inner DATA_TAR = $DATA_TAR"
+
+              case "$DATA_TAR" in
+                *.gz)
+                  tar -zxf "$DATA_TAR"
+                  ;;
+                *.xz)
+                  tar -Jxf "$DATA_TAR"
+                  ;;
+                *.zst)
+                  tar -I zstd -xf "$DATA_TAR"
+                  ;;
+                *)
+                  echo "Unknown inner data.tar.* compression: $DATA_TAR" >&2
+                  exit 1
+                  ;;
+              esac
+            else
+              echo "No data.tar.* after outer tar extraction" >&2
+              find . -maxdepth 2 -type f | sort
+              exit 1
+            fi
+
           else
             echo "tar -tf failed, trying ar format"
-            # 2) Пробуем как ar-архив (классический формат ipk)
+            # 2) Запасной вариант: классический ar-архив
             if ar t "$SING_IPK" >/dev/null 2>&1; then
               ar x "$SING_IPK"
 
-              # Ищем data.tar.*
               DATA_TAR=$(ls data.tar.*)
               echo "DATA_TAR = $DATA_TAR"
 
