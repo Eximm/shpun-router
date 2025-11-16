@@ -44,12 +44,11 @@ get_param() {
 PATH_ENC="$(get_param path)"
 HOST_HDR="$(get_param host)"
 SNI="$(get_param sni)"
-
-# тип транспорта (ws/tcp) – по умолчанию ws
 TYPE="$(get_param type)"
+
 [ -n "$TYPE" ] || TYPE="ws"
 
-# Декодируем хотя бы %2F -> / (остальное нам сейчас не критично)
+# Декодируем хотя бы %2F -> /
 if [ -n "$PATH_ENC" ]; then
     PATH_DEC="$(printf '%s' "$PATH_ENC" | sed -e 's/%2[Ff]/\//g')"
 else
@@ -95,6 +94,12 @@ cat >"$OUT_CFG" <<EOF
       "inet4_address": "172.19.0.1/30",
       "auto_route": true,
       "strict_route": true
+    },
+    {
+      "type": "dns",
+      "tag": "dns-in",
+      "listen": "127.0.0.1",
+      "listen_port": 5353
     }
   ],
 
@@ -135,10 +140,6 @@ cat >"$OUT_CFG" <<EOF
   "route": {
     "auto_detect_interface": true,
     "rules": [
-      {
-        "protocol": "dns",
-        "outbound": "direct"
-      },
       {
         "ip_cidr": [
           "127.0.0.0/8",
