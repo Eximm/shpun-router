@@ -1,0 +1,154 @@
+name: Build sing-box (mips_24kc)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/build-sing-box.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    env:
+      SDK_URL: https://downloads.openwrt.org/releases/24.10.3/targets/ath79/generic/openwrt-sdk-24.10.3-ath79-generic_gcc-13.3.0_musl.Linux-x86_64.tar.zst
+      SDK_DIR: openwrt-sdk-24.10.3-ath79-generic_gcc-13.3.0_musl.Linux-x86_64
+      CACHE_KEY: linux-openwrt-sdk-24.10.3-ath79-v1
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential libncurses5-dev gawk unzip file \
+            libssl-dev wget python3 zstd binutils
+
+      # Кэшируем OpenWrt SDK
+      - name: Cache OpenWrt SDK
+        id: cache-sdk
+        uses: actions/cache@v4
+        with:
+          path: sdk
+          key: ${{ env.CACHE_KEY }}
+
+      - name: Download & unpack OpenWrt SDK (on cache miss)
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        run: |
+          echo "SDK cache miss, downloading..."
+          wget -O sdk.tar.zst "$SDK_URL"
+          tar -I zstd -xf sdk.tar.zst
+          mv "$SDK_DIR" sdk
+          ls -la sdk
+
+      - name: Configure SDK (only once)
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        working-directory: sdk
+        run: |
+          make defconfig
+
+      - name: SDK info
+        working-directory: sdk
+        run: |
+          pwd
+          ls -la
+
+      # Обновляем feeds и ставим sing-box в SDK
+      - name: Configure feeds and install sing-box
+        working-directory: sdk
+        run: |
+          ./scripts/feeds update packages
+          ./scripts/feeds install sing-box
+
+      - name: Build sing-box package
+        working-directory: sdk
+        run: |
+          make package/sing-box/compile -j"$(nproc)" V=s
+
+      - name: Find built sing-box ipk
+        working-directory: sdk
+        run: |
+          echo "Looking for sing-box ipk..."
+          find bin -name "sing-box_*_mips_24kc.ipk" -print
+
+      - name: Extract sing-box binary from ipk
+        working-directory: sdk
+        run: |
+          set -e
+
+          mkdir -p "$GITHUB_WORKSPACE/output" "$GITHUB_WORKSPACE/ipk-tmp"
+
+          # Находим первый подходящий ipk (абсолютный путь)
+          SING_IPK=$(find "$PWD/bin" -name "sing-box_*_mips_24kc.ipk" | head -n1)
+          echo "Using ipk: $SING_IPK"
+
+          if [ -z "$SING_IPK" ]; then
+            echo "sing-box ipk not found!" >&2
+            exit 1
+          fi
+
+          echo "IPK stat:"
+          ls -lh "$SING_IPK" || true
+          echo "IPK file type:"
+          file "$SING_IPK" || true
+
+          cd "$GITHUB_WORKSPACE/ipk-tmp"
+
+          # 1) Пробуем как tar-архив (могут быть tar.gz/tar.xz/tar.zst)
+          if tar -tf "$SING_IPK" >/dev/null 2>&1; then
+            echo "Treating ipk as tar archive"
+            tar -xf "$SING_IPK"
+          else
+            echo "tar -tf failed, trying ar format"
+            # 2) Пробуем как ar-архив (классический формат ipk)
+            if ar t "$SING_IPK" >/dev/null 2>&1; then
+              ar x "$SING_IPK"
+
+              # Ищем data.tar.*
+              DATA_TAR=$(ls data.tar.*)
+              echo "DATA_TAR = $DATA_TAR"
+
+              case "$DATA_TAR" in
+                *.gz)
+                  tar -zxf "$DATA_TAR"
+                  ;;
+                *.xz)
+                  tar -Jxf "$DATA_TAR"
+                  ;;
+                *.zst)
+                  tar -I zstd -xf "$DATA_TAR"
+                  ;;
+                *)
+                  echo "Unknown data.tar.* compression: $DATA_TAR" >&2
+                  exit 1
+                  ;;
+              esac
+            else
+              echo "Unknown ipk format: neither tar nor ar" >&2
+              exit 1
+            fi
+          fi
+
+          # Проверяем, что бинарь реально появился
+          if [ ! -f usr/bin/sing-box ]; then
+            echo "usr/bin/sing-box not found after extraction!" >&2
+            echo "Listing extracted files (max depth 4):"
+            find . -maxdepth 4 -type f | sort
+            exit 1
+          fi
+
+          # Копируем бинарник sing-box
+          cp usr/bin/sing-box "$GITHUB_WORKSPACE/output/sing-box"
+          chmod +x "$GITHUB_WORKSPACE/output/sing-box"
+
+          cd "$GITHUB_WORKSPACE"
+          ls -lh output
+          file output/sing-box
+
+      - name: Upload sing-box binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sing-box-mips_24kc
+          path: output/sing-box
