@@ -6,7 +6,7 @@ import { cursor } from 'uci';
 /* пути */
 const DIR   = "/etc/shpun";
 const CODE  = DIR + "/router_code";
-const SUB   = DIR + "/subscription_url";
+const SUB   = DIR + "/subscription.json";
 const READY = DIR + "/vpn_ready";
 
 /* безопасное чтение файла, без ошибок */
