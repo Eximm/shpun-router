@@ -45,6 +45,10 @@ PATH_ENC="$(get_param path)"
 HOST_HDR="$(get_param host)"
 SNI="$(get_param sni)"
 
+# 👉 ДОБАВЛЯЕМ: тип транспорта (ws/tcp)
+TYPE="$(get_param type)"
+[ -n "$TYPE" ] || TYPE="ws"
+
 # Декодируем хотя бы %2F -> / (остальное нам сейчас не критично)
 if [ -n "$PATH_ENC" ]; then
     PATH_DEC="$(printf '%s' "$PATH_ENC" | sed -e 's/%2[Ff]/\//g')"
