@@ -26,7 +26,7 @@ jobs:
             build-essential libncurses5-dev gawk unzip file \
             libssl-dev wget python3 zstd binutils
 
-      # Тот же кэш SDK, что и в shpun-router workflow
+      # Кэшируем OpenWrt SDK
       - name: Cache OpenWrt SDK
         id: cache-sdk
         uses: actions/cache@v4
@@ -55,7 +55,7 @@ jobs:
           pwd
           ls -la
 
-      # Подключаем feeds и ставим пакет sing-box в SDK
+      # Обновляем feeds и ставим sing-box в SDK
       - name: Configure feeds and install sing-box
         working-directory: sdk
         run: |
@@ -80,8 +80,8 @@ jobs:
 
           mkdir -p "$GITHUB_WORKSPACE/output" "$GITHUB_WORKSPACE/ipk-tmp"
 
-          # Находим первый подходящий ipk
-          SING_IPK=$(find bin -name "sing-box_*_mips_24kc.ipk" | head -n1)
+          # Находим первый подходящий ipk (с абсолютным путём)
+          SING_IPK=$(find "$PWD/bin" -name "sing-box_*_mips_24kc.ipk" | head -n1)
           echo "Using ipk: $SING_IPK"
 
           if [ -z "$SING_IPK" ]; then
@@ -92,7 +92,7 @@ jobs:
           cd "$GITHUB_WORKSPACE/ipk-tmp"
 
           # .ipk — это ar-архив (как .deb)
-          ar x "$GITHUB_WORKSPACE/$SING_IPK"
+          ar x "$SING_IPK"
 
           # Ищем data.tar.*
           DATA_TAR=$(ls data.tar.*)
