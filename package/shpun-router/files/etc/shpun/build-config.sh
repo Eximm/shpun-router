@@ -45,7 +45,7 @@ PATH_ENC="$(get_param path)"
 HOST_HDR="$(get_param host)"
 SNI="$(get_param sni)"
 
-# 👉 ДОБАВЛЯЕМ: тип транспорта (ws/tcp)
+# тип транспорта (ws/tcp) – по умолчанию ws
 TYPE="$(get_param type)"
 [ -n "$TYPE" ] || TYPE="ws"
 
@@ -59,7 +59,6 @@ fi
 [ -n "$HOST_HDR" ] || HOST_HDR="$SERVER"
 [ -n "$SNI" ]      || SNI="$HOST_HDR"
 
-
 cat >"$OUT_CFG" <<EOF
 {
   "log": {
@@ -67,6 +66,28 @@ cat >"$OUT_CFG" <<EOF
     "level": "info",
     "timestamp": true
   },
+
+  "dns": {
+    "servers": [
+      {
+        "tag": "dns-1",
+        "address": "1.1.1.1",
+        "detour": "direct"
+      },
+      {
+        "tag": "dns-2",
+        "address": "8.8.8.8",
+        "detour": "direct"
+      },
+      {
+        "tag": "dns-3",
+        "address": "9.9.9.9",
+        "detour": "direct"
+      }
+    ],
+    "strategy": "ipv4_only"
+  },
+
   "inbounds": [
     {
       "type": "tun",
@@ -76,7 +97,16 @@ cat >"$OUT_CFG" <<EOF
       "strict_route": true
     }
   ],
+
   "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct"
+    },
+    {
+      "type": "block",
+      "tag": "block"
+    },
     {
       "type": "vless",
       "tag": "proxy",
@@ -100,7 +130,29 @@ cat >"$OUT_CFG" <<EOF
         }
       }
     }
-  ]
+  ],
+
+  "route": {
+    "auto_detect_interface": true,
+    "rules": [
+      {
+        "protocol": "dns",
+        "outbound": "direct"
+      },
+      {
+        "ip_cidr": [
+          "127.0.0.0/8",
+          "10.0.0.0/8",
+          "172.16.0.0/12",
+          "192.168.0.0/16"
+        ],
+        "outbound": "direct"
+      },
+      {
+        "outbound": "proxy"
+      }
+    ]
+  }
 }
 EOF
 
