@@ -46,33 +46,30 @@ return {
 			}
 		},
 
-        /* --- STATE --- */
-        state: {
-            call: function(req) {
-                try {
-                    let code_raw = readfile(CODE);
-                    let sub_raw  = readfile(SUB);
+		/* --- STATE --- */
+		state: {
+			call: function(req) {
+				try {
+					let code_raw = readfile(CODE);
+					let sub_raw  = readfile(SUB);
 
-                    /* убираем \n и пробелы в конце кода */
-                    let code = code_raw ? code_raw.replace(/\s+$/, "") : "";
+					let code = code_raw ? code_raw : "";
+					let sub  = sub_raw  ? sub_raw  : "";
 
-                    /* subscription.json целиком, как есть */
-                    let sub  = sub_raw ? sub_raw : "";
-
-                    return {
-                        code: code,
-                        has_sub: (sub != ""),
-                        subscription_url: sub,
-                        /* vpn_ready по факту существования файла, а не по содержимому */
-                        vpn_ready: exists(READY)
-                    };
-                }
-                catch (e) {
-                    return { ok: 0, error: String(e) };
-                }
-            }
-        },
-
+					return {
+						code: code,
+						has_sub: (sub != ""),
+						subscription_url: sub,
+						// главное отличие от самого первого варианта:
+						// vpn_ready = true, если файл существует
+						vpn_ready: exists(READY)
+					};
+				}
+				catch (e) {
+					return { ok: 0, error: String(e) };
+				}
+			}
+		},
 
 		/* --- APPLY_WAN --- */
 		apply_wan: {
