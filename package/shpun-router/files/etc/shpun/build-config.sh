@@ -41,15 +41,20 @@ get_param() {
     echo "$QUERY" | tr '&' '\n' | awk -F= -v k="$1" '$1==k {print $2}'
 }
 
-SECURITY="$(get_param security)"
-TYPE="$(get_param type)"
 PATH_ENC="$(get_param path)"
 HOST_HDR="$(get_param host)"
 SNI="$(get_param sni)"
 
-[ -n "$PATH_ENC" ] || PATH_ENC="/vless"
+# Декодируем хотя бы %2F -> / (остальное нам сейчас не критично)
+if [ -n "$PATH_ENC" ]; then
+    PATH_DEC="$(printf '%s' "$PATH_ENC" | sed -e 's/%2[Ff]/\//g')"
+else
+    PATH_DEC="/vless"
+fi
+
 [ -n "$HOST_HDR" ] || HOST_HDR="$SERVER"
 [ -n "$SNI" ]      || SNI="$HOST_HDR"
+
 
 cat >"$OUT_CFG" <<EOF
 {
@@ -85,7 +90,7 @@ cat >"$OUT_CFG" <<EOF
       },
       "transport": {
         "type": "$TYPE",
-        "path": "$PATH_ENC",
+        "path": "$PATH_DEC",
         "headers": {
           "Host": "$HOST_HDR"
         }

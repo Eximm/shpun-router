@@ -23,6 +23,19 @@ function readfile(path) {
 	}
 }
 
+/* проверка существования файла (для vpn_ready) */
+function exists(path) {
+	try {
+		let f = open(path, "r");
+		if (!f)
+			return false;
+		f.close();
+		return true;
+	} catch (e) {
+		return false;
+	}
+}
+
 return {
 	shpun: {
 
@@ -33,29 +46,33 @@ return {
 			}
 		},
 
-		/* --- STATE --- */
-		state: {
-			call: function(req) {
-				try {
-					let code_raw = readfile(CODE);
-					let sub_raw  = readfile(SUB);
-					let ready    = readfile(READY);
+        /* --- STATE --- */
+        state: {
+            call: function(req) {
+                try {
+                    let code_raw = readfile(CODE);
+                    let sub_raw  = readfile(SUB);
 
-					let code = code_raw ? code_raw : "";
-					let sub  = sub_raw  ? sub_raw  : "";
+                    /* убираем \n и пробелы в конце кода */
+                    let code = code_raw ? code_raw.replace(/\s+$/, "") : "";
 
-					return {
-						code: code,
-						has_sub: (sub != ""),
-						subscription_url: sub,
-						vpn_ready: (ready != "")
-					};
-				}
-				catch (e) {
-					return { ok: 0, error: String(e) };
-				}
-			}
-		},
+                    /* subscription.json целиком, как есть */
+                    let sub  = sub_raw ? sub_raw : "";
+
+                    return {
+                        code: code,
+                        has_sub: (sub != ""),
+                        subscription_url: sub,
+                        /* vpn_ready по факту существования файла, а не по содержимому */
+                        vpn_ready: exists(READY)
+                    };
+                }
+                catch (e) {
+                    return { ok: 0, error: String(e) };
+                }
+            }
+        },
+
 
 		/* --- APPLY_WAN --- */
 		apply_wan: {
