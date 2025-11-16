@@ -1,24 +1,30 @@
 #!/bin/sh
 #
 # shpun-agent
-#   - получает / генерирует код роутера;
-#   - опрашивает router_public по этому коду;
-#   - при ok=1 + subscription_url:
-#       * сохраняет ссылку
-#       * качает VPN-движок
-#       * качает конфиг
-#       * рестартует shpun-vpn
-#       * ставит vpn_ready
+#
+# Логика:
+#   1) Получаем / читаем router_code.
+#   2) Если subscription_url ещё нет:
+#       - чистим код до A-Z0-9 (AAAA-AAAA -> AAAAAAAA)
+#       - долбим router_public?code=<CLEAN_CODE>&format=json, пока не получим ok=1+subscription_url
+#       - сохраняем subscription_url
+#   3) Если subscription_url уже есть:
+#       - докачиваем движок и конфиг, стартуем shpun-vpn
+#       - ставим vpn_ready
+#       - периодически (SUB_CHECK_INTERVAL) проверяем, что subscription_url ещё жива
+#         (если нет — сбрасываем SUB_FILE + VPN_READY_FILE и ждём новую привязку)
 
 STATE_DIR="/etc/shpun"
 CODE_FILE="$STATE_DIR/router_code"
 SUB_FILE="$STATE_DIR/subscription_url"
 VPN_READY_FILE="$STATE_DIR/vpn_ready"
+LAST_CHECK_FILE="$STATE_DIR/last_sub_check"
 CONF="$STATE_DIR/agent.conf"
 
 LOG_TAG="shpun-agent"
 
 API_URL_DEFAULT="https://bill.shpyn.online/shm/v1/public/router_public"
+SUB_CHECK_INTERVAL_DEFAULT=21600  # 6 часов
 
 log() {
 	logger -t "$LOG_TAG" "$*"
@@ -28,10 +34,11 @@ load_conf() {
 	# shellcheck disable=SC1090,SC1091
 	[ -f "$CONF" ] && . "$CONF"
 
-	[ -z "$API_URL" ]        && API_URL="$API_URL_DEFAULT"
-	[ -z "$ENGINE_NAME" ]    && ENGINE_NAME="sing-box"
-	[ -z "$ENGINE_BIN" ]     && ENGINE_BIN="/tmp/sing-box"
-	[ -z "$ENGINE_CONFIG" ]  && ENGINE_CONFIG="/etc/shpun/sing-box.json"
+	[ -z "$API_URL" ]            && API_URL="$API_URL_DEFAULT"
+	[ -z "$ENGINE_NAME" ]        && ENGINE_NAME="sing-box"
+	[ -z "$ENGINE_BIN" ]         && ENGINE_BIN="/tmp/sing-box"
+	[ -z "$ENGINE_CONFIG" ]      && ENGINE_CONFIG="/etc/shpun/sing-box.json"
+	[ -z "$SUB_CHECK_INTERVAL" ] && SUB_CHECK_INTERVAL="$SUB_CHECK_INTERVAL_DEFAULT"
 }
 
 ensure_state_dir() {
@@ -61,8 +68,8 @@ get_code() {
 		return 1
 	fi
 
-	# clean_code: только A-Z0-9, без дефиса
-	CLEAN_CODE="$(printf '%s' "$CODE" | tr -dc 'A-Z0-9')"
+	# CLEAN_CODE: только A-Z0-9 (AAAA-AAAA -> AAAAAAAA)
+	CLEAN_CODE="$(printf '%s' "$CODE" | tr '[:lower:]' '[:upper:]' | tr -dc 'A-Z0-9')"
 
 	if [ -z "$CLEAN_CODE" ]; then
 		log "clean code is empty after filtering: $CODE"
@@ -83,6 +90,8 @@ engine_download() {
 		return 0
 	fi
 
+	mkdir -p "$(dirname "$ENGINE_BIN")" 2>/dev/null || true
+
 	log "downloading engine from $ENGINE_URL to $ENGINE_BIN"
 	if ! uclient-fetch -qO "$ENGINE_BIN" "$ENGINE_URL" 2>/dev/null; then
 		log "failed to download engine"
@@ -96,6 +105,7 @@ engine_download() {
 		return 1
 	fi
 
+	# Проверка SHA256 (опциональная, регистр не важен)
 	if [ -n "$ENGINE_SHA256" ]; then
 		sum="$(sha256sum "$ENGINE_BIN" 2>/dev/null | awk '{print $1}')"
 		sum_lc="$(printf '%s' "$sum" | tr 'A-Z' 'a-z')"
@@ -107,7 +117,6 @@ engine_download() {
 			return 1
 		fi
 	fi
-
 
 	log "engine downloaded and ready: $ENGINE_BIN"
 	return 0
@@ -141,6 +150,7 @@ restart_vpn() {
 	fi
 }
 
+# --- режим ожидания временного ключа / первой подписки --- #
 fetch_subscription_once() {
 	if [ -z "$CLEAN_CODE" ] || [ -z "$API_URL" ]; then
 		return 1
@@ -175,33 +185,22 @@ fetch_subscription_once() {
 	printf '%s\n' "$SUB" >"$SUB_FILE"
 	log "subscription_url saved to $SUB_FILE"
 
-	# === качаем движок ===
-	if ! engine_download; then
-		log "engine_download failed, will retry later"
-		return 1
-	fi
+	# сброс таймера проверки подписки
+	date +%s >"$LAST_CHECK_FILE"
 
-	# === качаем конфиг ===
-	if ! config_download "$SUB"; then
-		log "config_download failed, will retry later"
-		return 1
-	fi
-
-	# === перезапускаем shpun-vpn ===
-	restart_vpn
-
-	# === помечаем vpn_ready ===
-	touch "$VPN_READY_FILE"
-	log "vpn_ready marked in $VPN_READY_FILE"
-
+	# дальше обработаем через ensure_vpn_from_subscription
 	return 0
 }
 
 poll_subscription_loop() {
-	# если уже всё есть — выходим
-	if [ -s "$SUB_FILE" ] && [ -s "$VPN_READY_FILE" ]; then
-		log "subscription already present and vpn_ready set, exiting"
-		return 0
+	# если subscription_url уже есть — не трогаем router_public вообще
+	if [ -s "$SUB_FILE" ]; then
+		SUB="$(cat "$SUB_FILE" 2>/dev/null || echo "")"
+		if [ -n "$SUB" ]; then
+			log "subscription_url already present, skipping router_public"
+			ensure_vpn_from_subscription "$SUB"
+			return 0
+		fi
 	fi
 
 	while :; do
@@ -214,25 +213,103 @@ poll_subscription_loop() {
 		log "router code: $CODE (clean: $CLEAN_CODE)"
 
 		if fetch_subscription_once; then
-			# успех
+			# получили subscription_url, дальше создаём VPN на её основе
+			SUB="$(cat "$SUB_FILE" 2>/dev/null || echo "")"
+			ensure_vpn_from_subscription "$SUB"
 			return 0
 		fi
 
-		log "no subscription or engine/config yet, retry in 20s"
+		log "no subscription yet, retry in 20s"
 		sleep 20
 	done
+}
+
+# --- работа по уже известной subscription_url --- #
+ensure_vpn_from_subscription() {
+	sub="$1"
+
+	if [ -z "$sub" ]; then
+		log "ensure_vpn_from_subscription: empty subscription_url"
+		return 1
+	fi
+
+	log "ensuring VPN from subscription_url"
+
+	if ! engine_download; then
+		log "engine_download failed in ensure_vpn_from_subscription"
+		return 1
+	fi
+
+	if ! config_download "$sub"; then
+		log "config_download failed in ensure_vpn_from_subscription"
+		return 1
+	fi
+
+	restart_vpn
+
+	touch "$VPN_READY_FILE"
+	log "vpn_ready marked in $VPN_READY_FILE"
+
+	return 0
+}
+
+check_subscription_alive() {
+	[ ! -s "$SUB_FILE" ] && return 0
+
+	sub="$(cat "$SUB_FILE" 2>/dev/null || echo "")"
+	[ -z "$sub" ] && return 0
+
+	now_ts="$(date +%s)"
+	last_ts=0
+	[ -f "$LAST_CHECK_FILE" ] && last_ts="$(cat "$LAST_CHECK_FILE" 2>/dev/null || echo 0)"
+
+	# если ещё не пришло время — выходим
+	if [ "$((now_ts - last_ts))" -lt "$SUB_CHECK_INTERVAL" ]; then
+		return 0
+	fi
+
+	log "checking subscription_url still valid..."
+	if uclient-fetch -qO- "$sub" >/dev/null 2>&1; then
+		log "subscription_url OK"
+		echo "$now_ts" >"$LAST_CHECK_FILE"
+		return 0
+	fi
+
+	log "subscription_url seems invalid, resetting VPN state"
+	rm -f "$VPN_READY_FILE"
+	rm -f "$SUB_FILE"
+	echo "$now_ts" >"$LAST_CHECK_FILE"
+	echo "subscription_invalid" >"$STATE_DIR/vpn_error"
+
+	return 1
 }
 
 main_loop() {
 	load_conf
 	ensure_state_dir
 
-	log "shpun-agent started (with engine management, API_URL=$API_URL)"
+	log "shpun-agent started (API_URL=$API_URL, ENGINE_BIN=$ENGINE_BIN)"
 
-	poll_subscription_loop
+	while :; do
+		load_conf
 
-	# можно добавить периодические проверки, пока просто ждём
-	sleep 600
+		# 1) если ещё нет subscription_url — ждём её через router_public
+		if [ ! -s "$SUB_FILE" ]; then
+			poll_subscription_loop
+		else
+			# 2) если есть subscription_url, но нет vpn_ready — поднимаем VPN
+			if [ ! -s "$VPN_READY_FILE" ]; then
+				sub="$(cat "$SUB_FILE" 2>/dev/null || echo "")"
+				[ -n "$sub" ] && ensure_vpn_from_subscription "$sub"
+			fi
+
+			# 3) периодически проверяем, что подписка ещё жива
+			check_subscription_alive
+		fi
+
+		# основной цикл не должен жрать CPU
+		sleep 30
+	done
 }
 
 main_loop "$@"
