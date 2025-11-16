@@ -59,12 +59,10 @@ jobs:
       - name: Configure feeds and install sing-box
         working-directory: sdk
         run: |
-          # Добавляем feed packages, если ещё не добавлен
-          grep -q "git.openwrt.org/feed/packages.git" feeds.conf.default || \
-            echo "src-git packages https://git.openwrt.org/feed/packages.git" >> feeds.conf.default
-
+          # Фид packages уже есть в SDK, просто обновляем и ставим пакет
           ./scripts/feeds update packages
           ./scripts/feeds install sing-box
+
 
       - name: Build sing-box package
         working-directory: sdk
