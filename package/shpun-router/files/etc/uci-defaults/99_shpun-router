@@ -8,33 +8,13 @@ uci set rpcd.shpun=ucode
 uci set rpcd.shpun.script='/usr/share/rpcd/ucode/shpun.uc'
 uci commit rpcd
 
-# Restart rpcd to apply
+# Перезапускаем rpcd, чтобы backend подцепился
 /etc/init.d/rpcd restart 2>/dev/null || true
 
 
 # ==========================
-# 2. Configure dnsmasq to use sing-box DNS (127.0.0.1#5353)
+# 2. Configure network interface vpn -> tun0
 # ==========================
-# Используем первый dnsmasq-инстанс: dhcp.@dnsmasq[0]
-if uci -q get dhcp.@dnsmasq[0] >/dev/null 2>&1; then
-    # Не брать резолверы провайдера (/tmp/resolv.conf и т.п.)
-    uci set dhcp.@dnsmasq[0].noresolv='1'
-
-    # Чистим старые server-строки и прописываем sing-box как upstream
-    uci -q delete dhcp.@dnsmasq[0].server
-    uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#5353'
-
-    uci commit dhcp
-
-    # Перезапускаем dnsmasq, чтобы он начал использовать sing-box
-    /etc/init.d/dnsmasq restart 2>/dev/null || true
-fi
-
-
-# ==========================
-# 3. Configure network interface vpn -> tun0
-# ==========================
-# Создаём/обновляем секцию network.vpn
 uci set network.vpn='interface'
 uci set network.vpn.proto='none'
 
@@ -46,32 +26,29 @@ uci commit network
 
 
 # ==========================
-# 4. Add vpn to wan firewall zone
+# 3. Add vpn to wan firewall zone
 # ==========================
-# Ищем секцию зоны, где name='wan'
 WAN_ZONE_SECTION=""
 
-# Сначала попробуем типовую @zone[1]
+# Попытка №1: типовая @zone[1]
 if [ "$(uci -q get firewall.@zone[1].name)" = "wan" ]; then
     WAN_ZONE_SECTION="@zone[1]"
 else
-    # Фолбэк: ищем секцию с name='wan'
-    for s in $(uci -q show firewall | sed -n "s/^\(firewall\.\([^=]*\)\.name='wan'\)$/\1/p" | cut -d. -f2); do
+    # Фолбэк: ищем любую секцию, где name='wan'
+    for s in $(uci -q show firewall | sed -n "s/^firewall\.\([^=]*\)\.name='wan'.*/\1/p"); do
         WAN_ZONE_SECTION="$s"
         break
     done
 fi
 
 if [ -n "$WAN_ZONE_SECTION" ]; then
-    # Добавляем 'vpn' в список сетей зоны wan
     uci add_list firewall."$WAN_ZONE_SECTION".network='vpn'
     uci commit firewall
 else
     logger -t shpun-uci "Could not find firewall zone with name='wan'"
 fi
 
-# Перезапуск сетевых сервисов
-/etc/init.d/network restart 2>/dev/null || true
-/etc/init.d/firewall restart 2>/dev/null || true
-
-exit 0
+# ==========================
+# 4. Restart network & firewall
+# ==========================
+/etc/init.d/network restart 2>/dev/null || t
