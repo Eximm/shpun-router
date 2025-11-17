@@ -98,20 +98,17 @@ cat >"$OUT_CFG" <<EOF
       {
         "tag": "dns-1",
         "type": "udp",
-        "server": "1.1.1.1",
-        "detour": "direct"
+        "server": "1.1.1.1"
       },
       {
         "tag": "dns-2",
         "type": "udp",
-        "server": "8.8.8.8",
-        "detour": "direct"
+        "server": "8.8.8.8"
       },
       {
         "tag": "dns-3",
         "type": "udp",
-        "server": "9.9.9.9",
-        "detour": "direct"
+        "server": "9.9.9.9"
       }
     ],
     "strategy": "ipv4_only"
