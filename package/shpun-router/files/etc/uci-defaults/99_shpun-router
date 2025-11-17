@@ -29,20 +29,49 @@ if uci -q get dhcp.@dnsmasq[0] >/dev/null 2>&1; then
     # Перезапускаем dnsmasq, чтобы он начал использовать sing-box
     /etc/init.d/dnsmasq restart 2>/dev/null || true
 fi
-# В 99_shpun-router (ниже dnsmasq-блока)
 
-# Настроить интерфейс vpn -> tun0
+
+# ==========================
+# 3. Configure network interface vpn -> tun0
+# ==========================
+# Создаём/обновляем секцию network.vpn
 uci set network.vpn='interface'
 uci set network.vpn.proto='none'
+
+# Для совместимости: и ifname, и device
 uci set network.vpn.ifname='tun0'
+uci set network.vpn.device='tun0'
+
 uci commit network
 
-# Добавить vpn в зону wan
-uci add_list firewall.wan.network='vpn'
-uci commit firewall
 
+# ==========================
+# 4. Add vpn to wan firewall zone
+# ==========================
+# Ищем секцию зоны, где name='wan'
+WAN_ZONE_SECTION=""
+
+# Сначала попробуем типовую @zone[1]
+if [ "$(uci -q get firewall.@zone[1].name)" = "wan" ]; then
+    WAN_ZONE_SECTION="@zone[1]"
+else
+    # Фолбэк: ищем секцию с name='wan'
+    for s in $(uci -q show firewall | sed -n "s/^\(firewall\.\([^=]*\)\.name='wan'\)$/\1/p" | cut -d. -f2); do
+        WAN_ZONE_SECTION="$s"
+        break
+    done
+fi
+
+if [ -n "$WAN_ZONE_SECTION" ]; then
+    # Добавляем 'vpn' в список сетей зоны wan
+    uci add_list firewall."$WAN_ZONE_SECTION".network='vpn'
+    uci commit firewall
+else
+    logger -t shpun-uci "Could not find firewall zone with name='wan'"
+fi
+
+# Перезапуск сетевых сервисов
 /etc/init.d/network restart 2>/dev/null || true
 /etc/init.d/firewall restart 2>/dev/null || true
-
 
 exit 0

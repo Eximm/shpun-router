@@ -16,7 +16,7 @@ LINK="$(jsonfilter -i "$SUB_FILE" -e '@.subscription.links[0]' 2>/dev/null)"
     exit 1
 }
 
-# убираем кавычки, если есть
+# убираем кавычки, если jsonfilter вернул с ними
 LINK="${LINK%\"}"
 LINK="${LINK#\"}"
 
@@ -25,10 +25,9 @@ LINK_NO_PROTO="${LINK#vless://}"
 
 # uuid до @
 UUID="${LINK_NO_PROTO%%@*}"
-
 REST="${LINK_NO_PROTO#*@}"
 
-# host:port до ?
+# host:port до ? (example.com:443)
 HOSTPORT="${REST%%\?*}"
 SERVER="${HOSTPORT%%:*}"
 PORT="${HOSTPORT##*:}"
@@ -48,15 +47,34 @@ TYPE="$(get_param type)"
 
 [ -n "$TYPE" ] || TYPE="ws"
 
-# Декодируем хотя бы %2F -> /
+# Декодируем хотя бы %2F -> / и гарантируем, что путь начинается с "/"
 if [ -n "$PATH_ENC" ]; then
     PATH_DEC="$(printf '%s' "$PATH_ENC" | sed -e 's/%2[Ff]/\//g')"
 else
     PATH_DEC="/vless"
 fi
 
+case "$PATH_DEC" in
+    /*) ;;
+    *) PATH_DEC="/$PATH_DEC" ;;
+esac
+
 [ -n "$HOST_HDR" ] || HOST_HDR="$SERVER"
 [ -n "$SNI" ]      || SNI="$HOST_HDR"
+
+# Базовая валидация — если чего-то критично не хватает, лучше не писать битый конфиг
+if [ -z "$UUID" ] || [ -z "$SERVER" ] || [ -z "$PORT" ]; then
+    logger -t shpun-build "Invalid VLESS link: uuid='$UUID' server='$SERVER' port='$PORT'"
+    exit 1
+fi
+
+# PORT должен быть числом
+case "$PORT" in
+    *[!0-9]*)
+        logger -t shpun-build "Invalid port in VLESS link: '$PORT'"
+        exit 1
+        ;;
+esac
 
 cat >"$OUT_CFG" <<EOF
 {
@@ -157,5 +175,5 @@ cat >"$OUT_CFG" <<EOF
 }
 EOF
 
-logger -t shpun-build "Config built for $SERVER:$PORT (uuid=$UUID)"
+logger -t shpun-build "Config built for $SERVER:$PORT (uuid=$UUID, path=$PATH_DEC, type=$TYPE)"
 exit 0

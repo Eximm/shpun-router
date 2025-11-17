@@ -10,23 +10,43 @@ CONF="/etc/shpun/agent.conf"
 load_conf() {
     # shellcheck disable=SC1090,SC1091
     [ -f "$CONF" ] && . "$CONF"
+
+    # значения по умолчанию, если в конфиге не заданы
+    [ -z "$ENGINE_BIN" ]    && ENGINE_BIN="/tmp/sing-box"
+    [ -z "$ENGINE_CONFIG" ] && ENGINE_CONFIG="/etc/shpun/sing-box.json"
+}
+
+has_tun() {
+    [ -c /dev/net/tun ]
 }
 
 start_service() {
     load_conf
 
-    [ -z "$ENGINE_BIN" ] && return 0
-    [ -z "$ENGINE_CONFIG" ] && return 0
+    # минимальная валидация конфигурации
+    if [ -z "$ENGINE_BIN" ] || [ -z "$ENGINE_CONFIG" ]; then
+        logger -t shpun-vpn "ENGINE_BIN or ENGINE_CONFIG is not set, nothing to start"
+        return 1
+    fi
 
-    # если движка ещё нет — просто ждём, агент его докачает
+    if ! has_tun; then
+        logger -t shpun-vpn "/dev/net/tun is missing, please install kmod-tun before starting VPN"
+        return 1
+    fi
+
     if [ ! -x "$ENGINE_BIN" ]; then
-        logger -t shpun-vpn "engine binary not found yet: $ENGINE_BIN (waiting for shpun-agent)"
+        logger -t shpun-vpn "engine binary not found or not executable: $ENGINE_BIN (waiting for shpun-agent)"
+        return 0
+    fi
+
+    if [ ! -s "$ENGINE_CONFIG" ]; then
+        logger -t shpun-vpn "engine config not found or empty: $ENGINE_CONFIG (waiting for build-config.sh)"
         return 0
     fi
 
     procd_open_instance
 
-    # ⚡ Главное исправление — включаем поддержку legacy TUN API
+    # Включаем поддержку legacy TUN API (для старой схемы адресации tun)
     procd_set_param env ENABLE_DEPRECATED_TUN_ADDRESS_X=true
 
     procd_set_param command "$ENGINE_BIN" run -c "$ENGINE_CONFIG"
@@ -37,5 +57,7 @@ start_service() {
 }
 
 stop_service() {
+    # procd сам убьёт процесс инстанса, здесь ничего делать не нужно,
+    # но оставим функцию на месте, чтобы rc.common был доволен.
     :
 }

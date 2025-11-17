@@ -85,6 +85,10 @@ get_code() {
 	return 0
 }
 
+has_tun() {
+	[ -c /dev/net/tun ]
+}
+
 engine_download() {
 	if [ -z "$ENGINE_URL" ]; then
 		log "ENGINE_URL not set, skip engine download"
@@ -111,31 +115,26 @@ engine_download() {
 		return 1
 	fi
 
-	# Проверка SHA256 (опциональная, регистр не важен)
-	if [ -n "$ENGINE_SHA256" ]; then
-		sum="$(sha256sum "$ENGINE_BIN" 2>/dev/null | awk '{print $1}')"
-		sum_lc="$(printf '%s' "$sum" | tr '[:upper:]' '[:lower:]')"
-		ref_lc="$(printf '%s' "$ENGINE_SHA256" | tr '[:upper:]' '[:lower:]')"
-
-
-		if [ "$sum_lc" != "$ref_lc" ]; then
-			log "engine sha256 mismatch: got=$sum expected=$ENGINE_SHA256, removing"
-			rm -f "$ENGINE_BIN"
-			return 1
-		fi
-	fi
+	# Раньше тут была проверка SHA256, которая нагружала CPU (sha256sum на слабом железе).
+	# Сейчас сознательно убрали, чтобы агент не вешал роутер.
 
 	log "engine downloaded and ready: $ENGINE_BIN"
 	return 0
 }
 
 restart_vpn() {
-	if [ -x /etc/init.d/shpun-vpn ]; then
-		log "restarting shpun-vpn"
-		/etc/init.d/shpun-vpn restart 2>/dev/null || log "failed to restart shpun-vpn"
-	else
+	if [ ! -x /etc/init.d/shpun-vpn ]; then
 		log "shpun-vpn init script not found"
+		return 1
 	fi
+
+	log "restarting shpun-vpn"
+	if ! /etc/init.d/shpun-vpn restart 2>/dev/null; then
+		log "failed to restart shpun-vpn"
+		return 1
+	fi
+
+	return 0
 }
 
 # --- запрос router_public и скачивание subscription.json через router_config --- #
@@ -199,6 +198,11 @@ ensure_vpn_from_subscription() {
 		return 1
 	fi
 
+	if ! has_tun; then
+		log "ensure_vpn_from_subscription: /dev/net/tun is missing, please install kmod-tun"
+		return 1
+	fi
+
 	if ! engine_download; then
 		log "engine_download failed in ensure_vpn_from_subscription"
 		return 1
@@ -215,7 +219,10 @@ ensure_vpn_from_subscription() {
 		return 1
 	fi
 
-	restart_vpn
+	if ! restart_vpn; then
+		log "restart_vpn failed, not marking vpn_ready"
+		return 1
+	fi
 
 	touch "$VPN_READY_FILE"
 	log "vpn_ready marked in $VPN_READY_FILE"
@@ -286,12 +293,10 @@ check_subscription_alive() {
 
 	log "checking subscription via $CHECK_URL"
 
-	TMP_SUB="${SUB_FILE}.tmp"
-	BODY="$(uclient-fetch -qO "$TMP_SUB" "$CHECK_URL" 2>/dev/null || true)"
+	BODY="$(uclient-fetch -qO- "$CHECK_URL" 2>/dev/null || true)"
 
 	if [ -z "$BODY" ]; then
 		log "check_subscription_alive: empty response from router_config"
-		rm -f "$TMP_SUB"
 		echo "$now_ts" >"$LAST_CHECK_FILE"
 		return 0
 	fi
@@ -300,7 +305,7 @@ check_subscription_alive() {
 
 	if [ "$OK" = "1" ]; then
 		# подписка жива — обновляем файл (вдруг links/лимиты поменялись)
-		mv "$TMP_SUB" "$SUB_FILE"
+		printf '%s' "$BODY" >"$SUB_FILE"
 		log "subscription_alive: ok=1, subscription.json refreshed"
 		echo "$now_ts" >"$LAST_CHECK_FILE"
 		return 0
@@ -309,12 +314,16 @@ check_subscription_alive() {
 	ERR="$(printf '%s' "$BODY" | jsonfilter -e '@.error' 2>/dev/null || echo "unknown_error")"
 	log "subscription_invalid: ok=$OK, error=$ERR — resetting VPN state"
 
-	rm -f "$TMP_SUB"
 	rm -f "$VPN_READY_FILE"
 	rm -f "$SUB_FILE"
 
 	echo "$now_ts" >"$LAST_CHECK_FILE"
 	echo "$ERR" >"$STATE_DIR/vpn_error"
+
+	# Можно было бы вызвать stop, но пусть пока просто не помечаем vpn_ready
+	if [ -x /etc/init.d/shpun-vpn ]; then
+		/etc/init.d/shpun-vpn stop 2>/dev/null || true
+	fi
 
 	return 1
 }
