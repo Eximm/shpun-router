@@ -112,12 +112,6 @@ cat >"$OUT_CFG" <<EOF
       "inet4_address": "172.19.0.1/30",
       "auto_route": true,
       "strict_route": true
-    },
-    {
-      "type": "dns",
-      "tag": "dns-in",
-      "listen": "127.0.0.1",
-      "listen_port": 5353
     }
   ],
 
