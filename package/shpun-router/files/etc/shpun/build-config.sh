@@ -1,7 +1,16 @@
 #!/bin/sh
+# shellcheck disable=SC1090
 
 SUB_FILE="/etc/shpun/subscription.json"
 OUT_CFG="/etc/shpun/sing-box.json"
+CONF="/etc/shpun/agent.conf"
+
+# Подхватываем опции, если есть
+[ -f "$CONF" ] && . "$CONF"
+
+# Флаг: включать ли DNS inbound (127.0.0.1:5353) в конфиге sing-box
+# По умолчанию ВЫКЛЮЧЕНО (0), чтобы не словить FATAL/зависон.
+DNS_INBOUND_ENABLED="${DNS_INBOUND_ENABLED:-0}"
 
 [ -f "$SUB_FILE" ] || {
     logger -t shpun-build "No subscription file"
@@ -62,7 +71,7 @@ esac
 [ -n "$HOST_HDR" ] || HOST_HDR="$SERVER"
 [ -n "$SNI" ]      || SNI="$HOST_HDR"
 
-# Базовая валидация — если чего-то критично не хватает, лучше не писать битый конфиг
+# Базовая валидация
 if [ -z "$UUID" ] || [ -z "$SERVER" ] || [ -z "$PORT" ]; then
     logger -t shpun-build "Invalid VLESS link: uuid='$UUID' server='$SERVER' port='$PORT'"
     exit 1
@@ -88,17 +97,20 @@ cat >"$OUT_CFG" <<EOF
     "servers": [
       {
         "tag": "dns-1",
-        "address": "1.1.1.1",
+        "type": "udp",
+        "server": "1.1.1.1",
         "detour": "direct"
       },
       {
         "tag": "dns-2",
-        "address": "8.8.8.8",
+        "type": "udp",
+        "server": "8.8.8.8",
         "detour": "direct"
       },
       {
         "tag": "dns-3",
-        "address": "9.9.9.9",
+        "type": "udp",
+        "server": "9.9.9.9",
         "detour": "direct"
       }
     ],
@@ -109,20 +121,18 @@ cat >"$OUT_CFG" <<EOF
     {
       "type": "tun",
       "tag": "tun-in",
-      "inet4_address": "172.19.0.1/30",
+      "address": [
+        "172.19.0.1/30"
+      ],
       "auto_route": true,
       "strict_route": true
-    }
+    }$( [ "$DNS_INBOUND_ENABLED" = "1" ] && printf ',\n    {\n      "type": "dns",\n      "tag": "dns-in",\n      "address": "127.0.0.1",\n      "port": 5353\n    }' )
   ],
 
   "outbounds": [
     {
       "type": "direct",
       "tag": "direct"
-    },
-    {
-      "type": "block",
-      "tag": "block"
     },
     {
       "type": "vless",
@@ -160,7 +170,7 @@ cat >"$OUT_CFG" <<EOF
           "192.168.0.0/16"
         ],
         "outbound": "direct"
-      },
+      }$( [ "$DNS_INBOUND_ENABLED" = "1" ] && printf ',\n      {\n        "inbound": "dns-in",\n        "outbound": "direct"\n      }' ),
       {
         "outbound": "proxy"
       }
@@ -169,5 +179,5 @@ cat >"$OUT_CFG" <<EOF
 }
 EOF
 
-logger -t shpun-build "Config built for $SERVER:$PORT (uuid=$UUID, path=$PATH_DEC, type=$TYPE)"
+logger -t shpun-build "Config built for $SERVER:$PORT (uuid=$UUID, path=$PATH_DEC, type=$TYPE, dns_inbound=$DNS_INBOUND_ENABLED)"
 exit 0
