@@ -5,14 +5,43 @@ START=95
 USE_PROCD=1
 SERVICE_DAEMONIZE=0
 
+PROG="/etc/shpun/agent.sh"
+CONF="/etc/shpun/agent.conf"
+
 start_service() {
+	# Не стартуем, если нет скрипта агента
+	[ -x "$PROG" ] || {
+		logger -t shpun-agent "Agent script not found or not executable: $PROG"
+		return 1
+	}
+
 	procd_open_instance
-	procd_set_param command /etc/shpun/agent.sh
-	procd_set_param respawn 300 5 0
+	procd_set_param command "$PROG"
+	# Менее агрессивный respawn: не чаще раза в 60 секунд
+	#   respawn <timeout> <max_retry> <retry_interval>
+	#   timeout       – минимальный аптайм процесса, чтобы не считать падением
+	#   max_retry     – макс. число рестартов за retry_interval
+	#   retry_interval – окно времени в секундах
+	procd_set_param respawn 60 5 300
+
+	# Понижаем приоритет, чтобы агент не мешал маршрутизации/свитчу
+	procd_set_param nice 10
+
+	# На будущее: можно использовать в agent.sh, если захочешь
+	#   [ -n "$SHPUN_CONF" ] && . "$SHPUN_CONF"
+	procd_set_param env SHPUN_CONF="$CONF"
+
 	procd_close_instance
 }
 
 stop_service() {
-	# procd сам убьёт процесс
+	# procd сам корректно убьёт процесс
 	:
+}
+
+reload_service() {
+	# Для простоты: при reload просто перезапускаем агент,
+	# чтобы он перечитал /etc/shpun/agent.conf, если его правили.
+	stop
+	start
 }

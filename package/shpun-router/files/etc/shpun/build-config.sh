@@ -8,16 +8,20 @@ CONF="/etc/shpun/agent.conf"
 # Подхватываем опции, если есть
 [ -f "$CONF" ] && . "$CONF"
 
-# Флаг: включать ли DNS inbound (127.0.0.1:5353) в конфиге sing-box
-# По умолчанию ВЫКЛЮЧЕНО (0), чтобы не словить FATAL/зависон.
-DNS_INBOUND_ENABLED="${DNS_INBOUND_ENABLED:-0}"
+# Можно переопределить в /etc/shpun/agent.conf:
+#   DNS_ADDR1="77.88.8.8"
+#   DNS_ADDR2="1.1.1.1"
+#   TUN_MTU="1450"
+DNS_ADDR1="${DNS_ADDR1:-9.9.9.9}"
+DNS_ADDR2="${DNS_ADDR2:-8.8.8.8}"
+TUN_MTU="${TUN_MTU:-1450}"
 
 [ -f "$SUB_FILE" ] || {
-    logger -t shpun-build "No subscription file"
+    logger -t shpun-build "No subscription file: $SUB_FILE"
     exit 1
 }
 
-# первый линк из массива links[]
+# первый линк из массива links[0] (для RouterVPN он всегда Reality)
 LINK="$(jsonfilter -i "$SUB_FILE" -e '@.subscription.links[0]' 2>/dev/null)"
 
 [ -n "$LINK" ] || {
@@ -28,6 +32,15 @@ LINK="$(jsonfilter -i "$SUB_FILE" -e '@.subscription.links[0]' 2>/dev/null)"
 # убираем кавычки, если jsonfilter вернул с ними
 LINK="${LINK%\"}"
 LINK="${LINK#\"}"
+
+# ожидаем vless://UUID@server:port?security=reality&pbk=...&sid=...&spx=/...
+case "$LINK" in
+    vless://*) ;;
+    *)
+        logger -t shpun-build "Invalid link scheme (expected vless://): $LINK"
+        exit 1
+        ;;
+esac
 
 # убираем префикс vless://
 LINK_NO_PROTO="${LINK#vless://}"
@@ -46,32 +59,46 @@ QUERY="${REST#*\?}"
 QUERY="${QUERY%%#*}"
 
 get_param() {
+    # простой парсер параметров вида key=value в QUERY
     echo "$QUERY" | tr '&' '\n' | awk -F= -v k="$1" '$1==k {print $2}'
 }
 
-PATH_ENC="$(get_param path)"
-HOST_HDR="$(get_param host)"
+SECURITY="$(get_param security)"
+PBK_ENC="$(get_param pbk)"
+SID_ENC="$(get_param sid)"
+SPX_ENC="$(get_param spx)"
 SNI="$(get_param sni)"
-TYPE="$(get_param type)"
 
-[ -n "$TYPE" ] || TYPE="ws"
-
-# Декодируем хотя бы %2F -> / и гарантируем, что путь начинается с "/"
-if [ -n "$PATH_ENC" ]; then
-    PATH_DEC="$(printf '%s' "$PATH_ENC" | sed -e 's/%2[Ff]/\//g')"
-else
-    PATH_DEC="/vless"
+# Базовая валидация Reality
+if [ "$SECURITY" != "reality" ] && [ -z "$PBK_ENC" ] && [ -z "$SID_ENC" ]; then
+    logger -t shpun-build "Non-Reality link, router expects Reality only (security='$SECURITY')"
+    exit 1
 fi
 
-case "$PATH_DEC" in
+# pbk / sid / spx
+PBK="$PBK_ENC"
+SID="$SID_ENC"
+[ -z "$PBK" ] && PBK="dummy_pbk"
+[ -z "$SID" ] && SID=""
+
+# spx → spider_x; по умолчанию корень
+if [ -n "$SPX_ENC" ]; then
+    # Декодируем хотя бы %2F -> /
+    SPX_DEC="$(printf '%s' "$SPX_ENC" | sed -e 's/%2[Ff]/\//g')"
+else
+    SPX_DEC="/"
+fi
+
+# гарантируем, что spider_x начинается с "/"
+case "$SPX_DEC" in
     /*) ;;
-    *) PATH_DEC="/$PATH_DEC" ;;
+    *) SPX_DEC="/$SPX_DEC" ;;
 esac
 
-[ -n "$HOST_HDR" ] || HOST_HDR="$SERVER"
-[ -n "$SNI" ]      || SNI="$HOST_HDR"
+# SNI по умолчанию = SERVER
+[ -n "$SNI" ] || SNI="$SERVER"
 
-# Базовая валидация
+# Базовая валидация UUID/SERVER/PORT
 if [ -z "$UUID" ] || [ -z "$SERVER" ] || [ -z "$PORT" ]; then
     logger -t shpun-build "Invalid VLESS link: uuid='$UUID' server='$SERVER' port='$PORT'"
     exit 1
@@ -85,11 +112,12 @@ case "$PORT" in
         ;;
 esac
 
+# Генерируем ОДИН лёгкий конфиг sing-box под VLESS TCP Reality
 cat >"$OUT_CFG" <<EOF
 {
   "log": {
     "disabled": false,
-    "level": "info",
+    "level": "error",
     "timestamp": true
   },
 
@@ -97,18 +125,13 @@ cat >"$OUT_CFG" <<EOF
     "servers": [
       {
         "tag": "dns-1",
-        "type": "udp",
-        "server": "1.1.1.1"
+        "address": "$DNS_ADDR1",
+        "detour": "direct"
       },
       {
         "tag": "dns-2",
-        "type": "udp",
-        "server": "8.8.8.8"
-      },
-      {
-        "tag": "dns-3",
-        "type": "udp",
-        "server": "9.9.9.9"
+        "address": "$DNS_ADDR2",
+        "detour": "direct"
       }
     ],
     "strategy": "ipv4_only"
@@ -118,46 +141,57 @@ cat >"$OUT_CFG" <<EOF
     {
       "type": "tun",
       "tag": "tun-in",
-      "address": [
-        "172.19.0.1/30"
-      ],
+      "interface_name": "tun0",
+      "inet4_address": "172.19.0.1/30",
+      "mtu": $TUN_MTU,
       "auto_route": true,
       "strict_route": true
-    }$( [ "$DNS_INBOUND_ENABLED" = "1" ] && printf ',\n    {\n      "type": "dns",\n      "tag": "dns-in",\n      "address": "127.0.0.1",\n      "port": 5353\n    }' )
+    }
   ],
 
   "outbounds": [
+    {
+      "type": "vless",
+      "tag": "vpn-out",
+      "server": "$SERVER",
+      "server_port": $PORT,
+      "uuid": "$UUID",
+      "flow": "",
+      "packet_encoding": "",
+      "transport": {
+        "type": "tcp"
+      },
+      "tls": {
+        "enabled": true,
+        "server_name": "$SNI",
+        "reality": {
+          "enabled": true,
+          "public_key": "$PBK",
+          "short_id": "$SID",
+          "spider_x": "$SPX_DEC"
+        }
+      }
+    },
     {
       "type": "direct",
       "tag": "direct"
     },
     {
-      "type": "vless",
-      "tag": "proxy",
-      "server": "$SERVER",
-      "server_port": $PORT,
-      "uuid": "$UUID",
-      "flow": "",
-      "tls": {
-        "enabled": true,
-        "server_name": "$SNI",
-        "utls": {
-          "enabled": true,
-          "fingerprint": "chrome"
-        }
-      },
-      "transport": {
-        "type": "$TYPE",
-        "path": "$PATH_DEC",
-        "headers": {
-          "Host": "$HOST_HDR"
-        }
-      }
+      "type": "block",
+      "tag": "block"
     }
   ],
 
   "route": {
-    "auto_detect_interface": true,
+    "default_domain_resolver": "dns-1",
+    "geoip": {
+      "download_url": "",
+      "download_detour": "direct"
+    },
+    "geosite": {
+      "download_url": "",
+      "download_detour": "direct"
+    },
     "rules": [
       {
         "ip_cidr": [
@@ -167,14 +201,12 @@ cat >"$OUT_CFG" <<EOF
           "192.168.0.0/16"
         ],
         "outbound": "direct"
-      }$( [ "$DNS_INBOUND_ENABLED" = "1" ] && printf ',\n      {\n        "inbound": "dns-in",\n        "outbound": "direct"\n      }' ),
-      {
-        "outbound": "proxy"
       }
-    ]
+    ],
+    "final": "vpn-out"
   }
 }
 EOF
 
-logger -t shpun-build "Config built for $SERVER:$PORT (uuid=$UUID, path=$PATH_DEC, type=$TYPE, dns_inbound=$DNS_INBOUND_ENABLED)"
+logger -t shpun-build "Config built (Reality) for $SERVER:$PORT (uuid=$UUID, sni=$SNI, spider_x=$SPX_DEC, dns1=$DNS_ADDR1, dns2=$DNS_ADDR2, mtu=$TUN_MTU)"
 exit 0
