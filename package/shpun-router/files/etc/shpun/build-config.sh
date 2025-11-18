@@ -68,7 +68,7 @@ SNI="$(get_param sni)"
 if [ "$SECURITY" != "reality" ] && [ -z "$PBK_ENC" ] && [ -z "$SID_ENC" ]; then
     logger -t shpun-build "Non-Reality link, router expects Reality only (security='$SECURITY')"
     exit 1
-fi`
+fi
 
 PBK="$PBK_ENC"
 SID="$SID_ENC"
