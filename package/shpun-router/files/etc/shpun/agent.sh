@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# shpun-agent (новая схема с проверкой подписки)
+# shpun-agent (новая схема с проверкой подписки + failsafe)
 #
 # Логика:
 #   1) Получаем / читаем router_code.
@@ -10,7 +10,7 @@
 #       - из ответа берём config_url (router_config) и скачиваем subscription.json
 #   3) Если subscription.json уже есть:
 #       - докачиваем движок (ENGINE_URL из agent.conf)
-#       - вызываем /etc/shpun/build-config.sh -> генерим sing-box.json
+#       - вызываем /etc/shpun/build-config.sh -> генерим sing-box.json (Reality)
 #       - стартуем shpun-vpn, ставим vpn_ready
 #   4) Периодически (SUB_CHECK_INTERVAL) валидируем подписку:
 #       - читаем uid/usi из subscription.json
@@ -19,6 +19,10 @@
 #       - если ok!=1 (pair_not_found, no_links_in_service и т.п.) — сбрасываем VPN:
 #           * удаляем subscription.json и vpn_ready
 #           * ждём новую привязку (шаг 2)
+#   5) Failsafe:
+#       - если uptime < MIN_UPTIME (120с по умолчанию) — VPN не трогаем
+#       - если при активном VPN нет интернета NET_FAIL_TIMEOUT (60с по умолчанию) —
+#         останавливаем shpun-vpn и снимаем vpn_ready
 
 STATE_DIR="/etc/shpun"
 CODE_FILE="$STATE_DIR/router_code"
@@ -31,6 +35,11 @@ LOG_TAG="shpun-agent"
 
 API_URL_DEFAULT="https://bill.shpyn.online/shm/v1/public/router_public"
 SUB_CHECK_INTERVAL_DEFAULT=21600  # 6 часов
+
+# Failsafe дефолты (можно переопределить в agent.conf)
+MIN_UPTIME_DEFAULT=120        # не трогать VPN, пока роутер не проработал 2 минуты
+NET_FAIL_TIMEOUT_DEFAULT=60   # если нет интернета 60 секунд при активном VPN — стоп
+MAIN_LOOP_SLEEP_DEFAULT=30    # задержка основного цикла
 
 log() {
 	logger -t "$LOG_TAG" "$*"
@@ -45,6 +54,21 @@ load_conf() {
 	[ -z "$ENGINE_BIN" ]         && ENGINE_BIN="/tmp/sing-box"
 	[ -z "$ENGINE_CONFIG" ]      && ENGINE_CONFIG="/etc/shpun/sing-box.json"
 	[ -z "$SUB_CHECK_INTERVAL" ] && SUB_CHECK_INTERVAL="$SUB_CHECK_INTERVAL_DEFAULT"
+
+	# Failsafe параметры (можно задавать в agent.conf)
+	[ -z "$MIN_UPTIME" ]       && MIN_UPTIME="$MIN_UPTIME_DEFAULT"
+	[ -z "$NET_FAIL_TIMEOUT" ] && NET_FAIL_TIMEOUT="$NET_FAIL_TIMEOUT_DEFAULT"
+	[ -z "$MAIN_LOOP_SLEEP" ]  && MAIN_LOOP_SLEEP="$MAIN_LOOP_SLEEP_DEFAULT"
+
+	# Хост для ping-проверки интернета: по умолчанию DNS_ADDR1 (если задан),
+	# иначе 8.8.8.8. Можно переопределить PING_HOST в agent.conf.
+	if [ -z "$PING_HOST" ]; then
+		if [ -n "$DNS_ADDR1" ]; then
+			PING_HOST="$DNS_ADDR1"
+		else
+			PING_HOST="8.8.8.8"
+		fi
+	fi
 }
 
 ensure_state_dir() {
@@ -115,8 +139,7 @@ engine_download() {
 		return 1
 	fi
 
-	# Раньше тут была проверка SHA256, которая нагружала CPU (sha256sum на слабом железе).
-	# Сейчас сознательно убрали, чтобы агент не вешал роутер.
+	# Проверку SHA256 убрали сознательно (дорого по CPU на слабом железе)
 
 	log "engine downloaded and ready: $ENGINE_BIN"
 	return 0
@@ -135,6 +158,19 @@ restart_vpn() {
 	fi
 
 	return 0
+}
+
+# --- uptime и проверка интернета для failsafe --- #
+
+get_uptime_secs() {
+	# /proc/uptime: "<seconds> <idle>"
+	awk -F. '{print $1}' /proc/uptime 2>/dev/null || echo 0
+}
+
+check_internet() {
+	# Пингуем один раз с таймаутом 1 сек.
+	# При активном VPN этого достаточно, чтобы понять, не схлопнулось ли всё в /dev/null.
+	ping -c1 -W1 "$PING_HOST" >/dev/null 2>&1
 }
 
 # --- запрос router_public и скачивание subscription.json через router_config --- #
@@ -320,7 +356,6 @@ check_subscription_alive() {
 	echo "$now_ts" >"$LAST_CHECK_FILE"
 	echo "$ERR" >"$STATE_DIR/vpn_error"
 
-	# Можно было бы вызвать stop, но пусть пока просто не помечаем vpn_ready
 	if [ -x /etc/init.d/shpun-vpn ]; then
 		/etc/init.d/shpun-vpn stop 2>/dev/null || true
 	fi
@@ -332,10 +367,44 @@ main_loop() {
 	load_conf
 	ensure_state_dir
 
-	log "shpun-agent started (API_URL=$API_URL, ENGINE_BIN=$ENGINE_BIN)"
+	log "shpun-agent started (API_URL=$API_URL, ENGINE_BIN=$ENGINE_BIN, MIN_UPTIME=$MIN_UPTIME, NET_FAIL_TIMEOUT=$NET_FAIL_TIMEOUT, PING_HOST=$PING_HOST)"
+
+	NET_FAIL_SECONDS=0
 
 	while :; do
 		load_conf
+
+		# --- 0) Failsafe: ждём, пока роутер хотя бы MIN_UPTIME секунд живёт ---
+		UPTIME_SECS="$(get_uptime_secs)"
+		if [ "$UPTIME_SECS" -lt "$MIN_UPTIME" ]; then
+			log "uptime ${UPTIME_SECS}s < ${MIN_UPTIME}s, waiting before managing VPN"
+			sleep "$MAIN_LOOP_SLEEP"
+			continue
+		fi
+
+		# --- 0.5) Failsafe: если VPN активен, проверяем интернет ---
+		if [ -s "$VPN_READY_FILE" ]; then
+			if check_internet; then
+				# интернет есть — сбрасываем счётчик
+				[ "$NET_FAIL_SECONDS" -gt 0 ] && log "internet is back, resetting fail counter (was ${NET_FAIL_SECONDS}s)"
+				NET_FAIL_SECONDS=0
+			else
+				NET_FAIL_SECONDS=$((NET_FAIL_SECONDS + MAIN_LOOP_SLEEP))
+				log "no internet detected for ${NET_FAIL_SECONDS}s while VPN is active"
+
+				if [ "$NET_FAIL_SECONDS" -ge "$NET_FAIL_TIMEOUT" ]; then
+					log "no internet for ${NET_FAIL_SECONDS}s (>= ${NET_FAIL_TIMEOUT}s), stopping shpun-vpn and clearing vpn_ready"
+					if [ -x /etc/init.d/shpun-vpn ]; then
+						/etc/init.d/shpun-vpn stop 2>/dev/null || true
+					fi
+					rm -f "$VPN_READY_FILE"
+					NET_FAIL_SECONDS=0
+					# после этого в следующей итерации ensure_vpn_from_subscription попробует поднять VPN заново
+				fi
+			fi
+		else
+			NET_FAIL_SECONDS=0
+		fi
 
 		# 1) если ещё нет subscription.json — ждём её через router_public/router_config
 		if [ ! -s "$SUB_FILE" ]; then
@@ -351,7 +420,7 @@ main_loop() {
 		fi
 
 		# основной цикл не должен жрать CPU
-		sleep 30
+		sleep "$MAIN_LOOP_SLEEP"
 	done
 }
 

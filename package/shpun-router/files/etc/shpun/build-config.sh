@@ -112,7 +112,7 @@ case "$PORT" in
         ;;
 esac
 
-# Генерируем ОДИН лёгкий конфиг sing-box под VLESS TCP Reality
+# Генерируем ОДИН лёгкий конфиг sing-box под VLESS TCP Reality (без transport)
 cat >"$OUT_CFG" <<EOF
 {
   "log": {
@@ -158,9 +158,6 @@ cat >"$OUT_CFG" <<EOF
       "uuid": "$UUID",
       "flow": "",
       "packet_encoding": "",
-      "transport": {
-        "type": "tcp"
-      },
       "tls": {
         "enabled": true,
         "server_name": "$SNI",
