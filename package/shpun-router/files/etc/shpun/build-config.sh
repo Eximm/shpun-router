@@ -81,15 +81,12 @@ SID="$SID_ENC"
 [ -z "$PBK" ] && PBK="dummy_pbk"
 [ -z "$SID" ] && SID=""
 
-# spx → spider_x; по умолчанию корень
+# spx → для логов, но в конфиг не пишем (старый sing-box не знает spider_x)
 if [ -n "$SPX_ENC" ]; then
-    # Декодируем хотя бы %2F -> /
     SPX_DEC="$(printf '%s' "$SPX_ENC" | sed -e 's/%2[Ff]/\//g')"
 else
     SPX_DEC="/"
 fi
-
-# гарантируем, что spider_x начинается с "/"
 case "$SPX_DEC" in
     /*) ;;
     *) SPX_DEC="/$SPX_DEC" ;;
@@ -112,7 +109,7 @@ case "$PORT" in
         ;;
 esac
 
-# Генерируем ОДИН лёгкий конфиг sing-box под VLESS TCP Reality (без transport)
+# Генерируем ОДИН лёгкий конфиг sing-box под VLESS Reality (без transport, без spider_x)
 cat >"$OUT_CFG" <<EOF
 {
   "log": {
@@ -164,8 +161,7 @@ cat >"$OUT_CFG" <<EOF
         "reality": {
           "enabled": true,
           "public_key": "$PBK",
-          "short_id": "$SID",
-          "spider_x": "$SPX_DEC"
+          "short_id": "$SID"
         }
       }
     },
@@ -205,5 +201,5 @@ cat >"$OUT_CFG" <<EOF
 }
 EOF
 
-logger -t shpun-build "Config built (Reality) for $SERVER:$PORT (uuid=$UUID, sni=$SNI, spider_x=$SPX_DEC, dns1=$DNS_ADDR1, dns2=$DNS_ADDR2, mtu=$TUN_MTU)"
+logger -t shpun-build "Config built (Reality) for $SERVER:$PORT (uuid=$UUID, sni=$SNI, path=$SPX_DEC, dns1=$DNS_ADDR1, dns2=$DNS_ADDR2, mtu=$TUN_MTU)"
 exit 0

@@ -4,17 +4,15 @@
 # 1. Register shpun ucode backend in rpcd
 # ==========================
 uci -q delete rpcd.shpun
-uci set rpcd.shpun=ucode
+uci set rpcd.shpun='ucode'
 uci set rpcd.shpun.script='/usr/share/rpcd/ucode/shpun.uc'
+uci set rpcd.shpun.acl='shpun'
 uci commit rpcd
-
-# Перезапускаем rpcd, чтобы backend подцепился
-/etc/init.d/rpcd restart 2>/dev/null || true
-
 
 # ==========================
 # 2. Configure network interface vpn -> tun0
 # ==========================
+
 uci set network.vpn='interface'
 uci set network.vpn.proto='none'
 
@@ -24,10 +22,10 @@ uci set network.vpn.device='tun0'
 
 uci commit network
 
-
 # ==========================
 # 3. Add vpn to wan firewall zone
 # ==========================
+
 WAN_ZONE_SECTION=""
 
 # Попытка №1: типовая @zone[1]
@@ -49,6 +47,21 @@ else
 fi
 
 # ==========================
-# 4. Restart network & firewall
+# 4. Delayed restarts (rpcd, network, firewall)
+#    чтобы не рвать LuCI/ubus во время opkg install
 # ==========================
-/etc/init.d/network restart 2>/dev/null || t
+
+(
+    sleep 5
+    /etc/init.d/rpcd restart >/dev/null 2>&1 || true
+    /etc/init.d/network restart >/dev/null 2>&1 || true
+    /etc/init.d/firewall restart >/dev/null 2>&1 || true
+) &
+
+# ==========================
+# 5. Remove this uci-defaults script
+# ==========================
+
+rm -f /etc/uci-defaults/99_shpun-router
+
+exit 0
