@@ -81,7 +81,7 @@ SID="$SID_ENC"
 [ -z "$PBK" ] && PBK="dummy_pbk"
 [ -z "$SID" ] && SID=""
 
-# spx → для логов, но в конфиг не пишем (старый sing-box не знает spider_x)
+# spx → только для логов (в конфиг не пишем, т.к. spider_x не поддерживается этой версией)
 if [ -n "$SPX_ENC" ]; then
     SPX_DEC="$(printf '%s' "$SPX_ENC" | sed -e 's/%2[Ff]/\//g')"
 else
@@ -109,7 +109,7 @@ case "$PORT" in
         ;;
 esac
 
-# Генерируем ОДИН лёгкий конфиг sing-box под VLESS Reality (без transport, без spider_x)
+# Генерируем ОДИН лёгкий конфиг sing-box под VLESS Reality (без transport, со встроенным uTLS)
 cat >"$OUT_CFG" <<EOF
 {
   "log": {
@@ -158,6 +158,10 @@ cat >"$OUT_CFG" <<EOF
       "tls": {
         "enabled": true,
         "server_name": "$SNI",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
         "reality": {
           "enabled": true,
           "public_key": "$PBK",
