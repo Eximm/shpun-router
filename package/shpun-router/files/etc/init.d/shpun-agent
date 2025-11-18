@@ -2,6 +2,7 @@
 # shellcheck disable=SC2034
 
 START=95
+STOP=10
 USE_PROCD=1
 SERVICE_DAEMONIZE=0
 
@@ -17,10 +18,11 @@ start_service() {
 
 	procd_open_instance
 	procd_set_param command "$PROG"
+
 	# Менее агрессивный respawn: не чаще раза в 60 секунд
 	#   respawn <timeout> <max_retry> <retry_interval>
-	#   timeout       – минимальный аптайм процесса, чтобы не считать падением
-	#   max_retry     – макс. число рестартов за retry_interval
+	#   timeout        – минимальный аптайм процесса, чтобы не считать падением
+	#   max_retry      – макс. число рестартов за retry_interval
 	#   retry_interval – окно времени в секундах
 	procd_set_param respawn 60 5 300
 

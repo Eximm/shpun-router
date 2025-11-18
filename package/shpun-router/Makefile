@@ -6,6 +6,7 @@ PKG_RELEASE:=1
 PKG_MAINTAINER:=Eximm
 PKG_LICENSE:=MIT
 
+# Универсальная архитектура, чтобы ставилось на любой OpenWrt 24.10+
 PKGARCH:=all
 
 include $(INCLUDE_DIR)/package.mk
@@ -15,7 +16,7 @@ define Package/shpun-router
   CATEGORY:=Network
   SUBMENU:=VPN
   TITLE:=Shpun Router integration (ucode backend)
-  DEPENDS:=+luci-base +uclient-fetch +jsonfilter +ucode +ucode-mod-fs +ucode-mod-uci +rpcd-mod-ucode +kmod-tun
+  DEPENDS:=+luci-base +uclient-fetch +jsonfilter +ucode +ucode-mod-fs +ucode-mod-uci +rpcd-mod-ucode
 endef
 
 define Package/shpun-router/description
@@ -63,7 +64,7 @@ define Package/shpun-router/install
 	$(INSTALL_DATA) ./files/etc/shpun/agent.conf \
 		$(1)/etc/shpun/agent.conf
 
-	# --- DNS fallback для dnsmasq ---
+	# --- dnsmasq.d ---
 	$(INSTALL_DIR) $(1)/etc/dnsmasq.d
 	$(INSTALL_DATA) ./files/etc/dnsmasq.d/shpun-dns.conf \
 		$(1)/etc/dnsmasq.d/shpun-dns.conf
@@ -82,7 +83,6 @@ define Package/shpun-router/install
 	$(INSTALL_DIR) $(1)/usr/share/luci/status/include
 	$(INSTALL_DATA) ./files/usr/share/luci/status/include/shpunvpn.json \
 		$(1)/usr/share/luci/status/include/shpunvpn.json
-
 	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/view/status/include
 	$(INSTALL_DATA) ./files/usr/lib/lua/luci/view/status/include/20_shpunvpn.htm \
 		$(1)/usr/lib/lua/luci/view/status/include/20_shpunvpn.htm
@@ -105,13 +105,13 @@ define Package/shpun-router/postinst
     touch /etc/shpun/first_run
 
     /etc/init.d/shpun-agent enable 2>/dev/null || true
+    /etc/init.d/shpun-agent restart 2>/dev/null || true
     /etc/init.d/shpun-vpn enable 2>/dev/null || true
 
-    # Стартуем агент один раз, дальше он живёт сам
-    /etc/init.d/shpun-agent restart 2>/dev/null || true
+    /etc/init.d/rpcd restart 2>/dev/null || true
 
-    # rpcd/uhttpd/network/firewall мягко перезапускаются в 99_shpun-router с задержкой,
-    # чтобы не рвать LuCI во время opkg install.
+    rm -f /tmp/luci-indexcache /tmp/luci-modulecache/* 2>/dev/null || true
+    /etc/init.d/uhttpd reload 2>/dev/null || /etc/init.d/uhttpd restart 2>/dev/null || true
 }
 exit 0
 endef

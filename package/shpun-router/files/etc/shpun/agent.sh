@@ -260,7 +260,8 @@ ensure_vpn_from_subscription() {
 		return 1
 	fi
 
-	touch "$VPN_READY_FILE"
+	# ВАЖНО: пишем что-то в файл, чтобы -s видел его как "существующий и непустой"
+	echo "ok" >"$VPN_READY_FILE"
 	log "vpn_ready marked in $VPN_READY_FILE"
 
 	return 0
