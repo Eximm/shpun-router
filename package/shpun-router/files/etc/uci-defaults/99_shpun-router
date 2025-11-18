@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # ==========================
-# 1. Register shpun ucode backend in rpcd
+# 1. Зарегистрировать ucode backend shpun в rpcd
 # ==========================
 uci -q delete rpcd.shpun
 uci set rpcd.shpun='ucode'
@@ -10,22 +10,46 @@ uci set rpcd.shpun.acl='shpun'
 uci commit rpcd
 
 # ==========================
-# 2. Configure network interface vpn -> tun0
+# 2. Создать интерфейс network.vpn -> tun0
 # ==========================
-
 uci set network.vpn='interface'
 uci set network.vpn.proto='none'
-
-# Для совместимости: и ifname, и device
 uci set network.vpn.ifname='tun0'
 uci set network.vpn.device='tun0'
-
 uci commit network
 
 # ==========================
-# 3. Add vpn to wan firewall zone
+# 3. Отключить IPv6 на LAN/WAN + DHCPv6/RA (минимум лишней нагрузки)
 # ==========================
 
+# LAN/WAN: выключить IPv6
+if uci -q get network.lan >/dev/null 2>&1; then
+    uci set network.lan.ipv6='0'
+fi
+if uci -q get network.wan >/dev/null 2>&1; then
+    uci set network.wan.ipv6='0'
+fi
+
+# DHCP/RA: LAN
+if uci -q get dhcp.lan >/dev/null 2>&1; then
+    uci set dhcp.lan.dhcpv6='disabled'
+    uci set dhcp.lan.ra='disabled'
+    uci set dhcp.lan.ndp='disabled'
+fi
+
+# DHCP/RA: WAN
+if uci -q get dhcp.wan >/dev/null 2>&1; then
+    uci set dhcp.wan.dhcpv6='disabled'
+    uci set dhcp.wan.ra='disabled'
+    uci set dhcp.wan.ndp='disabled'
+fi
+
+uci commit dhcp
+uci commit network
+
+# ==========================
+# 4. Добавить vpn в зону firewall "wan"
+# ==========================
 WAN_ZONE_SECTION=""
 
 # Попытка №1: типовая @zone[1]
@@ -47,8 +71,16 @@ else
 fi
 
 # ==========================
-# 4. Delayed restarts (rpcd, network, firewall)
-#    чтобы не рвать LuCI/ubus во время opkg install
+# 5. Убедиться, что dnsmasq читает /etc/dnsmasq.d
+# ==========================
+if uci -q get dhcp.@dnsmasq[0] >/dev/null 2>&1; then
+    uci set dhcp.@dnsmasq[0].confdir='/etc/dnsmasq.d'
+    uci commit dhcp
+fi
+
+# ==========================
+# 6. Отложенные рестарты (rpcd, network, firewall, dnsmasq)
+#    чтобы не рвать LuCI при установке пакета
 # ==========================
 
 (
@@ -56,12 +88,12 @@ fi
     /etc/init.d/rpcd restart >/dev/null 2>&1 || true
     /etc/init.d/network restart >/dev/null 2>&1 || true
     /etc/init.d/firewall restart >/dev/null 2>&1 || true
+    /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
 ) &
 
 # ==========================
-# 5. Remove this uci-defaults script
+# 7. Удаляем себя
 # ==========================
-
 rm -f /etc/uci-defaults/99_shpun-router
 
 exit 0

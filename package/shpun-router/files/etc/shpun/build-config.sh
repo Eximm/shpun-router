@@ -17,7 +17,7 @@ TUN_MTU="${TUN_MTU:-1450}"
     exit 1
 }
 
-# первый линк из массива links[0] (для RouterVPN он всегда Reality)
+# первый линк из массива links[0] (RouterVPN → Reality)
 LINK="$(jsonfilter -i "$SUB_FILE" -e '@.subscription.links[0]' 2>/dev/null)"
 
 [ -n "$LINK" ] || {
@@ -101,7 +101,7 @@ case "$PORT" in
         ;;
 esac
 
-# Генерируем максимально простой конфиг: без dns-блока вообще
+# Генерируем максимально простой конфиг: нет dns-блока, IPv4-only, Reality+uTLS
 cat >"$OUT_CFG" <<EOF
 {
   "log": {
@@ -154,14 +154,8 @@ cat >"$OUT_CFG" <<EOF
   ],
 
   "route": {
-    "geoip": {
-      "download_url": "",
-      "download_detour": "direct"
-    },
-    "geosite": {
-      "download_url": "",
-      "download_detour": "direct"
-    },
+    "resolve_prefer_ipv6": false,
+    "auto_detect_interface": true,
     "rules": [
       {
         "ip_cidr": [
@@ -178,5 +172,5 @@ cat >"$OUT_CFG" <<EOF
 }
 EOF
 
-logger -t shpun-build "Config built (Reality,no DNS) for $SERVER:$PORT (uuid=$UUID, sni=$SNI, path=$SPX_DEC, mtu=$TUN_MTU)"
+logger -t shpun-build "Config built (Reality,no DNS,IPv4-only) for $SERVER:$PORT (uuid=$UUID, sni=$SNI, path=$SPX_DEC, mtu=$TUN_MTU)"
 exit 0
