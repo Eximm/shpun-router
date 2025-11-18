@@ -68,7 +68,7 @@ SNI="$(get_param sni)"
 if [ "$SECURITY" != "reality" ] && [ -z "$PBK_ENC" ] && [ -z "$SID_ENC" ]; then
     logger -t shpun-build "Non-Reality link, router expects Reality only (security='$SECURITY')"
     exit 1
-fi
+fi`
 
 PBK="$PBK_ENC"
 SID="$SID_ENC"
@@ -101,7 +101,7 @@ case "$PORT" in
         ;;
 esac
 
-# Генерируем максимально простой конфиг: нет dns-блока, IPv4-only, Reality+uTLS
+# Генерируем максимально простой конфиг: нет dns-блока, Reality+uTLS, IPv4-стек за счёт OpenWrt
 cat >"$OUT_CFG" <<EOF
 {
   "log": {
@@ -154,7 +154,6 @@ cat >"$OUT_CFG" <<EOF
   ],
 
   "route": {
-    "resolve_prefer_ipv6": false,
     "auto_detect_interface": true,
     "rules": [
       {
@@ -172,5 +171,5 @@ cat >"$OUT_CFG" <<EOF
 }
 EOF
 
-logger -t shpun-build "Config built (Reality,no DNS,IPv4-only) for $SERVER:$PORT (uuid=$UUID, sni=$SNI, path=$SPX_DEC, mtu=$TUN_MTU)"
+logger -t shpun-build "Config built (Reality,no DNS,IPv4-only,compat) for $SERVER:$PORT (uuid=$UUID, sni=$SNI, path=$SPX_DEC, mtu=$TUN_MTU)"
 exit 0
