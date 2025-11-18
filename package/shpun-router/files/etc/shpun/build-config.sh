@@ -64,16 +64,19 @@ SID_ENC="$(get_param sid)"
 SPX_ENC="$(get_param spx)"
 SNI="$(get_param sni)"
 
-# Базовая валидация Reality
-if [ "$SECURITY" != "reality" ] && [ -z "$PBK_ENC" ] && [ -z "$SID_ENC" ]; then
+# --- Жёсткая проверка Reality ---
+if [ "$SECURITY" != "reality" ]; then
     logger -t shpun-build "Non-Reality link, router expects Reality only (security='$SECURITY')"
+    exit 1
+fi
+
+if [ -z "$PBK_ENC" ] || [ -z "$SID_ENC" ]; then
+    logger -t shpun-build "Reality link missing pbk/sid (pbk='$PBK_ENC', sid='$SID_ENC')"
     exit 1
 fi
 
 PBK="$PBK_ENC"
 SID="$SID_ENC"
-[ -z "$PBK" ] && PBK="dummy_pbk"
-[ -z "$SID" ] && SID=""
 
 # spx → только для логов
 if [ -n "$SPX_ENC" ]; then
@@ -81,6 +84,7 @@ if [ -n "$SPX_ENC" ]; then
 else
     SPX_DEC="/"
 fi
+
 case "$SPX_DEC" in
     /*) ;;
     *) SPX_DEC="/$SPX_DEC" ;;
@@ -101,7 +105,12 @@ case "$PORT" in
         ;;
 esac
 
-# Генерируем максимально простой конфиг: нет dns-блока, Reality+uTLS, IPv4-стек за счёт OpenWrt
+# Генерируем максимально простой конфиг:
+#  - tun inbound с фиксированным адресом 172.19.0.1/30
+#  - добавляем И новый формат address[], И старый inet4_address для совместимости
+#  - один outbound vless (Reality) + direct
+#  - без встроенного DNS, IPv4-стек через OpenWrt/dnsmasq
+
 cat >"$OUT_CFG" <<EOF
 {
   "log": {
@@ -118,6 +127,7 @@ cat >"$OUT_CFG" <<EOF
       "address": [
         "172.19.0.1/30"
       ],
+      "inet4_address": "172.19.0.1/30",
       "mtu": $TUN_MTU,
       "auto_route": true,
       "strict_route": true
