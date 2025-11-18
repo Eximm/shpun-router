@@ -9,11 +9,7 @@ CONF="/etc/shpun/agent.conf"
 [ -f "$CONF" ] && . "$CONF"
 
 # Можно переопределить в /etc/shpun/agent.conf:
-#   DNS_ADDR1="77.88.8.8"
-#   DNS_ADDR2="1.1.1.1"
 #   TUN_MTU="1450"
-DNS_ADDR1="${DNS_ADDR1:-9.9.9.9}"
-DNS_ADDR2="${DNS_ADDR2:-8.8.8.8}"
 TUN_MTU="${TUN_MTU:-1450}"
 
 [ -f "$SUB_FILE" ] || {
@@ -59,7 +55,6 @@ QUERY="${REST#*\?}"
 QUERY="${QUERY%%#*}"
 
 get_param() {
-    # простой парсер параметров вида key=value в QUERY
     echo "$QUERY" | tr '&' '\n' | awk -F= -v k="$1" '$1==k {print $2}'
 }
 
@@ -75,13 +70,12 @@ if [ "$SECURITY" != "reality" ] && [ -z "$PBK_ENC" ] && [ -z "$SID_ENC" ]; then
     exit 1
 fi
 
-# pbk / sid / spx
 PBK="$PBK_ENC"
 SID="$SID_ENC"
 [ -z "$PBK" ] && PBK="dummy_pbk"
 [ -z "$SID" ] && SID=""
 
-# spx → только для логов (в конфиг не пишем, т.к. spider_x не поддерживается этой версией)
+# spx → только для логов
 if [ -n "$SPX_ENC" ]; then
     SPX_DEC="$(printf '%s' "$SPX_ENC" | sed -e 's/%2[Ff]/\//g')"
 else
@@ -92,16 +86,14 @@ case "$SPX_DEC" in
     *) SPX_DEC="/$SPX_DEC" ;;
 esac
 
-# SNI по умолчанию = SERVER
 [ -n "$SNI" ] || SNI="$SERVER"
 
-# Базовая валидация UUID/SERVER/PORT
+# Валидация UUID/SERVER/PORT
 if [ -z "$UUID" ] || [ -z "$SERVER" ] || [ -z "$PORT" ]; then
     logger -t shpun-build "Invalid VLESS link: uuid='$UUID' server='$SERVER' port='$PORT'"
     exit 1
 fi
 
-# PORT должен быть числом
 case "$PORT" in
     *[!0-9]*)
         logger -t shpun-build "Invalid port in VLESS link: '$PORT'"
@@ -109,7 +101,7 @@ case "$PORT" in
         ;;
 esac
 
-# Генерируем ОДИН лёгкий конфиг sing-box под VLESS Reality (без transport, со встроенным uTLS)
+# Генерируем максимально простой конфиг: без dns-блока вообще
 cat >"$OUT_CFG" <<EOF
 {
   "log": {
@@ -118,28 +110,14 @@ cat >"$OUT_CFG" <<EOF
     "timestamp": true
   },
 
-  "dns": {
-    "servers": [
-      {
-        "tag": "dns-1",
-        "address": "$DNS_ADDR1",
-        "detour": "direct"
-      },
-      {
-        "tag": "dns-2",
-        "address": "$DNS_ADDR2",
-        "detour": "direct"
-      }
-    ],
-    "strategy": "ipv4_only"
-  },
-
   "inbounds": [
     {
       "type": "tun",
       "tag": "tun-in",
       "interface_name": "tun0",
-      "inet4_address": "172.19.0.1/30",
+      "address": [
+        "172.19.0.1/30"
+      ],
       "mtu": $TUN_MTU,
       "auto_route": true,
       "strict_route": true
@@ -172,15 +150,10 @@ cat >"$OUT_CFG" <<EOF
     {
       "type": "direct",
       "tag": "direct"
-    },
-    {
-      "type": "block",
-      "tag": "block"
     }
   ],
 
   "route": {
-    "default_domain_resolver": "dns-1",
     "geoip": {
       "download_url": "",
       "download_detour": "direct"
@@ -205,5 +178,5 @@ cat >"$OUT_CFG" <<EOF
 }
 EOF
 
-logger -t shpun-build "Config built (Reality) for $SERVER:$PORT (uuid=$UUID, sni=$SNI, path=$SPX_DEC, dns1=$DNS_ADDR1, dns2=$DNS_ADDR2, mtu=$TUN_MTU)"
+logger -t shpun-build "Config built (Reality,no DNS) for $SERVER:$PORT (uuid=$UUID, sni=$SNI, path=$SPX_DEC, mtu=$TUN_MTU)"
 exit 0
