@@ -173,6 +173,27 @@ check_internet() {
 	ping -c1 -W1 "$PING_HOST" >/dev/null 2>&1
 }
 
+# --- ожидание default IPv4 маршрута, чтобы не ловить "missing default interface" --- #
+wait_for_default_route() {
+	log "waiting for default IPv4 route..."
+	i=0
+	while [ "$i" -lt 30 ]; do
+		if ip -4 route show default 2>/dev/null | grep -q '^default'; then
+			IFACE="$(ip -4 route show default 2>/dev/null | awk '/^default/ {print $5; exit}')"
+			if [ -n "$IFACE" ]; then
+				log "default IPv4 route via $IFACE detected"
+			else
+				log "default IPv4 route detected (interface not parsed)"
+			fi
+			return 0
+		fi
+		i=$((i + 1))
+		sleep 2
+	done
+	log "no default IPv4 route detected after timeout, continuing anyway"
+	return 1
+}
+
 # --- запрос router_public и скачивание subscription.json через router_config --- #
 fetch_subscription_once() {
 	if [ -z "$CLEAN_CODE" ] || [ -z "$API_URL" ]; then
@@ -237,6 +258,11 @@ ensure_vpn_from_subscription() {
 	if ! has_tun; then
 		log "ensure_vpn_from_subscription: /dev/net/tun is missing, please install kmod-tun"
 		return 1
+	fi
+
+	# Ждём default route, чтобы sing-box не падал на "missing default interface"
+	if ! wait_for_default_route; then
+		log "ensure_vpn_from_subscription: proceed without confirmed default route (may cause auto_route issues)"
 	fi
 
 	if ! engine_download; then

@@ -106,9 +106,9 @@ case "$PORT" in
 esac
 
 # Генерируем максимально простой конфиг:
-#  - tun inbound с фиксированным адресом 172.19.0.1/30
-#  - добавляем И новый формат address[], И старый inet4_address для совместимости
+#  - tun inbound с фиксированным адресом 172.19.0.1/30 (inet4_address как массив)
 #  - один outbound vless (Reality) + direct
+#  - route с явным default_interface=eth0.2 вместо auto_detect_interface
 #  - без встроенного DNS, IPv4-стек через OpenWrt/dnsmasq
 
 cat >"$OUT_CFG" <<EOF
@@ -124,13 +124,13 @@ cat >"$OUT_CFG" <<EOF
       "type": "tun",
       "tag": "tun-in",
       "interface_name": "tun0",
-      "address": [
+      "inet4_address": [
         "172.19.0.1/30"
       ],
-      "inet4_address": "172.19.0.1/30",
       "mtu": $TUN_MTU,
       "auto_route": true,
-      "strict_route": true
+      "strict_route": true,
+      "stack": "system"
     }
   ],
 
@@ -164,7 +164,10 @@ cat >"$OUT_CFG" <<EOF
   ],
 
   "route": {
-    "auto_detect_interface": true,
+    "auto_route": true,
+    "strict_route": true,
+    "auto_detect_interface": false,
+    "default_interface": "eth0.2",
     "rules": [
       {
         "ip_cidr": [
