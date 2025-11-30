@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# shpun-agent (новая схема с проверкой подписки + failsafe, Xray edition)
+# shpun-agent (новая схема с проверкой подписки + failsafe, Xray transparent edition)
 #
 # Логика:
 #   1) Получаем / читаем router_code.
@@ -10,7 +10,7 @@
 #       - из ответа берём config_url (router_config) и скачиваем subscription.json
 #   3) Если subscription.json уже есть:
 #       - докачиваем VPN-движок (Xray, ENGINE_URL из agent.conf / auto-detect)
-#       - вызываем /etc/shpun/build-config.sh -> генерим xray.json (Reality)
+#       - вызываем /etc/shpun/build-config.sh -> генерим xray.json (Reality + transparent proxy)
 #       - стартуем shpun-vpn, ставим vpn_ready
 #   4) Периодически (SUB_CHECK_INTERVAL) валидируем подписку:
 #       - читаем uid/usi из subscription.json
@@ -23,6 +23,9 @@
 #       - если uptime < MIN_UPTIME (120с по умолчанию) — VPN не трогаем
 #       - если при активном VPN нет интернета NET_FAIL_TIMEOUT (60с по умолчанию) —
 #         останавливаем shpun-vpn и снимаем vpn_ready
+#
+# ВАЖНО: в Xray-режиме мы используем прозрачный режим (dokodemo-door + REDIRECT),
+# а не tun0-интерфейс, поэтому /dev/net/tun больше не обязателен.
 
 STATE_DIR="/etc/shpun"
 CODE_FILE="$STATE_DIR/router_code"
@@ -176,10 +179,6 @@ get_code() {
 	return 0
 }
 
-has_tun() {
-	[ -c /dev/net/tun ]
-}
-
 engine_download() {
 	if [ -z "$ENGINE_URL" ]; then
 		log "ENGINE_URL not set, skip engine download"
@@ -239,7 +238,7 @@ check_internet() {
 	ping -c1 -W1 "$PING_HOST" >/dev/null 2>&1
 }
 
-# --- ожидание default IPv4 маршрута, чтобы не ловить "missing default interface" --- #
+# --- ожидание default IPv4 маршрута, чтобы Xray нормально вышел наружу --- #
 wait_for_default_route() {
 	log "waiting for default IPv4 route..."
 	i=0
@@ -321,14 +320,9 @@ ensure_vpn_from_subscription() {
 		return 1
 	fi
 
-	if ! has_tun; then
-		log "ensure_vpn_from_subscription: /dev/net/tun is missing, please install kmod-tun"
-		return 1
-	fi
-
-	# Ждём default route, чтобы Xray не падал на "missing default interface"
+	# Ждём default route, чтобы Xray мог выйти в интернет к ноде
 	if ! wait_for_default_route; then
-		log "ensure_vpn_from_subscription: proceed without confirmed default route (may cause auto_route issues)"
+		log "ensure_vpn_from_subscription: proceed without confirmed default route (may cause connectivity issues)"
 	fi
 
 	if ! engine_download; then

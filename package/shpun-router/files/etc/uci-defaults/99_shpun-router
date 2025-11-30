@@ -10,13 +10,16 @@ uci set rpcd.shpun.acl='shpun'
 uci commit rpcd
 
 # ==========================
-# 2. Создать интерфейс network.vpn -> tun0
+# 2. Почистить старый интерфейс network.vpn (tun0) от старых версий пакета
 # ==========================
-uci set network.vpn='interface'
-uci set network.vpn.proto='none'
-uci set network.vpn.ifname='tun0'
-uci set network.vpn.device='tun0'
-uci commit network
+if [ "$(uci -q get network.vpn.ifname)" = "tun0" ] && \
+   [ "$(uci -q get network.vpn.proto)" = "none" ]; then
+    uci -q delete network.vpn
+    uci commit network
+fi
+
+# В новой Xray-схеме мы не создаём tun0 и network.vpn — работаем через
+# прозрачный dokodemo-door + iptables REDIRECT.
 
 # ==========================
 # 3. Отключить IPv6 на LAN/WAN + DHCPv6/RA (минимум лишней нагрузки)
@@ -48,34 +51,23 @@ uci commit dhcp
 uci commit network
 
 # ==========================
-# 4. Добавить vpn в зону firewall "wan"
-# ==========================
-WAN_ZONE_SECTION=""
-
-# Попытка №1: типовая @zone[1]
-if [ "$(uci -q get firewall.@zone[1].name)" = "wan" ]; then
-    WAN_ZONE_SECTION="@zone[1]"
-else
-    # Фолбэк: ищем любую секцию, где name='wan'
-    for s in $(uci -q show firewall | sed -n "s/^firewall\.\([^=]*\)\.name='wan'.*/\1/p"); do
-        WAN_ZONE_SECTION="$s"
-        break
-    done
-fi
-
-if [ -n "$WAN_ZONE_SECTION" ]; then
-    uci add_list firewall."$WAN_ZONE_SECTION".network='vpn'
-    uci commit firewall
-else
-    logger -t shpun-uci "Could not find firewall zone with name='wan'"
-fi
-
-# ==========================
-# 5. Убедиться, что dnsmasq читает /etc/dnsmasq.d
+# 4. Убедиться, что dnsmasq читает /etc/dnsmasq.d
 # ==========================
 if uci -q get dhcp.@dnsmasq[0] >/dev/null 2>&1; then
     uci set dhcp.@dnsmasq[0].confdir='/etc/dnsmasq.d'
     uci commit dhcp
+fi
+
+# ==========================
+# 5. Добавить вызов shpun-firewall-xray в /etc/firewall.user
+# ==========================
+if ! grep -q "shpun-firewall-xray" /etc/firewall.user 2>/dev/null; then
+    cat >> /etc/firewall.user << 'EOF'
+
+# --- shpun-firewall-xray ---
+[ -x /etc/shpun/firewall-xray.sh ] && /etc/shpun/firewall-xray.sh
+# --- end shpun-firewall-xray ---
+EOF
 fi
 
 # ==========================

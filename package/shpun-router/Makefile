@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=shpun-router
 PKG_VERSION:=1.0.0
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 PKG_MAINTAINER:=Eximm
 PKG_LICENSE:=MIT
 
@@ -63,6 +63,8 @@ define Package/shpun-router/install
 		$(1)/etc/shpun/build-config.sh
 	$(INSTALL_DATA) ./files/etc/shpun/agent.conf \
 		$(1)/etc/shpun/agent.conf
+	$(INSTALL_BIN) ./files/etc/shpun/firewall-xray.sh \
+		$(1)/etc/shpun/firewall-xray.sh 
 
 	# --- dnsmasq.d ---
 	$(INSTALL_DIR) $(1)/etc/dnsmasq.d
@@ -97,6 +99,7 @@ define Package/shpun-router/install
 	$(INSTALL_DATA) ./files/usr/share/rpcd/acl.d/shpun.json \
 		$(1)/usr/share/rpcd/acl.d/shpun.json
 endef
+
 
 define Package/shpun-router/postinst
 #!/bin/sh

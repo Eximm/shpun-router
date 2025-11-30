@@ -5,12 +5,8 @@ SUB_FILE="/etc/shpun/subscription.json"
 OUT_CFG="/etc/shpun/xray.json"
 CONF="/etc/shpun/agent.conf"
 
-# Подхватываем опции, если есть
+# Подхватываем опции, если есть (DNS_ADDR1/2, TUN_MTU и т.п. — пока не используем)
 [ -f "$CONF" ] && . "$CONF"
-
-# Можно переопределить в /etc/shpun/agent.conf:
-#   TUN_MTU="1450"
-TUN_MTU="${TUN_MTU:-1450}"
 
 [ -f "$SUB_FILE" ] || {
     logger -t shpun-build "No subscription file: $SUB_FILE"
@@ -107,7 +103,6 @@ fi
 
 # если host пустой — используем sni
 [ -z "$HOST_HDR" ] && HOST_HDR="$SNI"
-
 [ -n "$SNI" ] || SNI="$SERVER"
 
 # Валидация UUID/SERVER/PORT
@@ -129,11 +124,16 @@ if [ -n "$FLOW" ]; then
     FLOW_JSON=", \"flow\": \"$FLOW\""
 fi
 
-# Генерируем конфиг Xray:
-#  - tun inbound с фиксированным адресом 172.19.0.1/30
-#  - один outbound vless (Reality) + direct
-#  - сам SERVER и локальные подсети гоняем через direct, чтобы не было петель
-#  - остальной TCP/UDP трафик → proxy
+# Порт для прозрачного dokodemo-door inbound.
+# Должен совпадать с тем, что будет использоваться в firewall-xray.sh (REDIRECT).
+REDIR_PORT="${REDIR_PORT:-12345}"
+
+# Конфиг Xray:
+#  - inbound-1: SOCKS на 127.0.0.1:10808 (debug)
+#  - inbound-2: dokodemo-door 0.0.0.0:$REDIR_PORT с followRedirect (прозрачный VPN для TCP)
+#  - outbound: VLESS Reality (наш SERVER:PORT / rush.lenivo.site:2083 и т.п.)
+#  - второй outbound: direct
+#  - routing: локальные сети + сам SERVER → direct, весь остальной TCP → proxy
 
 cat >"$OUT_CFG" <<EOF
 {
@@ -143,16 +143,31 @@ cat >"$OUT_CFG" <<EOF
 
   "inbounds": [
     {
-      "tag": "tun-in",
-      "protocol": "tun",
+      "tag": "socks-in",
+      "listen": "127.0.0.1",
+      "port": 10808,
+      "protocol": "socks",
       "settings": {
-        "mtu": $TUN_MTU,
-        "interface_name": "tun0",
-        "address": [
-          "172.19.0.1/30"
-        ],
-        "auto_route": true,
-        "strict_route": true
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls"]
+      }
+    },
+    {
+      "tag": "redir-in",
+      "listen": "0.0.0.0",
+      "port": $REDIR_PORT,
+      "protocol": "dokodemo-door",
+      "settings": {
+        "network": "tcp",
+        "followRedirect": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls"]
       }
     }
   ],
@@ -200,18 +215,20 @@ cat >"$OUT_CFG" <<EOF
     "rules": [
       {
         "type": "field",
+        "outboundTag": "direct",
         "ip": [
-          "$SERVER/32",
           "127.0.0.0/8",
           "10.0.0.0/8",
           "172.16.0.0/12",
           "192.168.0.0/16"
         ],
-        "outboundTag": "direct"
+        "domain": [
+          "$SERVER"
+        ]
       },
       {
         "type": "field",
-        "network": "tcp,udp",
+        "network": "tcp",
         "outboundTag": "proxy"
       }
     ]
@@ -219,5 +236,5 @@ cat >"$OUT_CFG" <<EOF
 }
 EOF
 
-logger -t shpun-build "xray config built (Reality,no DNS,IPv4-only,server=$SERVER:$PORT,sni=$SNI,spx=$SPX_DEC,mtu=$TUN_MTU)"
+logger -t shpun-build "xray config built (Reality, SOCKS+REDIR, server=$SERVER:$PORT, sni=$SNI, spx=$SPX_DEC, redir_port=$REDIR_PORT)"
 exit 0
