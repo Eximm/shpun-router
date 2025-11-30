@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# shpun-agent (новая схема с проверкой подписки + failsafe)
+# shpun-agent (новая схема с проверкой подписки + failsafe, Xray edition)
 #
 # Логика:
 #   1) Получаем / читаем router_code.
@@ -9,8 +9,8 @@
 #       - дергаем router_public?code=<CLEAN_CODE>&format=json
 #       - из ответа берём config_url (router_config) и скачиваем subscription.json
 #   3) Если subscription.json уже есть:
-#       - докачиваем движок (ENGINE_URL из agent.conf)
-#       - вызываем /etc/shpun/build-config.sh -> генерим sing-box.json (Reality)
+#       - докачиваем VPN-движок (Xray, ENGINE_URL из agent.conf / auto-detect)
+#       - вызываем /etc/shpun/build-config.sh -> генерим xray.json (Reality)
 #       - стартуем shpun-vpn, ставим vpn_ready
 #   4) Периодически (SUB_CHECK_INTERVAL) валидируем подписку:
 #       - читаем uid/usi из subscription.json
@@ -45,14 +45,76 @@ log() {
 	logger -t "$LOG_TAG" "$*"
 }
 
+# --- автоопределение архитектуры и формирование ENGINE_URL (мультиарх) --- #
+
+detect_engine_arch() {
+	local arch
+
+	if [ -f /etc/openwrt_release ]; then
+		# shellcheck disable=SC1091
+		. /etc/openwrt_release
+		arch="$DISTRIB_ARCH"
+	fi
+
+	if [ -z "$arch" ] && command -v opkg >/dev/null 2>&1; then
+		arch="$(opkg print-architecture 2>/dev/null | awk '$1=="arch"{print $2}' | tail -n1)"
+	fi
+
+	case "$arch" in
+		mips_24kc)
+			echo "mips_24kc"
+			;;
+		mipsel_24kc|ramips*|mipsel*)
+			echo "mipsel_24kc"
+			;;
+		arm_cortex-a7|arm_cortex-a9|arm_mpcore|armv7*)
+			echo "armv7"
+			;;
+		aarch64*|arm64*)
+			echo "aarch64"
+			;;
+		x86_64)
+			echo "amd64"
+			;;
+		*)
+			log "detect_engine_arch: unknown arch '$arch', fallback to mips_24kc"
+			echo "mips_24kc"
+			;;
+	esac
+}
+
+build_engine_url() {
+	# Если явно задан ENGINE_URL в конфиге — не трогаем (legacy режим).
+	if [ -n "$ENGINE_URL" ]; then
+		echo "$ENGINE_URL"
+		return 0
+	fi
+
+	# Для мультиарх-схемы нужен ENGINE_BASE_URL
+	if [ -z "$ENGINE_BASE_URL" ]; then
+		log "build_engine_url: ENGINE_BASE_URL not set and ENGINE_URL empty"
+		echo ""
+		return 1
+	fi
+
+	ENGINE_ARCH="$(detect_engine_arch)"
+
+	if [ -n "$ENGINE_VERSION" ]; then
+		# будущий вариант: xray-<arch>-<version>
+		echo "${ENGINE_BASE_URL}/xray-${ENGINE_ARCH}-${ENGINE_VERSION}"
+	else
+		# текущий вариант: xray-<arch>
+		echo "${ENGINE_BASE_URL}/xray-${ENGINE_ARCH}"
+	fi
+}
+
 load_conf() {
 	# shellcheck disable=SC1090,SC1091
 	[ -f "$CONF" ] && . "$CONF"
 
 	[ -z "$API_URL" ]            && API_URL="$API_URL_DEFAULT"
-	[ -z "$ENGINE_NAME" ]        && ENGINE_NAME="sing-box"
-	[ -z "$ENGINE_BIN" ]         && ENGINE_BIN="/tmp/sing-box"
-	[ -z "$ENGINE_CONFIG" ]      && ENGINE_CONFIG="/etc/shpun/sing-box.json"
+	[ -z "$ENGINE_BIN" ]         && ENGINE_BIN="/tmp/xray"
+	[ -z "$ENGINE_CONFIG" ]      && ENGINE_CONFIG="/etc/shpun/xray.json"
 	[ -z "$SUB_CHECK_INTERVAL" ] && SUB_CHECK_INTERVAL="$SUB_CHECK_INTERVAL_DEFAULT"
 
 	# Failsafe параметры (можно задавать в agent.conf)
@@ -68,6 +130,11 @@ load_conf() {
 		else
 			PING_HOST="8.8.8.8"
 		fi
+	fi
+
+	# Если ENGINE_URL пуст — пытаемся собрать его из ENGINE_BASE_URL и арх.
+	if [ -z "$ENGINE_URL" ]; then
+		ENGINE_URL="$(build_engine_url)"
 	fi
 }
 
@@ -139,7 +206,7 @@ engine_download() {
 		return 1
 	fi
 
-	# Проверку SHA256 убрали сознательно (дорого по CPU на слабом железе)
+	# Проверку SHA256 сознательно не делаем (дорого по CPU на слабом железе)
 
 	log "engine downloaded and ready: $ENGINE_BIN"
 	return 0
@@ -169,7 +236,6 @@ get_uptime_secs() {
 
 check_internet() {
 	# Пингуем один раз с таймаутом 1 сек.
-	# При активном VPN этого достаточно, чтобы понять, не схлопнулось ли всё в /dev/null.
 	ping -c1 -W1 "$PING_HOST" >/dev/null 2>&1
 }
 
@@ -260,7 +326,7 @@ ensure_vpn_from_subscription() {
 		return 1
 	fi
 
-	# Ждём default route, чтобы sing-box не падал на "missing default interface"
+	# Ждём default route, чтобы Xray не падал на "missing default interface"
 	if ! wait_for_default_route; then
 		log "ensure_vpn_from_subscription: proceed without confirmed default route (may cause auto_route issues)"
 	fi
@@ -275,7 +341,7 @@ ensure_vpn_from_subscription() {
 		return 1
 	fi
 
-	log "building sing-box config from subscription.json"
+	log "building xray config from subscription.json"
 	if ! /etc/shpun/build-config.sh; then
 		log "build-config.sh failed"
 		return 1
@@ -394,7 +460,7 @@ main_loop() {
 	load_conf
 	ensure_state_dir
 
-	log "shpun-agent started (API_URL=$API_URL, ENGINE_BIN=$ENGINE_BIN, MIN_UPTIME=$MIN_UPTIME, NET_FAIL_TIMEOUT=$NET_FAIL_TIMEOUT, PING_HOST=$PING_HOST)"
+	log "shpun-agent started (API_URL=$API_URL, ENGINE_BIN=$ENGINE_BIN, ENGINE_URL=$ENGINE_URL, MIN_UPTIME=$MIN_UPTIME, NET_FAIL_TIMEOUT=$NET_FAIL_TIMEOUT, PING_HOST=$PING_HOST)"
 
 	NET_FAIL_SECONDS=0
 

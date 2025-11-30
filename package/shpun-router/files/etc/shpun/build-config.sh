@@ -2,7 +2,7 @@
 # shellcheck disable=SC1090
 
 SUB_FILE="/etc/shpun/subscription.json"
-OUT_CFG="/etc/shpun/sing-box.json"
+OUT_CFG="/etc/shpun/xray.json"
 CONF="/etc/shpun/agent.conf"
 
 # Подхватываем опции, если есть
@@ -63,6 +63,10 @@ PBK_ENC="$(get_param pbk)"
 SID_ENC="$(get_param sid)"
 SPX_ENC="$(get_param spx)"
 SNI="$(get_param sni)"
+TYPE="$(get_param type)"
+HOST_HDR="$(get_param host)"
+PATH_RAW="$(get_param path)"
+FLOW="$(get_param flow)"
 
 # --- Жёсткая проверка Reality ---
 if [ "$SECURITY" != "reality" ]; then
@@ -78,7 +82,7 @@ fi
 PBK="$PBK_ENC"
 SID="$SID_ENC"
 
-# spx → только для логов
+# spx → путь для spiderX, если нет — считаем '/'
 if [ -n "$SPX_ENC" ]; then
     SPX_DEC="$(printf '%s' "$SPX_ENC" | sed -e 's/%2[Ff]/\//g')"
 else
@@ -89,6 +93,20 @@ case "$SPX_DEC" in
     /*) ;;
     *) SPX_DEC="/$SPX_DEC" ;;
 esac
+
+# path из query, если spx отсутствует
+if [ -n "$PATH_RAW" ] && [ "$SPX_DEC" = "/" ]; then
+    PATH_DEC="$(printf '%s' "$PATH_RAW" | sed -e 's/%2[Ff]/\//g')"
+    [ -z "$PATH_DEC" ] && PATH_DEC="/"
+    case "$PATH_DEC" in
+        /*) ;;
+        *) PATH_DEC="/$PATH_DEC" ;;
+    esac
+    SPX_DEC="$PATH_DEC"
+fi
+
+# если host пустой — используем sni
+[ -z "$HOST_HDR" ] && HOST_HDR="$SNI"
 
 [ -n "$SNI" ] || SNI="$SERVER"
 
@@ -105,84 +123,101 @@ case "$PORT" in
         ;;
 esac
 
-# Генерируем максимально простой конфиг:
-#  - tun inbound с фиксированным адресом 172.19.0.1/30 (inet4_address как массив)
+# Подготовка flow (для Xray VLESS Reality)
+FLOW_JSON=""
+if [ -n "$FLOW" ]; then
+    FLOW_JSON=", \"flow\": \"$FLOW\""
+fi
+
+# Генерируем конфиг Xray:
+#  - tun inbound с фиксированным адресом 172.19.0.1/30
 #  - один outbound vless (Reality) + direct
-#  - route с явным default_interface=eth0.2 вместо auto_detect_interface
-#  - без встроенного DNS, IPv4-стек через OpenWrt/dnsmasq
+#  - сам SERVER и локальные подсети гоняем через direct, чтобы не было петель
+#  - остальной TCP/UDP трафик → proxy
 
 cat >"$OUT_CFG" <<EOF
 {
   "log": {
-    "disabled": false,
-    "level": "error",
-    "timestamp": true
+    "loglevel": "warning"
   },
 
   "inbounds": [
     {
-      "type": "tun",
       "tag": "tun-in",
-      "interface_name": "tun0",
-      "inet4_address": [
-        "172.19.0.1/30"
-      ],
-      "mtu": $TUN_MTU,
-      "auto_route": true,
-      "strict_route": true,
-      "stack": "system"
+      "protocol": "tun",
+      "settings": {
+        "mtu": $TUN_MTU,
+        "interface_name": "tun0",
+        "address": [
+          "172.19.0.1/30"
+        ],
+        "auto_route": true,
+        "strict_route": true
+      }
     }
   ],
 
   "outbounds": [
     {
-      "type": "vless",
-      "tag": "vpn-out",
-      "server": "$SERVER",
-      "server_port": $PORT,
-      "uuid": "$UUID",
-      "flow": "",
-      "packet_encoding": "",
-      "tls": {
-        "enabled": true,
-        "server_name": "$SNI",
-        "utls": {
-          "enabled": true,
-          "fingerprint": "chrome"
-        },
-        "reality": {
-          "enabled": true,
-          "public_key": "$PBK",
-          "short_id": "$SID"
+      "tag": "proxy",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "$SERVER",
+            "port": $PORT,
+            "users": [
+              {
+                "id": "$UUID",
+                "encryption": "none"$FLOW_JSON
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "serverName": "$SNI",
+          "publicKey": "$PBK",
+          "shortId": "$SID",
+          "fingerprint": "chrome",
+          "show": false,
+          "spiderX": "$SPX_DEC"
         }
       }
     },
     {
-      "type": "direct",
-      "tag": "direct"
+      "tag": "direct",
+      "protocol": "freedom",
+      "settings": {}
     }
   ],
 
-  "route": {
-    "auto_route": true,
-    "strict_route": true,
-    "auto_detect_interface": false,
-    "default_interface": "eth0.2",
+  "routing": {
+    "domainStrategy": "IPIfNonMatch",
     "rules": [
       {
-        "ip_cidr": [
+        "type": "field",
+        "ip": [
+          "$SERVER/32",
           "127.0.0.0/8",
           "10.0.0.0/8",
           "172.16.0.0/12",
           "192.168.0.0/16"
         ],
-        "outbound": "direct"
+        "outboundTag": "direct"
+      },
+      {
+        "type": "field",
+        "network": "tcp,udp",
+        "outboundTag": "proxy"
       }
-    ],
-    "final": "vpn-out"
+    ]
   }
 }
 EOF
 
-logger -t shpun-build "Config built (Reality,no DNS,IPv4-only,compat) for $SERVER:$PORT (uuid=$UUID, sni=$SNI, path=$SPX_DEC, mtu=$TUN_MTU)"
+logger -t shpun-build "xray config built (Reality,no DNS,IPv4-only,server=$SERVER:$PORT,sni=$SNI,spx=$SPX_DEC,mtu=$TUN_MTU)"
 exit 0
