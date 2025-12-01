@@ -5,7 +5,7 @@ SUB_FILE="/etc/shpun/subscription.json"
 OUT_CFG="/etc/shpun/xray.json"
 CONF="/etc/shpun/agent.conf"
 
-# Подхватываем опции, если есть (DNS_ADDR1/2, TUN_MTU и т.п. — пока не используем)
+# Подхватываем опции, если есть (REDIR_PORT и т.п.)
 [ -f "$CONF" ] && . "$CONF"
 
 [ -f "$SUB_FILE" ] || {
@@ -13,7 +13,18 @@ CONF="/etc/shpun/agent.conf"
     exit 1
 }
 
-# первый линк из массива links[0] (RouterVPN → Reality)
+# Проверяем, что есть base64/JSONFILTER
+command -v jsonfilter >/dev/null 2>&1 || {
+    logger -t shpun-build "jsonfilter not found"
+    exit 1
+}
+
+command -v base64 >/dev/null 2>&1 || {
+    logger -t shpun-build "base64 not found"
+    exit 1
+}
+
+# первый линк из массива links[0] (теперь это ss://)
 LINK="$(jsonfilter -i "$SUB_FILE" -e '@.subscription.links[0]' 2>/dev/null)"
 
 [ -n "$LINK" ] || {
@@ -25,115 +36,93 @@ LINK="$(jsonfilter -i "$SUB_FILE" -e '@.subscription.links[0]' 2>/dev/null)"
 LINK="${LINK%\"}"
 LINK="${LINK#\"}"
 
-# ожидаем vless://UUID@server:port?security=reality&pbk=...&sid=...&spx=/...
 case "$LINK" in
-    vless://*) ;;
+    ss://*) ;;
     *)
-        logger -t shpun-build "Invalid link scheme (expected vless://): $LINK"
+        logger -t shpun-build "Invalid link scheme (expected ss://): $LINK"
         exit 1
         ;;
 esac
 
-# убираем префикс vless://
-LINK_NO_PROTO="${LINK#vless://}"
+# --- Вспомогательная функция для правки URL-safe base64 ---
+fix_b64() {
+    # Заменяем URL-safe символы и добиваем padding до кратности 4
+    local s="$1"
+    s="${s//-/+}"
+    s="${s//_/\/}"
+    case $((${#s} % 4)) in
+        2) s="${s}==";;
+        3) s="${s}=";;
+    esac
+    printf '%s' "$s"
+}
 
-# uuid до @
-UUID="${LINK_NO_PROTO%%@*}"
-REST="${LINK_NO_PROTO#*@}"
+# --- Парсинг SS-линка ---
+# Возможные варианты:
+# 1) ss://BASE64(method:password@host:port)#NAME
+# 2) ss://method:password@host:port#NAME
+# 3) ss://BASE64(method:password@host:port)?plugin=...#NAME
 
-# host:port до ? (example.com:443)
-HOSTPORT="${REST%%\?*}"
+LINK_NO_PROTO="${LINK#ss://}"
+
+METHOD=""
+PASSWORD=""
+SERVER=""
+PORT=""
+
+# Отделяем часть до ?/# — это или base64, или метод:пароль@хост:порт
+BASE_PART="${LINK_NO_PROTO%%[\?#]*}"
+
+if echo "$BASE_PART" | grep -q '@'; then
+    # Вариант 2: уже в открытом виде method:password@host:port
+    CRED_HOSTPORT="$BASE_PART"
+else
+    # Вариант 1/3: base64(method:password@host:port)
+    B64_FIXED="$(fix_b64 "$BASE_PART")"
+    DECODED="$(printf '%s' "$B64_FIXED" | base64 -d 2>/dev/null)"
+
+    [ -n "$DECODED" ] || {
+        logger -t shpun-build "Failed to base64-decode ss link payload"
+        exit 1
+    }
+
+    CRED_HOSTPORT="$DECODED"
+fi
+
+# Теперь CRED_HOSTPORT в формате method:password@host:port
+CRED="${CRED_HOSTPORT%%@*}"
+HOSTPORT="${CRED_HOSTPORT#*@}"
+
+METHOD="${CRED%%:*}"
+PASSWORD="${CRED#*:}"
 SERVER="${HOSTPORT%%:*}"
 PORT="${HOSTPORT##*:}"
 
-# query без #...
-QUERY="${REST#*\?}"
-QUERY="${QUERY%%#*}"
-
-get_param() {
-    echo "$QUERY" | tr '&' '\n' | awk -F= -v k="$1" '$1==k {print $2}'
-}
-
-SECURITY="$(get_param security)"
-PBK_ENC="$(get_param pbk)"
-SID_ENC="$(get_param sid)"
-SPX_ENC="$(get_param spx)"
-SNI="$(get_param sni)"
-TYPE="$(get_param type)"
-HOST_HDR="$(get_param host)"
-PATH_RAW="$(get_param path)"
-FLOW="$(get_param flow)"
-
-# --- Жёсткая проверка Reality ---
-if [ "$SECURITY" != "reality" ]; then
-    logger -t shpun-build "Non-Reality link, router expects Reality only (security='$SECURITY')"
-    exit 1
-fi
-
-if [ -z "$PBK_ENC" ] || [ -z "$SID_ENC" ]; then
-    logger -t shpun-build "Reality link missing pbk/sid (pbk='$PBK_ENC', sid='$SID_ENC')"
-    exit 1
-fi
-
-PBK="$PBK_ENC"
-SID="$SID_ENC"
-
-# spx → путь для spiderX, если нет — считаем '/'
-if [ -n "$SPX_ENC" ]; then
-    SPX_DEC="$(printf '%s' "$SPX_ENC" | sed -e 's/%2[Ff]/\//g')"
-else
-    SPX_DEC="/"
-fi
-
-case "$SPX_DEC" in
-    /*) ;;
-    *) SPX_DEC="/$SPX_DEC" ;;
-esac
-
-# path из query, если spx отсутствует
-if [ -n "$PATH_RAW" ] && [ "$SPX_DEC" = "/" ]; then
-    PATH_DEC="$(printf '%s' "$PATH_RAW" | sed -e 's/%2[Ff]/\//g')"
-    [ -z "$PATH_DEC" ] && PATH_DEC="/"
-    case "$PATH_DEC" in
-        /*) ;;
-        *) PATH_DEC="/$PATH_DEC" ;;
-    esac
-    SPX_DEC="$PATH_DEC"
-fi
-
-# если host пустой — используем sni
-[ -z "$HOST_HDR" ] && HOST_HDR="$SNI"
-[ -n "$SNI" ] || SNI="$SERVER"
-
-# Валидация UUID/SERVER/PORT
-if [ -z "$UUID" ] || [ -z "$SERVER" ] || [ -z "$PORT" ]; then
-    logger -t shpun-build "Invalid VLESS link: uuid='$UUID' server='$SERVER' port='$PORT'"
+# Валидация
+if [ -z "$METHOD" ] || [ -z "$PASSWORD" ] || [ -z "$SERVER" ] || [ -z "$PORT" ]; then
+    logger -t shpun-build "Invalid SS link: method='$METHOD' password='$PASSWORD' server='$SERVER' port='$PORT'"
     exit 1
 fi
 
 case "$PORT" in
     *[!0-9]*)
-        logger -t shpun-build "Invalid port in VLESS link: '$PORT'"
+        logger -t shpun-build "Invalid port in SS link: '$PORT'"
         exit 1
         ;;
 esac
-
-# Подготовка flow (для Xray VLESS Reality)
-FLOW_JSON=""
-if [ -n "$FLOW" ]; then
-    FLOW_JSON=", \"flow\": \"$FLOW\""
-fi
 
 # Порт для прозрачного dokodemo-door inbound.
 # Должен совпадать с тем, что будет использоваться в firewall-xray.sh (REDIRECT).
 REDIR_PORT="${REDIR_PORT:-12345}"
 
-# Конфиг Xray:
-#  - inbound-1: SOCKS на 127.0.0.1:10808 (debug)
-#  - inbound-2: dokodemo-door 0.0.0.0:$REDIR_PORT с followRedirect (прозрачный VPN для TCP)
-#  - outbound: VLESS Reality (наш SERVER:PORT / rush.lenivo.site:2083 и т.п.)
-#  - второй outbound: direct
-#  - routing: локальные сети + сам SERVER → direct, весь остальной TCP → proxy
+# Собираем конфиг Xray:
+#  - inbound-1: SOCKS на 127.0.0.1:10808 (для отладки, curl --socks5)
+#  - inbound-2: dokodemo-door 0.0.0.0:$REDIR_PORT (followRedirect=true для прозрачного TCP)
+#  - outbound: shadowsocks (наш ROUTER SS 2095 через RUinn → ядро)
+#  - outbound direct: свобода
+#  - routing:
+#       * LAN / loopback / сам сервер → direct
+#       * всё остальное TCP → proxy (shadowsocks)
 
 cat >"$OUT_CFG" <<EOF
 {
@@ -175,32 +164,16 @@ cat >"$OUT_CFG" <<EOF
   "outbounds": [
     {
       "tag": "proxy",
-      "protocol": "vless",
+      "protocol": "shadowsocks",
       "settings": {
-        "vnext": [
+        "servers": [
           {
             "address": "$SERVER",
             "port": $PORT,
-            "users": [
-              {
-                "id": "$UUID",
-                "encryption": "none"$FLOW_JSON
-              }
-            ]
+            "method": "$METHOD",
+            "password": "$PASSWORD"
           }
         ]
-      },
-      "streamSettings": {
-        "network": "tcp",
-        "security": "reality",
-        "realitySettings": {
-          "serverName": "$SNI",
-          "publicKey": "$PBK",
-          "shortId": "$SID",
-          "fingerprint": "chrome",
-          "show": false,
-          "spiderX": "$SPX_DEC"
-        }
       }
     },
     {
@@ -236,5 +209,5 @@ cat >"$OUT_CFG" <<EOF
 }
 EOF
 
-logger -t shpun-build "xray config built (Reality, SOCKS+REDIR, server=$SERVER:$PORT, sni=$SNI, spx=$SPX_DEC, redir_port=$REDIR_PORT)"
+logger -t shpun-build "xray config built (Shadowsocks, SOCKS+REDIR, server=$SERVER:$PORT, method=$METHOD, redir_port=$REDIR_PORT)"
 exit 0

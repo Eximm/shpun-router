@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# shpun-agent (новая схема с проверкой подписки + failsafe, Xray transparent edition)
+# shpun-agent (Xray + Shadowsocks transparent edition)
 #
 # Логика:
 #   1) Получаем / читаем router_code.
@@ -10,7 +10,7 @@
 #       - из ответа берём config_url (router_config) и скачиваем subscription.json
 #   3) Если subscription.json уже есть:
 #       - докачиваем VPN-движок (Xray, ENGINE_URL из agent.conf / auto-detect)
-#       - вызываем /etc/shpun/build-config.sh -> генерим xray.json (Reality + transparent proxy)
+#       - вызываем /etc/shpun/build-config.sh -> генерим xray.json (SS + transparent)
 #       - стартуем shpun-vpn, ставим vpn_ready
 #   4) Периодически (SUB_CHECK_INTERVAL) валидируем подписку:
 #       - читаем uid/usi из subscription.json
@@ -25,7 +25,7 @@
 #         останавливаем shpun-vpn и снимаем vpn_ready
 #
 # ВАЖНО: в Xray-режиме мы используем прозрачный режим (dokodemo-door + REDIRECT),
-# а не tun0-интерфейс, поэтому /dev/net/tun больше не обязателен.
+# а не tun0-интерфейс, поэтому /dev/net/tun не нужен.
 
 STATE_DIR="/etc/shpun"
 CODE_FILE="$STATE_DIR/router_code"
@@ -39,16 +39,14 @@ LOG_TAG="shpun-agent"
 API_URL_DEFAULT="https://bill.shpyn.online/shm/v1/public/router_public"
 SUB_CHECK_INTERVAL_DEFAULT=21600  # 6 часов
 
-# Failsafe дефолты (можно переопределить в agent.conf)
-MIN_UPTIME_DEFAULT=120        # не трогать VPN, пока роутер не проработал 2 минуты
-NET_FAIL_TIMEOUT_DEFAULT=60   # если нет интернета 60 секунд при активном VPN — стоп
-MAIN_LOOP_SLEEP_DEFAULT=30    # задержка основного цикла
+# Failsafe дефолты
+MIN_UPTIME_DEFAULT=120
+NET_FAIL_TIMEOUT_DEFAULT=60
+MAIN_LOOP_SLEEP_DEFAULT=30
 
 log() {
 	logger -t "$LOG_TAG" "$*"
 }
-
-# --- автоопределение архитектуры и формирование ENGINE_URL (мультиарх) --- #
 
 detect_engine_arch() {
 	local arch
@@ -87,13 +85,11 @@ detect_engine_arch() {
 }
 
 build_engine_url() {
-	# Если явно задан ENGINE_URL в конфиге — не трогаем (legacy режим).
 	if [ -n "$ENGINE_URL" ]; then
 		echo "$ENGINE_URL"
 		return 0
 	fi
 
-	# Для мультиарх-схемы нужен ENGINE_BASE_URL
 	if [ -z "$ENGINE_BASE_URL" ]; then
 		log "build_engine_url: ENGINE_BASE_URL not set and ENGINE_URL empty"
 		echo ""
@@ -103,10 +99,8 @@ build_engine_url() {
 	ENGINE_ARCH="$(detect_engine_arch)"
 
 	if [ -n "$ENGINE_VERSION" ]; then
-		# будущий вариант: xray-<arch>-<version>
 		echo "${ENGINE_BASE_URL}/xray-${ENGINE_ARCH}-${ENGINE_VERSION}"
 	else
-		# текущий вариант: xray-<arch>
 		echo "${ENGINE_BASE_URL}/xray-${ENGINE_ARCH}"
 	fi
 }
@@ -120,13 +114,10 @@ load_conf() {
 	[ -z "$ENGINE_CONFIG" ]      && ENGINE_CONFIG="/etc/shpun/xray.json"
 	[ -z "$SUB_CHECK_INTERVAL" ] && SUB_CHECK_INTERVAL="$SUB_CHECK_INTERVAL_DEFAULT"
 
-	# Failsafe параметры (можно задавать в agent.conf)
 	[ -z "$MIN_UPTIME" ]       && MIN_UPTIME="$MIN_UPTIME_DEFAULT"
 	[ -z "$NET_FAIL_TIMEOUT" ] && NET_FAIL_TIMEOUT="$NET_FAIL_TIMEOUT_DEFAULT"
 	[ -z "$MAIN_LOOP_SLEEP" ]  && MAIN_LOOP_SLEEP="$MAIN_LOOP_SLEEP_DEFAULT"
 
-	# Хост для ping-проверки интернета: по умолчанию DNS_ADDR1 (если задан),
-	# иначе 8.8.8.8. Можно переопределить PING_HOST в agent.conf.
 	if [ -z "$PING_HOST" ]; then
 		if [ -n "$DNS_ADDR1" ]; then
 			PING_HOST="$DNS_ADDR1"
@@ -135,7 +126,6 @@ load_conf() {
 		fi
 	fi
 
-	# Если ENGINE_URL пуст — пытаемся собрать его из ENGINE_BASE_URL и арх.
 	if [ -z "$ENGINE_URL" ]; then
 		ENGINE_URL="$(build_engine_url)"
 	fi
@@ -149,18 +139,15 @@ ensure_state_dir() {
 }
 
 get_code() {
-	# если файл уже есть — читаем
 	if [ -s "$CODE_FILE" ]; then
 		CODE="$(cat "$CODE_FILE" 2>/dev/null || true)"
 	else
-		# иначе пробуем сгенерировать
 		if [ -x /etc/shpun/gen_code.sh ]; then
 			CODE="$(/etc/shpun/gen_code.sh 2>/dev/null | head -n1 || true)"
 		fi
 		[ -n "$CODE" ] && echo "$CODE" >"$CODE_FILE"
 	fi
 
-	# убираем переводы строк
 	CODE="$(printf '%s' "$CODE" | tr -d '\r\n')"
 
 	if [ -z "$CODE" ]; then
@@ -168,7 +155,6 @@ get_code() {
 		return 1
 	fi
 
-	# CLEAN_CODE: только A-Z0-9 (AAAA-AAAA -> AAAAAAAA)
 	CLEAN_CODE="$(printf '%s' "$CODE" | tr '[:lower:]' '[:upper:]' | tr -dc 'A-Z0-9')"
 
 	if [ -z "$CLEAN_CODE" ]; then
@@ -205,8 +191,6 @@ engine_download() {
 		return 1
 	fi
 
-	# Проверку SHA256 сознательно не делаем (дорого по CPU на слабом железе)
-
 	log "engine downloaded and ready: $ENGINE_BIN"
 	return 0
 }
@@ -226,19 +210,14 @@ restart_vpn() {
 	return 0
 }
 
-# --- uptime и проверка интернета для failsafe --- #
-
 get_uptime_secs() {
-	# /proc/uptime: "<seconds> <idle>"
 	awk -F. '{print $1}' /proc/uptime 2>/dev/null || echo 0
 }
 
 check_internet() {
-	# Пингуем один раз с таймаутом 1 сек.
 	ping -c1 -W1 "$PING_HOST" >/dev/null 2>&1
 }
 
-# --- ожидание default IPv4 маршрута, чтобы Xray нормально вышел наружу --- #
 wait_for_default_route() {
 	log "waiting for default IPv4 route..."
 	i=0
@@ -259,7 +238,6 @@ wait_for_default_route() {
 	return 1
 }
 
-# --- запрос router_public и скачивание subscription.json через router_config --- #
 fetch_subscription_once() {
 	if [ -z "$CLEAN_CODE" ] || [ -z "$API_URL" ]; then
 		return 1
@@ -291,7 +269,6 @@ fetch_subscription_once() {
 		return 1
 	fi
 
-	# Собираем полный URL до router_config на том же хосте, что и API_URL
 	BASE_URL="${API_URL%/shm/v1/public/router_public}"
 	CONFIG_URL="${BASE_URL}${CONFIG_PATH}"
 
@@ -313,16 +290,14 @@ fetch_subscription_once() {
 	return 0
 }
 
-# --- создание VPN по уже имеющемуся subscription.json --- #
 ensure_vpn_from_subscription() {
 	if [ ! -s "$SUB_FILE" ]; then
 		log "ensure_vpn_from_subscription: $SUB_FILE not found"
 		return 1
 	fi
 
-	# Ждём default route, чтобы Xray мог выйти в интернет к ноде
 	if ! wait_for_default_route; then
-		log "ensure_vpn_from_subscription: proceed without confirmed default route (may cause connectivity issues)"
+		log "ensure_vpn_from_subscription: proceed without confirmed default route"
 	fi
 
 	if ! engine_download; then
@@ -346,16 +321,13 @@ ensure_vpn_from_subscription() {
 		return 1
 	fi
 
-	# ВАЖНО: пишем что-то в файл, чтобы -s видел его как "существующий и непустой"
 	echo "ok" >"$VPN_READY_FILE"
 	log "vpn_ready marked in $VPN_READY_FILE"
 
 	return 0
 }
 
-# --- режим ожидания первой подписки --- #
 poll_subscription_loop() {
-	# если subscription.json уже есть — не трогаем router_public вообще
 	if [ -s "$SUB_FILE" ]; then
 		log "subscription.json already present, skipping router_public"
 		ensure_vpn_from_subscription
@@ -372,7 +344,6 @@ poll_subscription_loop() {
 		log "router code: $CODE (clean: $CLEAN_CODE)"
 
 		if fetch_subscription_once; then
-			# получили subscription.json, дальше создаём VPN на её основе
 			ensure_vpn_from_subscription
 			return 0
 		fi
@@ -382,7 +353,6 @@ poll_subscription_loop() {
 	done
 }
 
-# --- периодическая проверка: подписка всё ещё валидна в хранилище? --- #
 check_subscription_alive() {
 	[ ! -s "$SUB_FILE" ] && return 0
 
@@ -390,12 +360,10 @@ check_subscription_alive() {
 	last_ts=0
 	[ -f "$LAST_CHECK_FILE" ] && last_ts="$(cat "$LAST_CHECK_FILE" 2>/dev/null || echo 0)"
 
-	# если ещё не пришло время — выходим
 	if [ "$((now_ts - last_ts))" -lt "$SUB_CHECK_INTERVAL" ]; then
 		return 0
 	fi
 
-	# читаем uid/usi из subscription.json
 	UID_SUB="$(jsonfilter -i "$SUB_FILE" -e '@.uid' 2>/dev/null || echo "")"
 	USI_SUB="$(jsonfilter -i "$SUB_FILE" -e '@.usi' 2>/dev/null || echo "")"
 
@@ -427,7 +395,6 @@ check_subscription_alive() {
 	OK="$(printf '%s' "$BODY" | jsonfilter -e '@.ok' 2>/dev/null || echo "")"
 
 	if [ "$OK" = "1" ]; then
-		# подписка жива — обновляем файл (вдруг links/лимиты поменялись)
 		printf '%s' "$BODY" >"$SUB_FILE"
 		log "subscription_alive: ok=1, subscription.json refreshed"
 		echo "$now_ts" >"$LAST_CHECK_FILE"
@@ -461,7 +428,6 @@ main_loop() {
 	while :; do
 		load_conf
 
-		# --- 0) Failsafe: ждём, пока роутер хотя бы MIN_UPTIME секунд живёт ---
 		UPTIME_SECS="$(get_uptime_secs)"
 		if [ "$UPTIME_SECS" -lt "$MIN_UPTIME" ]; then
 			log "uptime ${UPTIME_SECS}s < ${MIN_UPTIME}s, waiting before managing VPN"
@@ -469,10 +435,8 @@ main_loop() {
 			continue
 		fi
 
-		# --- 0.5) Failsafe: если VPN активен, проверяем интернет ---
 		if [ -s "$VPN_READY_FILE" ]; then
 			if check_internet; then
-				# интернет есть — сбрасываем счётчик
 				[ "$NET_FAIL_SECONDS" -gt 0 ] && log "internet is back, resetting fail counter (was ${NET_FAIL_SECONDS}s)"
 				NET_FAIL_SECONDS=0
 			else
@@ -486,27 +450,22 @@ main_loop() {
 					fi
 					rm -f "$VPN_READY_FILE"
 					NET_FAIL_SECONDS=0
-					# после этого в следующей итерации ensure_vpn_from_subscription попробует поднять VPN заново
 				fi
 			fi
 		else
 			NET_FAIL_SECONDS=0
 		fi
 
-		# 1) если ещё нет subscription.json — ждём её через router_public/router_config
 		if [ ! -s "$SUB_FILE" ]; then
 			poll_subscription_loop
 		else
-			# 2) если есть subscription.json, но нет vpn_ready — поднимаем VPN
 			if [ ! -s "$VPN_READY_FILE" ]; then
 				ensure_vpn_from_subscription
 			fi
 
-			# 3) периодически проверяем валидность подписки через router_config
 			check_subscription_alive
 		fi
 
-		# основной цикл не должен жрать CPU
 		sleep "$MAIN_LOOP_SLEEP"
 	done
 }

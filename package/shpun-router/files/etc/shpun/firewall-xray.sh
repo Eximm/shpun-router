@@ -1,27 +1,50 @@
 #!/bin/sh
 
-# Порт, на котором Xray слушает dokodemo-door.
-# Должен совпадать с REDIR_PORT в build-config.sh (по умолчанию 12345).
 REDIR_PORT="${REDIR_PORT:-12345}"
 
-# LAN-интерфейс. На DSA это обычно br-lan, если что — можно переопределить в UCI.
-LAN_IF="$(uci get network.lan.ifname 2>/dev/null || echo br-lan)"
-
-# IP роутера в LAN, чтобы не проксировать доступ к LuCI и самому роутеру.
+LAN_IF="$(uci get network.lan.device 2>/dev/null || uci get network.lan.ifname 2>/dev/null || echo br-lan)"
 LAN_IP="$(uci get network.lan.ipaddr 2>/dev/null || echo 192.168.1.1)"
 
-# Создаём/чистим нашу цепочку
-iptables -t nat -N SHPUN_XRAY 2>/dev/null
-iptables -t nat -F SHPUN_XRAY
+LOGTAG="shpun-firewall"
 
-# Убираем старый переход из PREROUTING, если был
-iptables -t nat -D PREROUTING -i "$LAN_IF" -j SHPUN_XRAY 2>/dev/null
+log() {
+    logger -t "$LOGTAG" "$*"
+}
 
-# Добавляем переход из PREROUTING в нашу цепочку
-iptables -t nat -A PREROUTING -i "$LAN_IF" -j SHPUN_XRAY
+# если есть iptables — старый путь
+if command -v iptables >/dev/null 2>&1; then
+    log "iptables backend"
 
-# 1) Не трогаем трафик на сам роутер (чтобы LuCI, DNS и т.п. работали нормально)
-iptables -t nat -A SHPUN_XRAY -d "$LAN_IP" -j RETURN
+    iptables -t nat -N SHPUN_XRAY 2>/dev/null
+    iptables -t nat -F SHPUN_XRAY
 
-# 2) Всё остальное TCP с LAN — редиректим во Xray
-iptables -t nat -A SHPUN_XRAY -p tcp -j REDIRECT --to-ports "$REDIR_PORT"
+    iptables -t nat -D PREROUTING -i "$LAN_IF" -j SHPUN_XRAY 2>/dev/null
+    iptables -t nat -A PREROUTING -i "$LAN_IF" -j SHPUN_XRAY
+
+    iptables -t nat -A SHPUN_XRAY -d "$LAN_IP" -j RETURN
+    iptables -t nat -A SHPUN_XRAY -p tcp -j REDIRECT --to-ports "$REDIR_PORT"
+    exit 0
+fi
+
+# nft backend
+if command -v nft >/dev/null 2>&1; then
+    log "nft backend"
+
+    # Удаляем старую таблицу
+    nft delete table inet shpun 2>/dev/null
+
+    # Создаём таблицу и цепочку
+    nft add table inet shpun
+    nft add chain inet shpun prerouting "{ type nat hook prerouting priority dstnat; policy accept; }"
+
+    # Не проксируем трафик на IP роутера
+    nft add rule inet shpun prerouting iif "$LAN_IF" ip daddr "$LAN_IP" return
+
+    # Главное правило редиректа:
+    nft add rule inet shpun prerouting iif "$LAN_IF" tcp dport != $REDIR_PORT redirect to $REDIR_PORT
+
+    exit 0
+fi
+
+log "no nft/iptables found"
+exit 0
