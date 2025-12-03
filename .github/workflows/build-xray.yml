@@ -1,0 +1,94 @@
+name: Build xray-core (multi-arch)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/build-xray.yml"
+
+env:
+  # Тег/версия Xray-core, на которой сидим
+  XRAY_TAG: v25.1.0  # <-- подставь свою
+
+jobs:
+  build-xray:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: mips_24kc
+            goarch: mips
+            goarm: ""
+            gomips: softfloat
+
+          - arch: mipsel_24kc
+            goarch: mipsle
+            goarm: ""
+            gomips: softfloat
+
+          - arch: armv7
+            goarch: arm
+            goarm: "7"
+            gomips: ""
+
+          - arch: aarch64
+            goarch: arm64
+            goarm: ""
+            gomips: ""
+
+          - arch: amd64
+            goarch: amd64
+            goarm: ""
+            gomips: ""
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Clone Xray-core
+        run: |
+          git clone https://github.com/XTLS/Xray-core.git
+          cd Xray-core
+          git fetch --all --tags
+          git checkout "$XRAY_TAG"
+
+      - name: Build xray for ${{ matrix.arch }}
+        run: |
+          cd Xray-core
+
+          export CGO_ENABLED=0
+          export GOOS=linux
+          export GOARCH="${{ matrix.goarch }}"
+
+          if [ -n "${{ matrix.goarm }}" ]; then
+            export GOARM="${{ matrix.goarm }}"
+          fi
+
+          if [ -n "${{ matrix.gomips }}" ]; then
+            export GOMIPS="${{ matrix.gomips }}"
+          fi
+
+          echo ">>> Building for arch=${{ matrix.arch }} (GOARCH=$GOARCH GOARM=${GOARM:-none} GOMIPS=${GOMIPS:-none})"
+
+          go build -trimpath -ldflags "-s -w" -o "xray-${{ matrix.arch }}" ./main
+
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          mv "xray-${{ matrix.arch }}" "$GITHUB_WORKSPACE/out/"
+
+      - name: List built binaries
+        run: |
+          ls -lh out
+          file out/* || true
+
+      - name: Upload xray binaries as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xray-multiarch
+          path: out/
