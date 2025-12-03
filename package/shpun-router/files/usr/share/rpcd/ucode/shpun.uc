@@ -2,6 +2,7 @@
 
 import { open } from 'fs';
 import { cursor } from 'uci';
+import * as os from 'os';
 
 /* пути */
 const DIR   = "/etc/shpun";
@@ -59,9 +60,9 @@ return {
 					return {
 						code: code,
 						has_sub: (sub != ""),
+						/* историческое поле, сейчас тут лежит сырой JSON подписки */
 						subscription_url: sub,
-						// главное отличие от самого первого варианта:
-						// vpn_ready = true, если файл существует
+						/* vpn_ready = true, если файл существует */
 						vpn_ready: exists(READY)
 					};
 				}
@@ -221,6 +222,20 @@ return {
 					u.commit("wireless");
 					u.unload();
 
+					return { ok: 1 };
+				}
+				catch (e) {
+					return { ok: 0, error: String(e) };
+				}
+			}
+		},
+
+		/* --- UPDATE_ROUTER: запуск обновления пакета shpun-router --- */
+		update_router: {
+			call: function(request) {
+				try {
+					/* асинхронный запуск shell-скрипта, чтобы не блокировать ubus */
+					os.system("/etc/shpun/update-router.sh &");
 					return { ok: 1 };
 				}
 				catch (e) {

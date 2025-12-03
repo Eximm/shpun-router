@@ -35,7 +35,7 @@ iptables_start() {
 
     # создаём/очищаем свою цепочку
     iptables -t nat -N SHPUN_XRAY 2>/dev/null
-    iptables -t nat -F SHPUN_XRAY
+    iptables -t nat -F SHPUN_XRAY 2>/dev/null
 
     # отвязываем на всякий случай и вешаем заново
     iptables -t nat -D PREROUTING -i "$LAN_IF" -j SHPUN_XRAY 2>/dev/null
@@ -103,7 +103,7 @@ case "$1" in
         ;;
 
     stop)
-        if command -v iptables >/devnull 2>&1; then
+        if command -v iptables >/dev/null 2>&1; then
             iptables_stop
         fi
 

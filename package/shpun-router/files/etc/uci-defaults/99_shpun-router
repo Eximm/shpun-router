@@ -19,7 +19,7 @@ if [ "$(uci -q get network.vpn.ifname)" = "tun0" ] && \
 fi
 
 # В новой Xray-схеме мы не создаём tun0 и network.vpn — работаем через
-# прозрачный dokodemo-door + iptables REDIRECT.
+# прозрачный dokodemo-door + iptables/nft REDIRECT.
 
 # ==========================
 # 3. Отключить IPv6 на LAN/WAN + DHCPv6/RA (минимум лишней нагрузки)
@@ -51,15 +51,7 @@ uci commit dhcp
 uci commit network
 
 # ==========================
-# 4. Убедиться, что dnsmasq читает /etc/dnsmasq.d
-# ==========================
-if uci -q get dhcp.@dnsmasq[0] >/dev/null 2>&1; then
-    uci set dhcp.@dnsmasq[0].confdir='/etc/dnsmasq.d'
-    uci commit dhcp
-fi
-
-# ==========================
-# 5. Добавить вызов shpun-firewall-xray в /etc/firewall.user
+# 4. Добавить вызов shpun-firewall-xray в /etc/firewall.user
 # ==========================
 if ! grep -q "shpun-firewall-xray" /etc/firewall.user 2>/dev/null; then
     cat >> /etc/firewall.user << 'EOF'
@@ -71,7 +63,7 @@ EOF
 fi
 
 # ==========================
-# 6. Отложенные рестарты (rpcd, network, firewall, dnsmasq)
+# 5. Отложенные рестарты (rpcd, network, firewall, dnsmasq)
 #    чтобы не рвать LuCI при установке пакета
 # ==========================
 
@@ -84,7 +76,7 @@ fi
 ) &
 
 # ==========================
-# 7. Удаляем себя
+# 6. Удаляем себя
 # ==========================
 rm -f /etc/uci-defaults/99_shpun-router
 

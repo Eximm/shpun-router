@@ -172,7 +172,7 @@ return view.extend({
 			id: 'shpun-wan-gateway',
 			'class': 'cbi-input-text',
 			type: 'text',
-			placeholder: 'обычно 192.168.0.1'
+			placeholder: 'например, 192.168.0.1'
 		});
 
 		var wanDns    = E('input', {
@@ -193,25 +193,25 @@ return view.extend({
 
 		var wanForm = E('div', { 'class': 'shpun-form-vertical' }, [
 			makeField('Логин', wanUser,
-				'Логин из договора с провайдером (для PPPoE/L2TP).',
+				'Учётная запись, выданная провайдером для подключения к интернету (для PPPoE/L2TP).',
 				function (w) { wanUserWrap = w; }),
 			makeField('Пароль', wanPass,
-				'Пароль от интернет-подключения.',
+				'Пароль от интернет-подключения, указанный провайдером.',
 				function (w) { wanPassWrap = w; }),
 			makeField('IP-адрес', wanIp,
-				'Статический IP, который выдал провайдер.',
+				'Статический IP-адрес, предоставленный провайдером.',
 				function (w) { wanIpWrap = w; }),
 			makeField('Маска сети', wanMask,
-				'Например, 255.255.255.0.',
+				'Сетевая маска для статического IP-адреса (например, 255.255.255.0).',
 				function (w) { wanMaskWrap = w; }),
 			makeField('Шлюз', wanGw,
-				'Обычно IP роутера провайдера (часто 192.168.0.1).',
+				'Адрес шлюза по умолчанию, указанный провайдером (часто 192.168.0.1).',
 				function (w) { wanGwWrap = w; }),
 			makeField('DNS-сервер(а)', wanDns,
-				'Можно указать DNS провайдера или публичные (8.8.8.8 1.1.1.1).',
+				'Адреса DNS-серверов провайдера или публичных DNS (например, 8.8.8.8 1.1.1.1).',
 				function (w) { wanDnsWrap = w; }),
 			makeField('L2TP сервер', wanServer,
-				'Адрес L2TP сервера от провайдера.',
+				'Сетевой адрес L2TP-сервера, выданный провайдером.',
 				function (w) { wanServerWrap = w; })
 		]);
 
@@ -234,17 +234,16 @@ return view.extend({
 
 			var help = '';
 			if (wanProto === 'dhcp') {
-				help = 'DHCP — самый простой вариант. Используйте его, если к этому роутеру подключён кабель от другого роутера или модема, ' +
-				       'либо если провайдер не выдавал вам отдельные IP-настройки.';
+				help = 'DHCP — автоматическое получение параметров подключения. Используется, если провайдер не выдаёт индивидуальных настроек или если роутер подключён к другому маршрутизатору/модему.';
 			}
 			else if (wanProto === 'pppoe') {
-				help = 'PPPoE — используется, если провайдер выдал логин и пароль для подключения к интернету.';
+				help = 'PPPoE — применяется, когда провайдер выдал логин и пароль для авторизации. Часто используется в многоквартирных домах и офисах.';
 			}
 			else if (wanProto === 'static') {
-				help = 'Static IP — провайдер выдал вам конкретный IP-адрес, маску, шлюз и DNS. Заполните их по данным из договора.';
+				help = 'Static IP — используется, если провайдер предоставил фиксированный IP-адрес, маску, шлюз и DNS-серверы. Укажите параметры из договора или личного кабинета.';
 			}
 			else if (wanProto === 'l2tp') {
-				help = 'L2TP — для подключения к L2TP-серверу провайдера. Нужны адрес сервера, логин и пароль.';
+				help = 'L2TP — используется некоторыми провайдерами для подключения через туннель. Требуются адрес сервера, логин и пароль.';
 			}
 			setText(wanHelpBox, help);
 		}
@@ -273,12 +272,12 @@ return view.extend({
 						callNetworkReload().catch(function (e) {
 							console.log('network.reload error:', e);
 						});
-						ui.addNotification(null, E('p', {}, ['WAN настройки сохранены. Переходим к Wi-Fi.']));
+						ui.addNotification(null, E('p', {}, ['Настройки WAN применены. Переход к настройке Wi-Fi.']));
 						showStep(2);
 					}
 					else {
 						ui.addNotification('error', E('p', {}, [
-							'Ошибка применения WAN настроек: ',
+							'Ошибка применения WAN-настроек: ',
 							(res && res.error) ? res.error : 'unknown'
 						]));
 					}
@@ -286,7 +285,7 @@ return view.extend({
 					wanSaveBtn.disabled = false;
 					console.log('shpun.apply_wan RPC error:', err);
 					ui.addNotification('error', E('p', {}, [
-						'RPC ошибка apply_wan: ', String(err)
+						'RPC-ошибка apply_wan: ', String(err)
 					]));
 				});
 			}
@@ -303,8 +302,9 @@ return view.extend({
 		var wanStep = E('div', { id: 'shpun-step-wan' }, [
 			E('h2', {}, ['Шаг 1: Подключение к интернету (WAN)']),
 			E('p', { 'class': 'shpun-note' }, [
-				'Если этот роутер подключён напрямую к провайдеру — выберите тип подключения из списка ниже. ',
-				'Если роутер используется как дополнительный и уже получает интернет от другого роутера по кабелю — просто оставьте DHCP.'
+				'Выберите тип подключения, который использует ваш интернет-провайдер. ',
+				'Если роутер подключён к модему или другому маршрутизатору, как правило достаточно режима DHCP. ',
+				'Если провайдер выдавал вам логин/пароль или статические параметры (IP-адрес, маску, шлюз) — выберите соответствующий вариант.'
 			]),
 			E('div', { 'class': 'shpun-proto-group' }, [
 				protoDhcpBtn,
@@ -337,16 +337,16 @@ return view.extend({
 		});
 
 		var wifiHelpBox = E('div', { 'class': 'shpun-help-box' }, [
-			'SSID — имя вашей Wi-Fi сети. Пароль можно оставить пустым (открытая сеть, не рекомендуется). ',
-			'Рекомендуется использовать пароль от 8 символов с буквами и цифрами.'
+			'Задайте имя беспроводной сети (SSID) и при необходимости пароль доступа. ',
+			'Рекомендуется использовать пароль длиной не менее 8 символов со смешанными буквами и цифрами.'
 		]);
 
 		var wifiForm = E('div', { 'class': 'shpun-form-vertical' }, [
 			makeField('SSID', wifiSsid,
-				'Имя сети, которое увидят устройства (например, Shpun-Router).',
+				'Имя беспроводной сети, которое увидят ваши устройства (например, Shpun-Router).',
 				null),
 			makeField('Пароль', wifiKey,
-				'Оставьте пустым для открытой сети, либо задайте надёжный пароль.',
+				'Можно оставить пустым для открытой сети (не рекомендуется) либо задать надёжный пароль.',
 				null)
 		]);
 
@@ -368,12 +368,12 @@ return view.extend({
 						callWifiReload().catch(function (e) {
 							console.log('network.wireless.reload error:', e);
 						});
-						ui.addNotification(null, E('p', {}, ['Wi-Fi настроен. Переходим к VPN.']));
+						ui.addNotification(null, E('p', {}, ['Wi-Fi настроен. Переход к активации VPN.']));
 						showStep(3);
 					}
 					else {
 						ui.addNotification('error', E('p', {}, [
-							'Ошибка применения Wi-Fi: ',
+							'Ошибка применения параметров Wi-Fi: ',
 							(res && res.error) ? res.error : 'unknown'
 						]));
 					}
@@ -381,7 +381,7 @@ return view.extend({
 					wifiSaveBtn.disabled = false;
 					console.log('shpun.apply_wifi RPC error:', err);
 					ui.addNotification('error', E('p', {}, [
-						'RPC ошибка apply_wifi: ', String(err)
+						'RPC-ошибка apply_wifi: ', String(err)
 					]));
 				});
 			}
@@ -404,7 +404,7 @@ return view.extend({
 		}, ['Пропустить → VPN']);
 
 		var wifiStep = E('div', { id: 'shpun-step-wifi', style: 'display:none' }, [
-			E('h2', {}, ['Шаг 2: Настройка Wi-Fi']),
+			E('h2', {}, ['Шаг 2: Настройка беспроводной сети (Wi-Fi)']),
 			wifiHelpBox,
 			wifiForm,
 			E('div', { 'class': 'shpun-actions' }, [
@@ -428,21 +428,22 @@ return view.extend({
 
 		function updateVpnStatus(st) {
 			if (!st.has_sub) {
-				setText(statusText, 'Код ещё не привязан к подписке.');
+				setText(statusText, 'Код ещё не привязан к VPN-подписке.');
 				setText(statusDetails,
-					'Добавьте этот код в боте или в интерфейсе услуги Shpun VPN. ' +
-					'После привязки статус здесь обновится автоматически.');
+					'Скопируйте код роутера и добавьте его в боте или в интерфейсе услуги Shpun VPN. ' +
+					'После привязки роутер автоматически получит настройки и подключится к серверу.');
 			}
 			else if (!st.vpn_ready) {
-				setText(statusText, 'Код привязан. Готовим VPN…');
+				setText(statusText, 'Код привязан. Выполняется инициализация VPN-соединения…');
 				setText(statusDetails,
-					'Роутер загружает настройки и подключается к серверу. ' +
-					'Обычно это занимает до одной минуты.');
+					'Роутер загружает актуальную конфигурацию и устанавливает защищённое соединение. ' +
+					'Обычно это занимает не более нескольких минут.');
 			}
 			else {
-				setText(statusText, 'VPN подключён и работает ✅');
+				setText(statusText, 'VPN активен и работает корректно.');
 				setText(statusDetails,
-					'Интернет с этого роутера теперь проходит через Shpun VPN.');
+					'Трафик устройств, использующих этот маршрутизатор в качестве основного шлюза, ' +
+					'теперь проходит через инфраструктуру Shpun SDN System.');
 			}
 		}
 
@@ -474,11 +475,11 @@ return view.extend({
 		}, ['← Назад (Wi-Fi)']);
 
 		var vpnStep = E('div', { id: 'shpun-step-vpn', style: 'display:none' }, [
-			E('h2', {}, ['Шаг 3: Привязка VPN']),
+			E('h2', {}, ['Шаг 3: Активация VPN-подписки']),
 			E('p', { 'class': 'shpun-note' }, [
-				'Скопируйте код роутера выше и откройте бота ',
-				E('a', { href: 'https://t.me/shpunvpn_bot', target: '_blank' }, ['@shpunvpn_bot']),
-				'. В боте привяжите этот роутер к вашей VPN-подписке. После привязки статус ниже обновится автоматически.'
+				'Shpun Router автоматически подключается к инфраструктуре Shpun VPN через защищённый канал. ',
+				'Для активации необходимо привязать этот роутер к вашей подписке с помощью кода, указанного ниже. ',
+				'После привязки роутер автоматически загрузит конфигурацию и начнёт направлять трафик через VPN-сервер.'
 			]),
 			E('div', { 'class': 'shpun-vpn-grid' }, [
 				E('div', { 'class': 'shpun-vpn-left' }, [
@@ -492,7 +493,7 @@ return view.extend({
 				E('div', { 'class': 'shpun-vpn-right' }, [
 					qrLink,
 					E('div', { 'class': 'shpun-qr-caption' }, [
-						'Наведите камеру или нажмите, чтобы открыть бота @shpunvpn_bot'
+						'Отсканируйте QR-код камерой смартфона или нажмите на него, чтобы открыть бота @shpunvpn_bot.'
 					])
 				])
 			]),
@@ -516,8 +517,10 @@ return view.extend({
 						subscription_url: st.subscription_url || ''
 					});
 
-					if (st.vpn_ready)
+					if (st.vpn_ready && pollTimer) {
 						window.clearInterval(pollTimer);
+						pollTimer = null;
+					}
 				}).catch(function (err) {
 					console.log('shpun.state poll error:', err);
 				});
@@ -603,8 +606,12 @@ return view.extend({
 		].join('\n')]);
 
 		var wrapper = E('div', { 'class': 'shpun-card' }, [
-			E('h1', {}, ['Shpun Router — мастер настройки']),
-			E('p', {}, ['Пройдите три шага: интернет (WAN), Wi-Fi и VPN.']),
+			E('h1', {}, ['Shpun Router — мастер первоначальной настройки']),
+			E('p', {}, [
+				'Этот мастер поможет выполнить базовую подготовку роутера: подключение к интернету (WAN), конфигурацию Wi-Fi и активацию VPN-подписки Shpun VPN. ',
+				'Если ваш маршрутизатор используется как дополнительный, уже настроен вручную либо вы планируете выполнить настройки самостоятельно — ',
+				'вы можете пропустить шаги WAN и Wi-Fi и перейти сразу к настройке VPN.'
+			]),
 			stepper,
 			E('hr'),
 			wanStep,

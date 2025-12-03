@@ -5,7 +5,7 @@ SUB_FILE="/etc/shpun/subscription.json"
 OUT_CFG="/etc/shpun/xray.json"
 CONF="/etc/shpun/agent.conf"
 
-# Подхватываем опции, если есть (REDIR_PORT и т.п.)
+# Подхватываем опции (в т.ч. REDIR_PORT)
 [ -f "$CONF" ] && . "$CONF"
 
 [ -f "$SUB_FILE" ] || {
@@ -13,7 +13,6 @@ CONF="/etc/shpun/agent.conf"
     exit 1
 }
 
-# Проверяем, что есть base64/JSONFILTER
 command -v jsonfilter >/dev/null 2>&1 || {
     logger -t shpun-build "jsonfilter not found"
     exit 1
@@ -24,7 +23,15 @@ command -v base64 >/dev/null 2>&1 || {
     exit 1
 }
 
-# первый линк из массива links[0] (теперь это ss://)
+# ==========================
+# 1. Определяем тип профиля (ROUTER_PROTO)
+# ==========================
+
+# 1.1. Явный тип из JSON, если есть:
+# "router_profile": { "proto": "ss" | "vless" | ... }
+ROUTER_PROTO="$(jsonfilter -i "$SUB_FILE" -e '@.router_profile.proto' 2>/dev/null)"
+
+# 1.2. Первый линк из массива links[0]
 LINK="$(jsonfilter -i "$SUB_FILE" -e '@.subscription.links[0]' 2>/dev/null)"
 
 [ -n "$LINK" ] || {
@@ -36,17 +43,30 @@ LINK="$(jsonfilter -i "$SUB_FILE" -e '@.subscription.links[0]' 2>/dev/null)"
 LINK="${LINK%\"}"
 LINK="${LINK#\"}"
 
-case "$LINK" in
-    ss://*) ;;
-    *)
-        logger -t shpun-build "Invalid link scheme (expected ss://): $LINK"
-        exit 1
-        ;;
-esac
+# 1.3. Если ROUTER_PROTO пустой — определяем по схеме
+if [ -z "$ROUTER_PROTO" ]; then
+    case "$LINK" in
+        ss://*)
+            ROUTER_PROTO="ss"
+            ;;
+        vless://*)
+            ROUTER_PROTO="vless"
+            ;;
+        *)
+            ROUTER_PROTO="unknown"
+            ;;
+    esac
+fi
 
-# --- Вспомогательная функция для правки URL-safe base64 ---
+logger -t shpun-build "router profile proto=$ROUTER_PROTO, link_scheme=$(printf '%s' "$LINK" | cut -d: -f1)"
+
+# Порт для прозрачного dokodemo-door inbound
+REDIR_PORT="${REDIR_PORT:-12345}"
+
+# ==========================
+# 2. Вспомогательная функция для правки URL-safe base64
+# ==========================
 fix_b64() {
-    # Заменяем URL-safe символы и добиваем padding до кратности 4
     local s="$1"
     s="${s//-/+}"
     s="${s//_/\/}"
@@ -57,74 +77,82 @@ fix_b64() {
     printf '%s' "$s"
 }
 
-# --- Парсинг SS-линка ---
-# Возможные варианты:
-# 1) ss://BASE64(method:password@host:port)#NAME
-# 2) ss://method:password@host:port#NAME
-# 3) ss://BASE64(method:password@host:port)?plugin=...#NAME
+# ==========================
+# 3. Ветвление по типу профиля
+# ==========================
 
-LINK_NO_PROTO="${LINK#ss://}"
+case "$ROUTER_PROTO" in
+    ss)
+        # -------- Shadowsocks-профиль (ТЕКУЩИЙ РАБОЧИЙ ВАРИАНТ) --------
+        #
+        # Поддерживаем оба формата:
+        # 1) ss://BASE64(method:password)@host:port#NAME
+        # 2) ss://BASE64(method:password@host:port)#NAME
+        #
 
-METHOD=""
-PASSWORD=""
-SERVER=""
-PORT=""
+        LINK_NO_PROTO="${LINK#ss://}"
 
-# Отделяем часть до ?/# — это или base64, или метод:пароль@хост:порт
-BASE_PART="${LINK_NO_PROTO%%[\?#]*}"
+        METHOD=""
+        PASSWORD=""
+        SERVER=""
+        PORT=""
 
-if echo "$BASE_PART" | grep -q '@'; then
-    # Вариант 2: уже в открытом виде method:password@host:port
-    CRED_HOSTPORT="$BASE_PART"
-else
-    # Вариант 1/3: base64(method:password@host:port)
-    B64_FIXED="$(fix_b64 "$BASE_PART")"
-    DECODED="$(printf '%s' "$B64_FIXED" | base64 -d 2>/dev/null)"
+        # Часть до ?/# — userinfo@host:port или BASE64(...)
+        BASE_PART="${LINK_NO_PROTO%%[\?#]*}"
 
-    [ -n "$DECODED" ] || {
-        logger -t shpun-build "Failed to base64-decode ss link payload"
-        exit 1
-    }
+        if echo "$BASE_PART" | grep -q '@'; then
+            # Вариант 1: userinfo@host:port
+            USERINFO="${BASE_PART%%@*}"
+            HOSTPORT="${BASE_PART#*@}"
 
-    CRED_HOSTPORT="$DECODED"
-fi
+            # USERINFO: либо method:password, либо base64(method:password)
+            if echo "$USERINFO" | grep -q ':'; then
+                CRED="$USERINFO"
+            else
+                B64_FIXED="$(fix_b64 "$USERINFO")"
+                DECODED="$(printf '%s' "$B64_FIXED" | base64 -d 2>/dev/null)"
 
-# Теперь CRED_HOSTPORT в формате method:password@host:port
-CRED="${CRED_HOSTPORT%%@*}"
-HOSTPORT="${CRED_HOSTPORT#*@}"
+                [ -n "$DECODED" ] || {
+                    logger -t shpun-build "Failed to base64-decode ss userinfo"
+                    exit 1
+                }
 
-METHOD="${CRED%%:*}"
-PASSWORD="${CRED#*:}"
-SERVER="${HOSTPORT%%:*}"
-PORT="${HOSTPORT##*:}"
+                CRED="$DECODED"
+            fi
+        else
+            # Вариант 2: старый стиль BASE64(method:password@host:port)
+            B64_FIXED="$(fix_b64 "$BASE_PART")"
+            DECODED="$(printf '%s' "$B64_FIXED" | base64 -d 2>/dev/null)"
 
-# Валидация
-if [ -z "$METHOD" ] || [ -z "$PASSWORD" ] || [ -z "$SERVER" ] || [ -z "$PORT" ]; then
-    logger -t shpun-build "Invalid SS link: method='$METHOD' password='$PASSWORD' server='$SERVER' port='$PORT'"
-    exit 1
-fi
+            [ -n "$DECODED" ] || {
+                logger -t shpun-build "Failed to base64-decode ss link payload (old style)"
+                exit 1
+            }
 
-case "$PORT" in
-    *[!0-9]*)
-        logger -t shpun-build "Invalid port in SS link: '$PORT'"
-        exit 1
-        ;;
-esac
+            USERINFO_HOSTPORT="$DECODED"
+            CRED="${USERINFO_HOSTPORT%%@*}"
+            HOSTPORT="${USERINFO_HOSTPORT#*@}"
+        fi
 
-# Порт для прозрачного dokodemo-door inbound.
-# Должен совпадать с тем, что будет использоваться в firewall-xray.sh (REDIRECT).
-REDIR_PORT="${REDIR_PORT:-12345}"
+        METHOD="${CRED%%:*}"
+        PASSWORD="${CRED#*:}"
+        SERVER="${HOSTPORT%%:*}"
+        PORT="${HOSTPORT##*:}"
 
-# Собираем конфиг Xray:
-#  - inbound-1: SOCKS на 127.0.0.1:10808 (для отладки, curl --socks5)
-#  - inbound-2: dokodemo-door 0.0.0.0:$REDIR_PORT (followRedirect=true для прозрачного TCP)
-#  - outbound: shadowsocks (наш ROUTER SS 2095 через RUinn → ядро)
-#  - outbound direct: свобода
-#  - routing:
-#       * LAN / loopback / сам сервер → direct
-#       * всё остальное TCP → proxy (shadowsocks)
+        # Валидация
+        if [ -z "$METHOD" ] || [ -z "$PASSWORD" ] || [ -z "$SERVER" ] || [ -z "$PORT" ]; then
+            logger -t shpun-build "Invalid SS link: method='$METHOD' password_len=${#PASSWORD} server='$SERVER' port='$PORT'"
+            exit 1
+        fi
 
-cat >"$OUT_CFG" <<EOF
+        case "$PORT" in
+            *[!0-9]*)
+                logger -t shpun-build "Invalid port in SS link: '$PORT'"
+                exit 1
+                ;;
+        esac
+
+        cat >"$OUT_CFG" <<EOF
 {
   "log": {
     "loglevel": "warning"
@@ -141,8 +169,7 @@ cat >"$OUT_CFG" <<EOF
         "udp": true
       },
       "sniffing": {
-        "enabled": true,
-        "destOverride": ["http", "tls"]
+        "enabled": false
       }
     },
     {
@@ -171,7 +198,8 @@ cat >"$OUT_CFG" <<EOF
             "address": "$SERVER",
             "port": $PORT,
             "method": "$METHOD",
-            "password": "$PASSWORD"
+            "password": "$PASSWORD",
+            "udp": false
           }
         ]
       }
@@ -209,5 +237,25 @@ cat >"$OUT_CFG" <<EOF
 }
 EOF
 
-logger -t shpun-build "xray config built (Shadowsocks, SOCKS+REDIR, server=$SERVER:$PORT, method=$METHOD, redir_port=$REDIR_PORT)"
-exit 0
+        logger -t shpun-build "xray config built (Shadowsocks, SOCKS+REDIR, server=$SERVER:$PORT, method=$METHOD, redir_port=$REDIR_PORT)"
+        exit 0
+        ;;
+
+    vless)
+        # -------- VLESS / Reality (РЕЗЕРВ НА БУДУЩЕЕ) --------
+        #
+        # Текущая прошивка не собирает VLESS-конфиг на роутере.
+        # Но наличие ROUTER_PROTO=vless зафиксировано, так что
+        # при выпуске новой версии пакета достаточно дописать
+        # сюда генерацию конфига, без перепрошивки устройства.
+        #
+        logger -t shpun-build "VLESS router profile is not supported in this firmware version (proto=vless)"
+        exit 1
+        ;;
+
+    *)
+        # -------- Неизвестный протокол --------
+        logger -t shpun-build "Unknown router profile proto='$ROUTER_PROTO', cannot build config"
+        exit 1
+        ;;
+esac
