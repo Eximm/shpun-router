@@ -24,15 +24,6 @@ var callApplyWifi = rpc.declare({
 	expect: { '': {} }
 });
 
-// ВАЖНО: вызывем ubus так же, как из консоли
-function rpcApplyWan(params) {
-	return rpc.call('shpun', 'apply_wan', params || {});
-}
-
-function rpcApplyWifi(params) {
-	return rpc.call('shpun', 'apply_wifi', params || {});
-}
-
 var callNetworkReload = rpc.declare({
 	object: 'network',
 	method: 'reload',
@@ -425,6 +416,7 @@ return view.extend({
 
 		var statusText = E('div', { 'class': 'shpun-vpn-status-main' }, []);
 		var statusDetails = E('div', { 'class': 'shpun-vpn-status-details' }, []);
+		var statusError = E('div', { 'class': 'shpun-vpn-status-error', style: 'display:none' }, []);
 
 		function updateVpnStatus(st) {
 			if (!st.has_sub) {
@@ -444,6 +436,15 @@ return view.extend({
 				setText(statusDetails,
 					'Трафик устройств, использующих этот маршрутизатор в качестве основного шлюза, ' +
 					'теперь проходит через инфраструктуру Shpun SDN System.');
+			}
+
+			if (st.vpn_error) {
+				statusError.style.display = '';
+				setText(statusError, 'Ошибка VPN: ' + st.vpn_error);
+			}
+			else {
+				statusError.style.display = 'none';
+				setText(statusError, '');
 			}
 		}
 
@@ -487,7 +488,8 @@ return view.extend({
 					E('div', { 'class': 'shpun-vpn-status-block' }, [
 						E('div', { 'class': 'shpun-vpn-status-title' }, ['Статус VPN']),
 						statusText,
-						statusDetails
+						statusDetails,
+						statusError
 					])
 				]),
 				E('div', { 'class': 'shpun-vpn-right' }, [
@@ -514,7 +516,8 @@ return view.extend({
 					updateVpnStatus({
 						has_sub: !!st.has_sub,
 						vpn_ready: !!st.vpn_ready,
-						subscription_url: st.subscription_url || ''
+						subscription_url: st.subscription_url || '',
+						vpn_error: st.vpn_error || ''
 					});
 
 					if (st.vpn_ready && pollTimer) {
@@ -559,7 +562,8 @@ return view.extend({
 		updateVpnStatus({
 			has_sub: !!state.has_sub,
 			vpn_ready: !!state.vpn_ready,
-			subscription_url: state.subscription_url || ''
+			subscription_url: state.subscription_url || '',
+			vpn_error: state.vpn_error || ''
 		});
 
 		startPolling();
@@ -602,7 +606,8 @@ return view.extend({
 			'.shpun-vpn-status-block { padding:10px 14px; border-radius:8px; border:1px solid rgba(255,255,255,0.25); background:rgba(0,0,0,0.35); }',
 			'.shpun-vpn-status-title { font-size:90%; font-weight:600; margin-bottom:4px; }',
 			'.shpun-vpn-status-main { margin-top:2px; }',
-			'.shpun-vpn-status-details { margin-top:4px; font-size:85%; opacity:0.85; }'
+			'.shpun-vpn-status-details { margin-top:4px; font-size:85%; opacity:0.85; }',
+			'.shpun-vpn-status-error { margin-top:6px; font-size:85%; color:#ff7373; }'
 		].join('\n')]);
 
 		var wrapper = E('div', { 'class': 'shpun-card' }, [

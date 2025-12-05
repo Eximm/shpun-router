@@ -2,30 +2,6 @@
 #
 # shpun-agent (Xray + Shadowsocks transparent edition)
 #
-# Логика:
-#   1) Получаем / читаем router_code.
-#   2) Если subscription.json ещё нет:
-#       - чистим код до A-Z0-9 (AAAA-AAAA -> AAAAAAAA)
-#       - дергаем router_public?code=<CLEAN_CODE>&format=json
-#       - из ответа берём config_url (router_config) и скачиваем subscription.json
-#   3) Если subscription.json уже есть:
-#       - докачиваем VPN-движок (Xray, ENGINE_URL из agent.conf / auto-detect)
-#       - вызываем /etc/shpun/build-config.sh -> генерим xray.json (SS + transparent)
-#       - стартуем shpun-vpn, ставим vpn_ready
-#   4) Периодически (SUB_CHECK_INTERVAL) валидируем подписку:
-#       - читаем uid/usi из subscription.json
-#       - вызываем router_config?uid=<uid>&usi=<usi>&code=<CLEAN_CODE>
-#       - если ok=1 — подписка жива, обновляем subscription.json
-#       - если ok!=1 (pair_not_found, no_links_in_service и т.п.) — сбрасываем VPN:
-#           * удаляем subscription.json и vpn_ready
-#           * ждём новую привязку (шаг 2)
-#   5) Failsafe:
-#       - если uptime < MIN_UPTIME (120с по умолчанию) — VPN не трогаем
-#       - если при активном VPN нет интернета NET_FAIL_TIMEOUT (60с по умолчанию) —
-#         останавливаем shpun-vpn и снимаем vpn_ready
-#
-# ВАЖНО: в Xray-режиме мы используем прозрачный режим (dokodemo-door + REDIRECT),
-# а не tun0-интерфейс, поэтому /dev/net/tun не нужен.
 
 STATE_DIR="/etc/shpun"
 CODE_FILE="$STATE_DIR/router_code"
@@ -44,9 +20,72 @@ MIN_UPTIME_DEFAULT=120
 NET_FAIL_TIMEOUT_DEFAULT=60
 MAIN_LOOP_SLEEP_DEFAULT=30
 
+HTTP_BIN=""
+
 log() {
 	logger -t "$LOG_TAG" "$*"
 }
+
+#######################################
+# HTTP client detection
+#######################################
+
+detect_http_client() {
+	if command -v curl >/dev/null 2>&1; then
+		HTTP_BIN="curl"
+	elif command -v wget >/dev/null 2>&1; then
+		HTTP_BIN="wget"
+	elif command -v uclient-fetch >/dev/null 2>&1; then
+		HTTP_BIN="uclient-fetch"
+	else
+		HTTP_BIN=""
+	fi
+}
+
+http_get_to_file() {
+	# $1: url, $2: out_file
+	local url="$1"
+	local out="$2"
+
+	case "$HTTP_BIN" in
+		curl)
+			curl -fsS "$url" -o "$out"
+			;;
+		wget)
+			wget -qO "$out" "$url"
+			;;
+		uclient-fetch)
+			uclient-fetch -qO "$out" "$url"
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
+http_get_stdout() {
+	# $1: url
+	local url="$1"
+
+	case "$HTTP_BIN" in
+		curl)
+			curl -fsS "$url"
+			;;
+		wget)
+			wget -qO- "$url"
+			;;
+		uclient-fetch)
+			uclient-fetch -qO- "$url"
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
+#######################################
+# Arch detection / config
+#######################################
 
 detect_engine_arch() {
 	local arch
@@ -138,6 +177,10 @@ ensure_state_dir() {
 	}
 }
 
+#######################################
+# Router code
+#######################################
+
 get_code() {
 	if [ -s "$CODE_FILE" ]; then
 		CODE="$(cat "$CODE_FILE" 2>/dev/null || true)"
@@ -165,6 +208,10 @@ get_code() {
 	return 0
 }
 
+#######################################
+# Engine download / VPN control
+#######################################
+
 engine_download() {
 	if [ -z "$ENGINE_URL" ]; then
 		log "ENGINE_URL not set, skip engine download"
@@ -176,10 +223,16 @@ engine_download() {
 		return 0
 	fi
 
+	detect_http_client
+	if [ -z "$HTTP_BIN" ]; then
+		log "engine_download: no HTTP client (curl/wget/uclient-fetch), cannot download engine"
+		return 1
+	fi
+
 	mkdir -p "$(dirname "$ENGINE_BIN")" 2>/dev/null || true
 
 	log "downloading engine from $ENGINE_URL to $ENGINE_BIN"
-	if ! uclient-fetch -qO "$ENGINE_BIN" "$ENGINE_URL" 2>/dev/null; then
+	if ! http_get_to_file "$ENGINE_URL" "$ENGINE_BIN" 2>/dev/null; then
 		log "failed to download engine"
 		rm -f "$ENGINE_BIN"
 		return 1
@@ -238,15 +291,25 @@ wait_for_default_route() {
 	return 1
 }
 
+#######################################
+# Subscription fetch / check
+#######################################
+
 fetch_subscription_once() {
 	if [ -z "$CLEAN_CODE" ] || [ -z "$API_URL" ]; then
+		return 1
+	fi
+
+	detect_http_client
+	if [ -z "$HTTP_BIN" ]; then
+		log "fetch_subscription_once: no HTTP client (curl/wget/uclient-fetch)"
 		return 1
 	fi
 
 	URL="${API_URL}?code=${CLEAN_CODE}&format=json"
 
 	log "query router_public: $URL"
-	BODY="$(uclient-fetch -qO- "$URL" 2>/dev/null || true)"
+	BODY="$(http_get_stdout "$URL" 2>/dev/null || true)"
 
 	if [ -z "$BODY" ]; then
 		log "empty response from router_public"
@@ -276,7 +339,7 @@ fetch_subscription_once() {
 
 	TMP_SUB="${SUB_FILE}.tmp"
 
-	if ! uclient-fetch -qO "$TMP_SUB" "${CONFIG_URL}&format=json" 2>/dev/null; then
+	if ! http_get_to_file "${CONFIG_URL}&format=json" "$TMP_SUB" 2>/dev/null; then
 		log "failed to download subscription json"
 		rm -f "$TMP_SUB"
 		return 1
@@ -364,6 +427,13 @@ check_subscription_alive() {
 		return 0
 	fi
 
+	detect_http_client
+	if [ -z "$HTTP_BIN" ]; then
+		log "check_subscription_alive: no HTTP client (curl/wget/uclient-fetch)"
+		echo "$now_ts" >"$LAST_CHECK_FILE"
+		return 0
+	fi
+
 	UID_SUB="$(jsonfilter -i "$SUB_FILE" -e '@.uid' 2>/dev/null || echo "")"
 	USI_SUB="$(jsonfilter -i "$SUB_FILE" -e '@.usi' 2>/dev/null || echo "")"
 
@@ -384,7 +454,7 @@ check_subscription_alive() {
 
 	log "checking subscription via $CHECK_URL"
 
-	BODY="$(uclient-fetch -qO- "$CHECK_URL" 2>/dev/null || true)"
+	BODY="$(http_get_stdout "$CHECK_URL" 2>/dev/null || true)"
 
 	if [ -z "$BODY" ]; then
 		log "check_subscription_alive: empty response from router_config"
@@ -416,6 +486,10 @@ check_subscription_alive() {
 
 	return 1
 }
+
+#######################################
+# Main loop
+#######################################
 
 main_loop() {
 	load_conf

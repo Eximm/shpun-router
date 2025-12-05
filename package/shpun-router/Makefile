@@ -6,15 +6,16 @@ PKG_RELEASE:=1
 
 PKG_MAINTAINER:=Shpun VPN
 PKG_LICENSE:=MIT
-PKGARCH:=all
 
 include $(INCLUDE_DIR)/package.mk
 
-define Package/$(PKG_NAME)
+define Package/shpun-router
   SECTION:=net
   CATEGORY:=Network
-  TITLE:=Shpun Router Integration (VPN Auto-Config)
-  DEPENDS:=+luci-base +rpcd-mod-ucode +ucode-mod-fs +ucode-mod-uci +jsonfilter +curl +wget
+  SUBMENU:=VPN
+  TITLE:=Shpun Router integration (ucode backend)
+  PKGARCH:=all
+  DEPENDS:=+luci-base +jsonfilter +ucode +ucode-mod-fs +ucode-mod-uci +rpcd-mod-ucode
 endef
 
 define Package/$(PKG_NAME)/description
