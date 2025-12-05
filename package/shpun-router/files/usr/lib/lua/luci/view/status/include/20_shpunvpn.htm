@@ -14,6 +14,7 @@ local ready_raw   = read(DIR .. "/vpn_ready")
 local error_raw   = read(DIR .. "/vpn_error")
 local last_check  = read(DIR .. "/last_sub_check")
 local ver_local_r = read(DIR .. "/router_version")
+local vpn_ip_r    = read(DIR .. "/vpn_ip")
 
 local code = (code_raw or ""):gsub("%s+", "")
 local has_sub = (sub_raw ~= "")
@@ -21,6 +22,9 @@ local vpn_ok  = (ready_raw ~= "")
 
 -- локальная версия (обрежем пробелы/переводы строк)
 local ver_local = (ver_local_r or ""):gsub("^%s+", ""):gsub("%s+$", "")
+
+-- внешний IP через VPN
+local vpn_ip = (vpn_ip_r or ""):gsub("^%s+", ""):gsub("%s+$", "")
 
 -- парсим JSON подписки
 local uid, usi, link, server_host, server_port, proto
@@ -72,8 +76,7 @@ else
 	status_class = "shpunvpn-status-error"
 end
 
--- детектор обновления: считаем, что новая версия есть,
--- если и локальная, и удалённая заданы и не совпадают, и есть update_url
+-- детектор обновления
 local has_update = false
 if ver_local ~= "" and ver_remote ~= "" and ver_local ~= ver_remote and update_url and update_url ~= "" then
 	has_update = true
@@ -178,7 +181,7 @@ end
                Shadowsocks
             <% elseif proto == "vless" then %>
                VLESS / Reality
-            <% elseif proto ~= "" then %>
+            <% elseif proto and proto ~= "" then %>
                <%=proto%> (неизвестный)
             <% else %>
                неопределён
@@ -201,8 +204,25 @@ end
               <span>VLESS / Reality (конфигурация скрыта)</span>
 
             <% elseif has_sub then %>
-              <span>VPN-профиль (<%=proto ~= "" and proto or "неизвестный"%>)</span>
+              <% if proto and proto ~= "" then %>
+                <span>VPN-профиль (<%=proto%>)</span>
+              <% else %>
+                <span>VPN-профиль (неизвестный тип)</span>
+              <% end %>
 
+            <% else %>
+              —
+            <% end %>
+          </td>
+        </tr>
+
+        <tr>
+          <td><strong>IP через VPN</strong></td>
+          <td>
+            <% if vpn_ok and vpn_ip ~= "" then %>
+              <span style="font-family:monospace;"><%=vpn_ip%></span>
+            <% elseif vpn_ok then %>
+              <span>определяется…</span>
             <% else %>
               —
             <% end %>

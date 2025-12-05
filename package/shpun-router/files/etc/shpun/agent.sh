@@ -10,6 +10,9 @@ VPN_READY_FILE="$STATE_DIR/vpn_ready"
 LAST_CHECK_FILE="$STATE_DIR/last_sub_check"
 CONF="$STATE_DIR/agent.conf"
 
+VERROR_FILE="$STATE_DIR/vpn_error"
+VPN_IP_FILE="/tmp/shpun_vpn_ip"
+
 LOG_TAG="shpun-agent"
 
 API_URL_DEFAULT="https://bill.shpyn.online/shm/v1/public/router_public"
@@ -238,6 +241,13 @@ engine_download() {
 		return 1
 	fi
 
+	# проверка, что файл не пустой
+	if [ ! -s "$ENGINE_BIN" ]; then
+		log "downloaded engine file is empty"
+		rm -f "$ENGINE_BIN"
+		return 1
+	fi
+
 	if ! chmod +x "$ENGINE_BIN" 2>/dev/null; then
 		log "failed to chmod +x engine"
 		rm -f "$ENGINE_BIN"
@@ -289,6 +299,34 @@ wait_for_default_route() {
 	done
 	log "no default IPv4 route detected after timeout, continuing anyway"
 	return 1
+}
+
+#######################################
+# VPN IP detection
+#######################################
+
+detect_vpn_ip() {
+	# Пытаемся определить внешний IP через активный туннель
+	# Ничего не ломаем, если HTTP-клиента или интернета нет
+	detect_http_client
+
+	if [ -z "$HTTP_BIN" ]; then
+		log "detect_vpn_ip: no HTTP client available"
+		echo "unknown" >"$VPN_IP_FILE"
+		return 0
+	fi
+
+	local ip
+	ip="$(http_get_stdout 'http://ifconfig.me/ip' 2>/dev/null || true)"
+	ip="$(printf '%s' "$ip" | tr -d '\r\n ' )"
+
+	if [ -z "$ip" ]; then
+		ip="unknown"
+	fi
+
+	echo "$ip" >"$VPN_IP_FILE"
+	log "detect_vpn_ip: $ip"
+	return 0
 }
 
 #######################################
@@ -345,6 +383,13 @@ fetch_subscription_once() {
 		return 1
 	fi
 
+	# минимальная проверка: файл не пустой
+	if [ ! -s "$TMP_SUB" ]; then
+		log "downloaded subscription json is empty"
+		rm -f "$TMP_SUB"
+		return 1
+	fi
+
 	mv "$TMP_SUB" "$SUB_FILE"
 	log "subscription json saved to $SUB_FILE"
 
@@ -385,7 +430,11 @@ ensure_vpn_from_subscription() {
 	fi
 
 	echo "ok" >"$VPN_READY_FILE"
+	rm -f "$VERROR_FILE"
 	log "vpn_ready marked in $VPN_READY_FILE"
+
+	# попытка определить внешний IP через туннель
+	detect_vpn_ip
 
 	return 0
 }
@@ -468,6 +517,9 @@ check_subscription_alive() {
 		printf '%s' "$BODY" >"$SUB_FILE"
 		log "subscription_alive: ok=1, subscription.json refreshed"
 		echo "$now_ts" >"$LAST_CHECK_FILE"
+		# подписка живая, очищаем возможную старую ошибку и обновляем IP
+		rm -f "$VERROR_FILE"
+		detect_vpn_ip
 		return 0
 	fi
 
@@ -476,14 +528,18 @@ check_subscription_alive() {
 
 	rm -f "$VPN_READY_FILE"
 	rm -f "$SUB_FILE"
+	rm -f "$VPN_IP_FILE"
 
 	echo "$now_ts" >"$LAST_CHECK_FILE"
-	echo "$ERR" >"$STATE_DIR/vpn_error"
+	echo "$ERR" >"$VERROR_FILE"
 
 	if [ -x /etc/init.d/shpun-vpn ]; then
 		/etc/init.d/shpun-vpn stop 2>/dev/null || true
 	fi
+	return 1
+}
 
+	end
 	return 1
 }
 
