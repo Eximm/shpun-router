@@ -18,9 +18,50 @@ command -v jsonfilter >/dev/null 2>&1 || {
     exit 1
 }
 
-command -v base64 >/dev/null 2>&1 || {
-    logger -t shpun-build "base64 not found"
-    exit 1
+# ==========================
+# 0. Универсальный base64-декодер без внешних DEPENDS
+# ==========================
+# b64_decode:
+#   - если есть системный base64, используем его;
+#   - иначе используем встроенный awk-декодер (только busybox awk).
+b64_decode() {
+    if command -v base64 >/dev/null 2>&1; then
+        base64 -d 2>/dev/null
+        return
+    fi
+
+    awk -v tbl='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/' '
+    function val(c,   p) {
+        p = index(tbl, c)
+        return (p ? p - 1 : -1)
+    }
+    {
+        # убираем мусор и переносы
+        gsub(/[^A-Za-z0-9+\/=]/, "", $0)
+
+        out = ""
+        for (i = 1; i <= length($0); i += 4) {
+            c1 = substr($0, i, 1)
+            c2 = substr($0, i+1, 1)
+            c3 = substr($0, i+2, 1)
+            c4 = substr($0, i+3, 1)
+
+            v1 = val(c1); v2 = val(c2)
+            v3 = (c3 == "=" ? -1 : val(c3))
+            v4 = (c4 == "=" ? -1 : val(c4))
+
+            b1 = (v1 << 2) | (v2 >> 4)
+            b2 = ((v2 & 15) << 4) | (v3 < 0 ? 0 : (v3 >> 2))
+            b3 = ((v3 & 3) << 6) | (v4 < 0 ? 0 : v4)
+
+            out = out sprintf("%c", b1)
+            if (v3 >= 0)
+                out = out sprintf("%c", b2)
+            if (v4 >= 0)
+                out = out sprintf("%c", b3)
+        }
+        printf "%s", out
+    }'
 }
 
 # ==========================
@@ -110,7 +151,7 @@ case "$ROUTER_PROTO" in
                 CRED="$USERINFO"
             else
                 B64_FIXED="$(fix_b64 "$USERINFO")"
-                DECODED="$(printf '%s' "$B64_FIXED" | base64 -d 2>/dev/null)"
+                DECODED="$(printf '%s' "$B64_FIXED" | b64_decode 2>/dev/null)"
 
                 [ -n "$DECODED" ] || {
                     logger -t shpun-build "Failed to base64-decode ss userinfo"
@@ -122,7 +163,7 @@ case "$ROUTER_PROTO" in
         else
             # Вариант 2: старый стиль BASE64(method:password@host:port)
             B64_FIXED="$(fix_b64 "$BASE_PART")"
-            DECODED="$(printf '%s' "$B64_FIXED" | base64 -d 2>/dev/null)"
+            DECODED="$(printf '%s' "$B64_FIXED" | b64_decode 2>/dev/null)"
 
             [ -n "$DECODED" ] || {
                 logger -t shpun-build "Failed to base64-decode ss link payload (old style)"

@@ -15,8 +15,9 @@ define Package/shpun-router
   SUBMENU:=VPN
   TITLE:=Shpun Router integration (ucode backend)
   PKGARCH:=all
-  DEPENDS:=+luci-base +jsonfilter +ucode +ucode-mod-fs +ucode-mod-uci +rpcd-mod-ucode +coreutils-base64
+  DEPENDS:=+luci-base +jsonfilter +ucode +ucode-mod-fs +ucode-mod-uci +rpcd-mod-ucode
 endef
+
 
 define Package/$(PKG_NAME)/description
 Shpun Router Integration:
@@ -48,12 +49,14 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_DIR) $(1)/www/luci-static/resources/view/status/include
 	$(INSTALL_DIR) $(1)/etc/uci-defaults
 
-	# --- core scripts ---
+		# --- core scripts ---
 	$(INSTALL_BIN) ./files/etc/shpun/agent.sh            $(1)/etc/shpun/agent.sh
 	$(INSTALL_BIN) ./files/etc/shpun/build-config.sh     $(1)/etc/shpun/build-config.sh
 	$(INSTALL_BIN) ./files/etc/shpun/gen_code.sh         $(1)/etc/shpun/gen_code.sh
 	$(INSTALL_BIN) ./files/etc/shpun/firewall-xray.sh    $(1)/etc/shpun/firewall-xray.sh
 	$(INSTALL_BIN) ./files/etc/shpun/router_updater.sh   $(1)/etc/shpun/router_updater.sh
+	$(INSTALL_BIN) ./files/etc/shpun/b64dec.sh           $(1)/etc/shpun/b64dec.sh
+
 
 	# default config
 	$(INSTALL_CONF) ./files/etc/shpun/agent.conf $(1)/etc/shpun/agent.conf
