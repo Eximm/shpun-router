@@ -160,6 +160,10 @@ load_conf() {
 	[ -z "$NET_FAIL_TIMEOUT" ] && NET_FAIL_TIMEOUT="$NET_FAIL_TIMEOUT_DEFAULT"
 	[ -z "$MAIN_LOOP_SLEEP" ]  && MAIN_LOOP_SLEEP="$MAIN_LOOP_SLEEP_DEFAULT"
 
+	# keepalive: интервал и URL по умолчанию, если не заданы в agent.conf
+	[ -z "$KEEPALIVE_INTERVAL" ] && KEEPALIVE_INTERVAL=600
+	[ -z "$KEEPALIVE_URL" ]      && KEEPALIVE_URL="http://ifconfig.me/ip"
+
 	if [ -z "$PING_HOST" ]; then
 		if [ -n "$DNS_ADDR1" ]; then
 			PING_HOST="$DNS_ADDR1"
@@ -172,14 +176,6 @@ load_conf() {
 		ENGINE_URL="$(build_engine_url)"
 	fi
 }
-
-ensure_state_dir() {
-	mkdir -p "$STATE_DIR" 2>/dev/null || {
-		log "failed to create $STATE_DIR"
-		exit 1
-	}
-}
-
 #######################################
 # Router code
 #######################################
@@ -302,31 +298,42 @@ wait_for_default_route() {
 }
 
 #######################################
-# VPN IP detection
+# VPN keepalive + IP detection
 #######################################
 
-detect_vpn_ip() {
-	# Пытаемся определить внешний IP через активный туннель
-	# Ничего не ломаем, если HTTP-клиента или интернета нет
+vpn_keepalive() {
+	# Никаких curl — используем то же самое, что и агент.
 	detect_http_client
 
 	if [ -z "$HTTP_BIN" ]; then
-		log "detect_vpn_ip: no HTTP client available"
+		log "vpn_keepalive: no HTTP client available"
 		echo "unknown" >"$VPN_IP_FILE"
 		return 0
-	fi
+	}
 
-	local ip
-	ip="$(http_get_stdout 'http://ifconfig.me/ip' 2>/dev/null || true)"
+	# ВРЕМЕННО прокидываем исходящий HTTP/HTTPS самого роутера
+	# через dokodemo-door (REDIR_PORT) для этого одного запроса.
+	local url="${KEEPALIVE_URL:-http://ifconfig.me/ip}"
+	local ip=""
+
+	iptables -t nat -I OUTPUT -p tcp --dport 80  -j REDIRECT --to-ports "$REDIR_PORT" 2>/dev/null || true
+	iptables -t nat -I OUTPUT -p tcp --dport 443 -j REDIRECT --to-ports "$REDIR_PORT" 2>/dev/null || true
+
+	ip="$(http_get_stdout "$url" 2>/dev/null || true)"
 	ip="$(printf '%s' "$ip" | tr -d '\r\n ' )"
+
+	# ВСЕГДА убираем правила, даже если запрос не удался
+	iptables -t nat -D OUTPUT -p tcp --dport 80  -j REDIRECT --to-ports "$REDIR_PORT" 2>/dev/null || true
+	iptables -t nat -D OUTPUT -p tcp --dport 443 -j REDIRECT --to-ports "$REDIR_PORT" 2>/dev/null || true
 
 	if [ -z "$ip" ]; then
 		ip="unknown"
+		log "vpn_keepalive: failed via REDIR, ip=unknown"
+	else
+		log "vpn_keepalive: ok via REDIR, ip=$ip"
 	fi
 
 	echo "$ip" >"$VPN_IP_FILE"
-	log "detect_vpn_ip: $ip"
-	return 0
 }
 
 #######################################
@@ -539,10 +546,6 @@ check_subscription_alive() {
 	return 1
 }
 
-	end
-	return 1
-}
-
 #######################################
 # Main loop
 #######################################
@@ -554,6 +557,7 @@ main_loop() {
 	log "shpun-agent started (API_URL=$API_URL, ENGINE_BIN=$ENGINE_BIN, ENGINE_URL=$ENGINE_URL, MIN_UPTIME=$MIN_UPTIME, NET_FAIL_TIMEOUT=$NET_FAIL_TIMEOUT, PING_HOST=$PING_HOST)"
 
 	NET_FAIL_SECONDS=0
+	VPN_KEEPALIVE_SECONDS=0
 
 	while :; do
 		load_conf
@@ -594,6 +598,19 @@ main_loop() {
 			fi
 
 			check_subscription_alive
+		fi
+
+		# --- VPN keepalive + IP detection ---
+		# Если VPN активен и KEEPALIVE_INTERVAL > 0, периодически дергаем vpn_keepalive()
+		if [ -s "$VPN_READY_FILE" ] && [ "${KEEPALIVE_INTERVAL:-0}" -gt 0 ]; then
+			VPN_KEEPALIVE_SECONDS=$((VPN_KEEPALIVE_SECONDS + MAIN_LOOP_SLEEP))
+
+			if [ "$VPN_KEEPALIVE_SECONDS" -ge "$KEEPALIVE_INTERVAL" ]; then
+				vpn_keepalive
+				VPN_KEEPALIVE_SECONDS=0
+			fi
+		else
+			VPN_KEEPALIVE_SECONDS=0
 		fi
 
 		sleep "$MAIN_LOOP_SLEEP"

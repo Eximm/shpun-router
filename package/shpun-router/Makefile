@@ -15,7 +15,7 @@ define Package/shpun-router
   SUBMENU:=VPN
   TITLE:=Shpun Router integration (ucode backend)
   PKGARCH:=all
-  DEPENDS:=+luci-base +jsonfilter +ucode +ucode-mod-fs +ucode-mod-uci +rpcd-mod-ucode
+  DEPENDS:=+luci-base +jsonfilter +ucode +ucode-mod-fs +ucode-mod-uci +rpcd-mod-ucode +coreutils-base64
 endef
 
 define Package/$(PKG_NAME)/description
@@ -44,8 +44,8 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_DIR) $(1)/usr/share/rpcd/ucode
 	$(INSTALL_DIR) $(1)/usr/share/rpcd/acl.d
 	$(INSTALL_DIR) $(1)/usr/share/luci/menu.d
-	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/view/status/include
 	$(INSTALL_DIR) $(1)/www/luci-static/resources/view/shpun
+	$(INSTALL_DIR) $(1)/www/luci-static/resources/view/status/include
 	$(INSTALL_DIR) $(1)/etc/uci-defaults
 
 	# --- core scripts ---
@@ -53,7 +53,7 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_BIN) ./files/etc/shpun/build-config.sh     $(1)/etc/shpun/build-config.sh
 	$(INSTALL_BIN) ./files/etc/shpun/gen_code.sh         $(1)/etc/shpun/gen_code.sh
 	$(INSTALL_BIN) ./files/etc/shpun/firewall-xray.sh    $(1)/etc/shpun/firewall-xray.sh
-	$(INSTALL_BIN) ./files/etc/shpun/router_updater.sh    $(1)/etc/shpun/router_updater.sh
+	$(INSTALL_BIN) ./files/etc/shpun/router_updater.sh   $(1)/etc/shpun/router_updater.sh
 
 	# default config
 	$(INSTALL_CONF) ./files/etc/shpun/agent.conf $(1)/etc/shpun/agent.conf
@@ -75,9 +75,9 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_DATA) ./files/www/luci-static/resources/view/shpun/wizard.js \
 		$(1)/www/luci-static/resources/view/shpun/wizard.js
 
-	# --- Status widget ---
-	$(INSTALL_DATA) ./files/usr/lib/lua/luci/view/status/include/20_shpunvpn.htm \
-		$(1)/usr/lib/lua/luci/view/status/include/20_shpunvpn.htm
+	# --- Status widget (новый JS виджет для Dashboard) ---
+	$(INSTALL_DATA) ./files/www/luci-static/resources/view/status/include/01_shpunvpn.js \
+		$(1)/www/luci-static/resources/view/status/include/01_shpunvpn.js
 
 	# --- uci-defaults ---
 	$(INSTALL_BIN) ./files/etc/uci-defaults/99_shpun-router $(1)/etc/uci-defaults/99_shpun-router
@@ -113,6 +113,7 @@ define Package/$(PKG_NAME)/postinst
 }
 exit 0
 endef
+
 
 #######################################
 # CONFFILES

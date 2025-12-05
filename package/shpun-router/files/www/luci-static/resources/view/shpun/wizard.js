@@ -62,11 +62,16 @@ return view.extend({
 
 		function updateStepIndicators(step) {
 			for (var i = 0; i < stepIndicators.length; i++) {
+				var el = stepIndicators[i];
 				var s = i + 1;
-				btn.className = 'shpun-proto-btn' + (val === wanProto ? ' shpun-proto-active' : '');
 
+				if (s === step)
+					el.classList.add('active');
+				else
+					el.classList.remove('active');
 			}
 		}
+
 
 		function showStep(step) {
 			currentStep = step;
