@@ -16,9 +16,11 @@ jobs:
       PACKAGE_NAME: shpun-router
 
     steps:
+      # --- Checkout ---
       - name: Checkout repo
         uses: actions/checkout@v4
 
+      # --- Deps ---
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -26,41 +28,43 @@ jobs:
             build-essential libncurses5-dev gawk unzip file \
             libssl-dev wget python3 zstd
 
-      # 🧊 Кэшируем уже распакованный и сконфигурированный SDK
+      # --- SDK cache ---
       - name: Cache OpenWrt SDK
         id: cache-sdk
         uses: actions/cache@v4
         with:
-          # ВАЖНО: путь именно sdk, и ключ фиксированный
           path: sdk
           key: linux-openwrt-sdk-24.10.3-ath79-v1
 
+      # --- Download SDK if not cached ---
       - name: Download & unpack OpenWrt SDK (on cache miss)
         if: steps.cache-sdk.outputs.cache-hit != 'true'
         run: |
-          echo "SDK cache miss, downloading..."
+          echo "SDK cache miss — downloading"
           wget -O sdk.tar.zst "$SDK_URL"
           tar -I zstd -xf sdk.tar.zst
           mv "$SDK_DIR" sdk
           ls -la sdk
 
-      # Базовая конфигурация SDK — только один раз при cache miss
+      # --- Initial config (only on cache miss) ---
       - name: Configure SDK (only once)
         if: steps.cache-sdk.outputs.cache-hit != 'true'
         working-directory: sdk
         run: |
-          # дефолтный .config
           make defconfig
 
+      # Debug cache
       - name: Debug cache hit
         run: echo "SDK cache hit = ${{ steps.cache-sdk.outputs.cache-hit }}"
 
+      # Info
       - name: SDK info
         working-directory: sdk
         run: |
           pwd
           ls -la
 
+      # --- Copy package to SDK ---
       - name: Copy package into SDK
         run: |
           mkdir -p sdk/package
@@ -68,33 +72,51 @@ jobs:
           cp -r package/${PACKAGE_NAME} sdk/package/
           ls -la sdk/package/${PACKAGE_NAME}
 
-      # Автоматически обновляем номер релиза
-      - name: Patch PKG_RELEASE with GitHub run number
-        run: |
-          sed -i "s/^PKG_RELEASE:=.*/PKG_RELEASE:=${GITHUB_RUN_NUMBER}/" sdk/package/${PACKAGE_NAME}/Makefile
-          echo "Patched PKG_RELEASE=${GITHUB_RUN_NUMBER}"
-          grep PKG_RELEASE sdk/package/${PACKAGE_NAME}/Makefile || true
-
-      # Чистим только наш пакет (по желанию можно убрать)
-      - name: Clean package before build
+      # --- Clean package before build ---
+      - name: Clean package
         working-directory: sdk
         run: |
           make package/${PACKAGE_NAME}/clean V=s || true
 
+      # --- Build ---
       - name: Build package
         working-directory: sdk
         run: |
           make package/${PACKAGE_NAME}/compile -j"$(nproc)" V=s
 
+      # --- List compiled IPKs ---
       - name: List built packages
         working-directory: sdk
         run: |
           find bin -name "*${PACKAGE_NAME}*.ipk" -print || echo "No ipk found"
 
-      - name: Upload shpun-router ipk artifact
+      # --- Create clean OTA filename ---
+      - name: Create clean OTA filename
+        working-directory: sdk
+        run: |
+          set -e
+
+          PKG_VERSION=$(sed -n 's/^PKG_VERSION:=\s*//p' package/${PACKAGE_NAME}/Makefile)
+          echo "Detected PKG_VERSION=$PKG_VERSION"
+
+          ORIG_IPK=$(find bin -name "${PACKAGE_NAME}_*.ipk" | head -n1)
+
+          if [ -z "$ORIG_IPK" ]; then
+            echo "ERROR: No shpun-router ipk found" >&2
+            exit 1
+          fi
+
+          echo "Original ipk: $ORIG_IPK"
+
+          mkdir -p bin/ota
+          CLEAN_IPK="bin/ota/${PACKAGE_NAME}_${PKG_VERSION}_all.ipk"
+
+          cp "$ORIG_IPK" "$CLEAN_IPK"
+          ls -lh "$CLEAN_IPK"
+
+      # --- Upload OTA artifact ---
+      - name: Upload shpun-router OTA package
         uses: actions/upload-artifact@v4
         with:
-          name: shpun-router-ipk
-          path: |
-            sdk/bin/packages/**/*shpun-router*.ipk
-            sdk/bin/targets/**/*shpun-router*.ipk
+          name: shpun-router-ota
+          path: sdk/bin/ota/shpun-router_*_all.ipk
