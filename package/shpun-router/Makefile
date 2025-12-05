@@ -53,7 +53,7 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_BIN) ./files/etc/shpun/build-config.sh     $(1)/etc/shpun/build-config.sh
 	$(INSTALL_BIN) ./files/etc/shpun/gen_code.sh         $(1)/etc/shpun/gen_code.sh
 	$(INSTALL_BIN) ./files/etc/shpun/firewall-xray.sh    $(1)/etc/shpun/firewall-xray.sh
-	$(INSTALL_BIN) ./files/etc/shpun/update-router.sh    $(1)/etc/shpun/update-router.sh
+	$(INSTALL_BIN) ./files/etc/shpun/router_updater.sh    $(1)/etc/shpun/router_updater.sh
 
 	# default config
 	$(INSTALL_CONF) ./files/etc/shpun/agent.conf $(1)/etc/shpun/agent.conf
