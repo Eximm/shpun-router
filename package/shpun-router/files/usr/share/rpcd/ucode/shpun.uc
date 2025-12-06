@@ -1,7 +1,7 @@
 'use strict';
 
 import { open, popen } from 'fs';
-import { cursor } from 'uci';  /* сейчас не нужен, но оставим, чтобы не трогать окружение */
+import { cursor } from 'uci';  /* можно не использовать, но пусть будет */
 
 /* пути */
 const DIR      = "/etc/shpun";
@@ -104,7 +104,7 @@ return {
 					/* 1) сбрасываем last_sub_check и subscription.json,
 					 * 2) рестартуем агента (он тянет свежий subscription.json),
 					 * 3) ждём немного,
-					 * 4) запускаем router_updater в режиме CHECK_ONLY=1
+					 * 4) запускаем router_updater в режиме CHECK_ONLY=1,
 					 *    чтобы он только записал router_latest_version.
 					 */
 					let cmd =
@@ -133,9 +133,6 @@ return {
 					if (!exists(DIR + "/router_updater"))
 						return { ok: 0, error: "router_updater not found" };
 
-					/* Здесь подписку уже обновлять не будем —
-					 * предполагаем, что ota_check был перед этим.
-					 */
 					let p = popen("/etc/shpun/router_updater >/dev/null 2>&1 &");
 					if (p) p.close();
 
@@ -147,7 +144,7 @@ return {
 			}
 		},
 
-		/* --- RESET_VPN как у тебя --- */
+		/* --- RESET_VPN: полный сброс в состояние "только что поставили пакет" --- */
 		reset_vpn: {
 			call: function(req) {
 				try {
@@ -159,12 +156,12 @@ return {
 
 					let cmd =
 						"rm -f " +
-						CODE + " " +
-						SUB + " " +
-						DIR + "/xray.json " +
-						READY + " " +
-						VERROR + " " +
-						FW_LAST +
+						CODE + " " +            /* router_code */
+						SUB + " " +             /* subscription.json */
+						DIR + "/xray.json " +   /* сгенерированный конфиг Xray */
+						READY + " " +           /* vpn_ready */
+						VERROR + " " +          /* vpn_error */
+						FW_LAST +               /* последняя доступная версия */
 						" >/dev/null 2>&1";
 
 					let p3 = popen(cmd);
