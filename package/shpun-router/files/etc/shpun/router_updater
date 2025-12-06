@@ -4,8 +4,13 @@
 
 CONF_DIR="/etc/shpun"
 SUB_FILE="$CONF_DIR/subscription.json"
-LOCAL_VER_FILE="$CONF_DIR/router_version"
-LOCAL_VER_PREV_FILE="$CONF_DIR/router_version.prev"
+
+# новый файл версии
+LOCAL_VER_FILE="$CONF_DIR/router_software_version"
+# старый (для совместимости)
+LOCAL_VER_FILE_LEGACY="$CONF_DIR/router_version"
+
+LOCAL_VER_PREV_FILE="$CONF_DIR/router_software_version.prev"
 LATEST_VER_FILE="$CONF_DIR/router_latest_version"
 LOCK_FILE="/var/run/shpun-update.lock"
 
@@ -13,7 +18,7 @@ LOG_TAG="shpun-update"
 PKG_NAME="shpun-router"
 
 log() {
-    logger -t "$LOG_TAG" "$*"
+	logger -t "$LOG_TAG" "$*"
 }
 
 # --- version compare ---
@@ -22,135 +27,162 @@ log() {
 #   1  если A = B
 #   2  если A > B
 ver_cmp() {
-    local v1="${1:-0.0.0}"
-    local v2="${2:-0.0.0}"
+	local v1="${1:-0.0.0}"
+	local v2="${2:-0.0.0}"
 
-    local IFS=.
-    set -- $v1 ; local a1=${1:-0} a2=${2:-0} a3=${3:-0}
-    set -- $v2 ; local b1=${1:-0} b2=${2:-0} b3=${3:-0}
+	local IFS=.
+	set -- $v1 ; local a1=${1:-0} a2=${2:-0} a3=${3:-0}
+	set -- $v2 ; local b1=${1:-0} b2=${2:-0} b3=${3:-0}
 
-    a1=$((a1+0)); a2=$((a2+0)); a3=$((a3+0))
-    b1=$((b1+0)); b2=$((b2+0)); b3=$((b3+0))
+	a1=$((a1+0)); a2=$((a2+0)); a3=$((a3+0))
+	b1=$((b1+0)); b2=$((b2+0)); b3=$((b3+0))
 
-    [ "$a1" -lt "$b1" ] && { echo 0; return; }
-    [ "$a1" -gt "$b1" ] && { echo 2; return; }
+	[ "$a1" -lt "$b1" ] && { echo 0; return; }
+	[ "$a1" -gt "$b1" ] && { echo 2; return; }
 
-    [ "$a2" -lt "$b2" ] && { echo 0; return; }
-    [ "$a2" -gt "$b2" ] && { echo 2; return; }
+	[ "$a2" -lt "$b2" ] && { echo 0; return; }
+	[ "$a2" -gt "$b2" ] && { echo 2; return; }
 
-    [ "$a3" -lt "$b3" ] && { echo 0; return; }
-    [ "$a3" -gt "$b3" ] && { echo 2; return; }
+	[ "$a3" -lt "$b3" ] && { echo 0; return; }
+	[ "$a3" -gt "$b3" ] && { echo 2; return; }
 
-    echo 1
+	echo 1
 }
 
 # --- lock ---
 if [ -e "$LOCK_FILE" ]; then
-    if kill -0 "$(cat "$LOCK_FILE" 2>/dev/null)" 2>/dev/null; then
-        log "another update process is running"
-        exit 1
-    fi
+	if kill -0 "$(cat "$LOCK_FILE" 2>/dev/null)" 2>/dev/null; then
+		log "another update process is running"
+		exit 1
+	fi
 fi
 echo $$ >"$LOCK_FILE"
 trap 'rm -f "$LOCK_FILE"' EXIT
 
 # --- deps ---
-for bin in jsonfilter uclient-fetch opkg tar; do
-    if ! command -v "$bin" >/dev/null 2>&1; then
-        log "dependency missing: $bin"
-        exit 1
-    fi
+for bin in jsonfilter uclient-fetch opkg; do
+	if ! command -v "$bin" >/dev/null 2>&1; then
+		log "dependency missing: $bin"
+		exit 1
+	fi
 done
 
 [ -f "$SUB_FILE" ] || { log "subscription.json missing"; exit 1; }
 
-REMOTE_VER="$(jsonfilter -i "$SUB_FILE" -e '@.router_software.version' 2>/dev/null)"
-UPDATE_URL="$(jsonfilter -i "$SUB_FILE" -e '@.router_software.update_url' 2>/dev/null)"
-MIN_VER="$(jsonfilter -i "$SUB_FILE" -e '@.router_software.min_version' 2>/dev/null)"
+# --- read remote fields (поддержка двух имён блока) ---
+REMOTE_VER="$(
+	jsonfilter -i "$SUB_FILE" -e '@.router_software.version' 2>/dev/null \
+	|| jsonfilter -i "$SUB_FILE" -e '@.router_software_current.version' 2>/dev/null \
+	|| echo ""
+)"
 
+UPDATE_URL="$(
+	jsonfilter -i "$SUB_FILE" -e '@.router_software.update_url' 2>/dev/null \
+	|| jsonfilter -i "$SUB_FILE" -e '@.router_software_current.update_url' 2>/dev/null \
+	|| echo ""
+)"
+
+MIN_VER="$(
+	jsonfilter -i "$SUB_FILE" -e '@.router_software.min_version' 2>/dev/null \
+	|| jsonfilter -i "$SUB_FILE" -e '@.router_software_current.min_version' 2>/dev/null \
+	|| echo ""
+)"
+
+# --- read local version (новый файл; при отсутствии — старый) ---
 LOCAL_VER=""
-[ -f "$LOCAL_VER_FILE" ] && LOCAL_VER="$(tr -d '\r\n ' < "$LOCAL_VER_FILE")"
+if [ -f "$LOCAL_VER_FILE" ]; then
+	LOCAL_VER="$(tr -d '\r\n ' < "$LOCAL_VER_FILE")"
+elif [ -f "$LOCAL_VER_FILE_LEGACY" ]; then
+	LOCAL_VER="$(tr -d '\r\n ' < "$LOCAL_VER_FILE_LEGACY")"
+fi
 
-log "local=${LOCAL_VER:-none}, remote=${REMOTE_VER:-none}, min=${MIN_VER:-none}"
+log "start update check: local=${LOCAL_VER:-none}, remote=${REMOTE_VER:-none}, min=${MIN_VER:-none}"
 
 # --- всегда обновляем файл с последней известной версией ---
 if [ -n "$REMOTE_VER" ]; then
-    echo "$REMOTE_VER" >"$LATEST_VER_FILE"
-    log "router_latest_version set to remote=$REMOTE_VER"
+	echo "$REMOTE_VER" >"$LATEST_VER_FILE"
+	log "router_latest_version set to remote=$REMOTE_VER"
 elif [ -n "$LOCAL_VER" ]; then
-    echo "$LOCAL_VER" >"$LATEST_VER_FILE"
-    log "router_latest_version set to local=$LOCAL_VER (remote unknown)"
+	echo "$LOCAL_VER" >"$LATEST_VER_FILE"
+	log "router_latest_version set to local=$LOCAL_VER (remote unknown)"
 fi
 
 # если нет URL обновления — обновлять нечем
 if [ -z "$UPDATE_URL" ]; then
-    log "empty update_url, nothing to do"
-    exit 0
+	log "empty update_url, nothing to do"
+	exit 0
 fi
 
-# --- version check ---
+# --- минимальная версия (если указана) ---
+if [ -n "$MIN_VER" ] && [ -n "$LOCAL_VER" ]; then
+	cmp_min="$(ver_cmp "$LOCAL_VER" "$MIN_VER")"
+	if [ "$cmp_min" -eq 0 ]; then
+		# local < min_version — теоретически можно форсить обновление,
+		# но у нас и так сейчас просто обновление по version, поэтому только залогируем
+		log "local version below min_version (local=$LOCAL_VER, min=$MIN_VER)"
+	fi
+fi
+
+# --- version check (если известна локальная версия) ---
 if [ -n "$REMOTE_VER" ] && [ -n "$LOCAL_VER" ]; then
-    cmp="$(ver_cmp "$LOCAL_VER" "$REMOTE_VER")"
-    case "$cmp" in
-        1)
-            log "already up-to-date"
-            exit 0
-            ;;
-        2)
-            log "local version newer than remote; skipping update"
-            exit 0
-            ;;
-        0)
-            # local < remote — обновляем
-            :
-            ;;
-    esac
+	cmp="$(ver_cmp "$LOCAL_VER" "$REMOTE_VER")"
+	case "$cmp" in
+		1)
+			log "already up-to-date (local=$LOCAL_VER, remote=$REMOTE_VER)"
+			exit 0
+			;;
+		2)
+			log "local version newer than remote; skipping update (local=$LOCAL_VER, remote=$REMOTE_VER)"
+			exit 0
+			;;
+		0)
+			log "update required: local=$LOCAL_VER < remote=$REMOTE_VER"
+			;;
+	esac
+else
+	log "one of versions is empty (local='${LOCAL_VER:-}', remote='${REMOTE_VER:-}'), will update anyway if URL is set"
 fi
 
 TMP_IPK="/tmp/${PKG_NAME}_update.ipk"
 
-log "downloading: $UPDATE_URL"
+log "downloading update from: $UPDATE_URL"
 
 if ! uclient-fetch -qO "$TMP_IPK" "$UPDATE_URL"; then
-    log "download failed"
-    rm -f "$TMP_IPK"
-    exit 1
+	log "download failed"
+	rm -f "$TMP_IPK"
+	exit 1
 fi
 
 # --- size check ---
 if [ ! -s "$TMP_IPK" ]; then
-    log "empty file"
-    rm -f "$TMP_IPK"
-    exit 1
-fi
-
-# --- validate ipk ---
-if ! tar -tf "$TMP_IPK" >/dev/null 2>&1; then
-    log "invalid ipk archive"
-    rm -f "$TMP_IPK"
-    exit 1
+	log "downloaded file is empty"
+	rm -f "$TMP_IPK"
+	exit 1
 fi
 
 # save old version
 if [ -n "$LOCAL_VER" ]; then
-    echo "$LOCAL_VER" >"$LOCAL_VER_PREV_FILE"
+	echo "$LOCAL_VER" >"$LOCAL_VER_PREV_FILE"
+	log "previous version saved: $LOCAL_VER"
 fi
 
 log "installing update from $TMP_IPK"
 
 if ! opkg install --force-reinstall "$TMP_IPK"; then
-    log "opkg failed"
-    rm -f "$TMP_IPK"
-    exit 1
+	log "opkg failed"
+	rm -f "$TMP_IPK"
+	exit 1
 fi
 
 rm -f "$TMP_IPK"
 
-# write new version (и одновременно обновляем latest, если есть REMOTE_VER)
+# write new version
 if [ -n "$REMOTE_VER" ]; then
-    echo "$REMOTE_VER" >"$LOCAL_VER_FILE"
-    echo "$REMOTE_VER" >"$LATEST_VER_FILE"
-    log "local version updated to $REMOTE_VER"
+	echo "$REMOTE_VER" >"$LOCAL_VER_FILE"
+	# для совместимости можно дублировать и в старый файл
+	echo "$REMOTE_VER" >"$LOCAL_VER_FILE_LEGACY"
+	echo "$REMOTE_VER" >"$LATEST_VER_FILE"
+	log "local version updated to $REMOTE_VER"
 fi
 
 log "restart services"
