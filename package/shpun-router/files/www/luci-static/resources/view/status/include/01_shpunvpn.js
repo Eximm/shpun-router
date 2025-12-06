@@ -266,16 +266,14 @@ function buildStatusBadge(state) {
 }
 
 /* ============================================================
- *  Хелпер: спрятать заголовок LuCI ("Status", [Anonymous45Class])
+ *  Хелпер: спрятать мусорный заголовок [Anonymous45Class]
  * ========================================================== */
 function hideLuCIHeader() {
-	var headers = document.querySelectorAll('h3');
-	for (var i = 0; i < headers.length; i++) {
-		var t = (headers[i].textContent || '').trim();
-		if (t === 'Status' ||
-		    t.indexOf('[Anonymous45Class') !== -1 ||
-		    t.indexOf('{ _state: object }') !== -1) {
-			headers[i].style.display = 'none';
+	var nodes = document.querySelectorAll('body *');
+	for (var i = 0; i < nodes.length; i++) {
+		var t = (nodes[i].textContent || '').trim();
+		if (t.indexOf('[Anonymous45Class') !== -1) {
+			nodes[i].style.display = 'none';
 		}
 	}
 }
@@ -505,7 +503,6 @@ return view.extend({
 
 		var view = this;
 
-		/* показываем модальное окно с подтверждением */
 		ui.showModal('Сброс VPN и настроек', [
 			E('p', {}, [
 				'Вы действительно хотите полностью сбросить VPN-конфигурацию Shpun Router ',
