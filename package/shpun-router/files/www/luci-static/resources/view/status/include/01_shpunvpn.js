@@ -266,6 +266,21 @@ function buildStatusBadge(state) {
 }
 
 /* ============================================================
+ *  Хелпер: спрятать заголовок LuCI ("Status", [Anonymous45Class])
+ * ========================================================== */
+function hideLuCIHeader() {
+	var headers = document.querySelectorAll('h3');
+	for (var i = 0; i < headers.length; i++) {
+		var t = (headers[i].textContent || '').trim();
+		if (t === 'Status' ||
+		    t.indexOf('[Anonymous45Class') !== -1 ||
+		    t.indexOf('{ _state: object }') !== -1) {
+			headers[i].style.display = 'none';
+		}
+	}
+}
+
+/* ============================================================
  *  Основной view LuCI
  * ========================================================== */
 
@@ -458,6 +473,7 @@ return view.extend({
 			if (container && container.parentNode) {
 				container.parentNode.replaceChild(root, container);
 				view.container = root;
+				hideLuCIHeader();
 			}
 		}).catch(function(err) {
 			ui.addNotification(null, E('p', {}, [
@@ -509,7 +525,6 @@ return view.extend({
 					'click': function() {
 						ui.hideModal();
 
-						/* тут идёт логика, которая раньше была в handleResetVpn */
 						return callShpunResetVpn().then(function(res) {
 							res = res || {};
 							if (res.ok) {
@@ -518,7 +533,6 @@ return view.extend({
 									E('p', {}, 'VPN-конфигурация сброшена. Роутер переведён в режим первоначальной настройки (будет создан новый код).'),
 									'info'
 								);
-								/* после сброса сразу обновим состояние виджета */
 								return callShpunState().then(function(st) {
 									st = st || {};
 									var root = view.render(st);
@@ -526,6 +540,7 @@ return view.extend({
 									if (container && container.parentNode) {
 										container.parentNode.replaceChild(root, container);
 										view.container = root;
+										hideLuCIHeader();
 									}
 								});
 							}
@@ -557,11 +572,7 @@ return view.extend({
 	onmount: function(node) {
 		this.container = node;
 
-		/* Спрятать заголовок секции LuCI перед нашим виджетом ([Anonymous45Class] и т.п.) */
-		var prev = node.previousElementSibling;
-		if (prev && prev.tagName && prev.tagName.toLowerCase() === 'h3') {
-			prev.style.display = 'none';
-		}
+		hideLuCIHeader();
 
 		var view = this;
 
@@ -577,6 +588,7 @@ return view.extend({
 				if (container && container.parentNode) {
 					container.parentNode.replaceChild(root, container);
 					view.container = root;
+					hideLuCIHeader();
 				}
 			});
 		}, 10);
