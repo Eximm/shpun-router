@@ -67,8 +67,8 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_DATA) ./files/usr/share/rpcd/acl.d/shpun.json $(1)/usr/share/rpcd/acl.d/shpun.json
 
 	# --- Status widget descriptor (JSON) ---
-	$(INSTALL_DATA) ./files/usr/share/luci/status/include/20_shpunsdn.json \
-		$(1)/usr/share/luci/status/include/20_shpunsdn.json
+	$(INSTALL_DATA) ./files/usr/share/luci/status/include/01_shpunvpn.json \
+		$(1)/usr/share/luci/status/include/01_shpunvpn.json
 
 	# --- Status widget JS ---
 	$(INSTALL_DATA) ./files/www/luci-static/resources/view/status/include/01_shpunvpn.js \

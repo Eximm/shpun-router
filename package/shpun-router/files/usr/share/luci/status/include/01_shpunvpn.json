@@ -1,6 +1,7 @@
 {
-  "title": "Shpun SDN System",
-  "order": 20,
+  "title": "",
+  "section": "overview",
+  "order": 1,
   "depends": {},
   "contents": {
     "type": "view",

@@ -295,9 +295,8 @@ return view.extend({
 			var cleanCode  = code.replace(/\s+/g, '');
 			var startParam = 'router_' + cleanCode;
 
-			deepLink = 'https://t.me/shpunvpn_bot' + encodeURIComponent(startParam);
-			qrUrl    = 'https://api.qrserver.com/v1/create-qr-code/?size=160x160&data='
-				+ encodeURIComponent(deepLink);
+			deepLink = 'https://t.me/shpunvpn_bot';
+			qrUrl    = 'https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=';
 		}
 
 		/* код: клик = копирование в буфер (без всплытия клика наверх) */
