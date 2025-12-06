@@ -128,12 +128,13 @@ return {
 					let p2 = popen("/etc/init.d/shpun-agent stop >/dev/null 2>&1 &");
 					if (p2) p2.close();
 
-					/* 2. Удалить ВСЕ состояние Shpun, как после свежей установки
+					/* 2. Удалить состояние Shpun, как после свежей установки:
 					 *    - код роутера (будет сгенерен заново)
 					 *    - subscription.json, xray.json
 					 *    - vpn_ready, vpn_error
 					 *    - временный vpn_ip
-					 *    - версии прошивки (чтобы виджет вернулся к "неизвестно")
+					 *    - latest-версию (чтобы обновлялка заново её подтянула)
+					 *    ТЕКУЩУЮ версию прошивки (FW_CUR) НЕ трогаем.
 					 */
 					let cmd =
 						"rm -f " +
@@ -142,8 +143,7 @@ return {
 						DIR + "/xray.json " +   /* сгенерированный конфиг Xray */
 						READY + " " +           /* vpn_ready */
 						VERROR + " " +          /* vpn_error */
-						VPN_IP + " " +          /* временный VPN IP */
-						FW_CUR + " " +          /* текущая версия прошивки Shpun */
+						VPN_IP + " " +          /* временный VPN/VAN IP */
 						FW_LAST +               /* последняя доступная версия */
 						" >/dev/null 2>&1";
 

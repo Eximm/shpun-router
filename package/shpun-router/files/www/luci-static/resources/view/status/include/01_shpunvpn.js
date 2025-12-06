@@ -266,14 +266,32 @@ function buildStatusBadge(state) {
 }
 
 /* ============================================================
- *  Хелпер: спрятать мусорный заголовок [Anonymous45Class]
+ *  Хелпер: спрятать заголовки LuCI над нашим виджетом
  * ========================================================== */
-function hideLuCIHeader() {
-	var nodes = document.querySelectorAll('body *');
-	for (var i = 0; i < nodes.length; i++) {
-		var t = (nodes[i].textContent || '').trim();
-		if (t.indexOf('[Anonymous45Class') !== -1) {
-			nodes[i].style.display = 'none';
+function hideLuCIHeader(node) {
+	if (!node || !node.parentNode)
+		return;
+
+	var parent = node.parentNode;
+	var children = parent.children;
+
+	for (var i = 0; i < children.length; i++) {
+		var el = children[i];
+
+		/* дошли до нашего виджета — дальше не трогаем */
+		if (el === node)
+			break;
+
+		/* прячем любые H1–H6 над ним */
+		if (el.tagName && /^h[1-6]$/i.test(el.tagName)) {
+			el.style.display = 'none';
+		}
+
+		/* на всякий случай — если текст явно содержит Anonymous45Class */
+		var t = (el.textContent || '').trim();
+		if (t.indexOf('[Anonymous45Class') !== -1 ||
+		    t.indexOf('_state: object') !== -1) {
+			el.style.display = 'none';
 		}
 	}
 }
@@ -293,25 +311,41 @@ return view.extend({
 	render: function(state) {
 		state = state || {};
 
-		var code      = (state.code || '').trim();
-		var fwCurrent = (state.fw_current || '').trim();
-		var vpnIP     = (state.vpn_ip || '').trim();
-		var hasSub    = !!state.has_sub;
-		var vpnReady  = !!state.vpn_ready;
-		var err       = (state.vpn_error || '').trim();
+		var code        = (state.code || '').trim();
+		var fwCurrent   = (state.fw_current || '').trim();
+
+		/* vpn_ip сейчас по факту = IP WAN */
+		var vpnIPRaw    = (state.vpn_ip || '').trim();
+
+		var hasSub      = !!state.has_sub;
+		var vpnReady    = !!state.vpn_ready;
+		var err         = (state.vpn_error || '').trim();
+
+		var wanIP       = vpnIPRaw || '';
+		var vpnIP       = '';
 
 		if (!fwCurrent)
 			fwCurrent = 'неизвестно';
 
-		if (!vpnIP || vpnIP === 'unknown')
-			vpnIP = vpnReady ? 'определяется…' : '—';
+		/* WAN IP — если пусто, просто тире */
+		if (!wanIP || wanIP === 'unknown')
+			wanIP = '—';
+
+		/* IP за VPN — пока мы его не умеем честно получать, не врем:
+		 *  - VPN не поднят  -> "—"
+		 *  - VPN поднят     -> "определяется…"
+		 */
+		if (!vpnReady)
+			vpnIP = '—';
+		else
+			vpnIP = 'определяется…';
 
 		/* Ссылка на бота и QR — всегда одна и та же */
 		var deepLink = 'https://t.me/shpunvpn_bot';
 		var qrUrl    = 'https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=' +
 			encodeURIComponent(deepLink);
 
-		/* код: клик = копирование в буфер (без всплытия клика наверх) */
+		/* код: клик = копирование в буфер */
 		var codeNode = E('span', {
 			'class': 'shpun-code shpun-code-copy',
 			'click': ui.createHandlerFn(this, 'handleCopyCode', code)
@@ -358,7 +392,11 @@ return view.extend({
 						E('div', { 'class': 'shpun-field-value' }, [ fwCurrent ])
 					]),
 					E('div', { 'class': 'shpun-field' }, [
-						E('div', { 'class': 'shpun-field-label' }, [ 'VPN IP' ]),
+						E('div', { 'class': 'shpun-field-label' }, [ 'IP WAN' ]),
+						E('div', { 'class': 'shpun-field-value' }, [ wanIP ])
+					]),
+					E('div', { 'class': 'shpun-field' }, [
+						E('div', { 'class': 'shpun-field-label' }, [ 'IP за VPN' ]),
 						E('div', { 'class': 'shpun-field-value' }, [ vpnIP ])
 					])
 				]),
@@ -374,7 +412,7 @@ return view.extend({
 				])
 			]),
 
-			/* Кнопки в один ряд: слева тех, справа бот (под QR) */
+			/* Кнопки */
 			E('div', { 'class': 'shpun-actions' }, [
 				E('div', { 'class': 'shpun-actions-left' }, [
 					E('button', {
@@ -471,7 +509,7 @@ return view.extend({
 			if (container && container.parentNode) {
 				container.parentNode.replaceChild(root, container);
 				view.container = root;
-				hideLuCIHeader();
+				hideLuCIHeader(view.container);
 			}
 		}).catch(function(err) {
 			ui.addNotification(null, E('p', {}, [
@@ -537,7 +575,7 @@ return view.extend({
 									if (container && container.parentNode) {
 										container.parentNode.replaceChild(root, container);
 										view.container = root;
-										hideLuCIHeader();
+										hideLuCIHeader(view.container);
 									}
 								});
 							}
@@ -569,7 +607,7 @@ return view.extend({
 	onmount: function(node) {
 		this.container = node;
 
-		hideLuCIHeader();
+		hideLuCIHeader(this.container);
 
 		var view = this;
 
@@ -585,7 +623,7 @@ return view.extend({
 				if (container && container.parentNode) {
 					container.parentNode.replaceChild(root, container);
 					view.container = root;
-					hideLuCIHeader();
+					hideLuCIHeader(view.container);
 				}
 			});
 		}, 10);
