@@ -4,21 +4,19 @@
 'require ui';
 'require poll';
 
+/* ============================================================
+ *  RPC-обёртки (ubus методы shpun)
+ * ========================================================== */
+
 var callShpunState = rpc.declare({
 	object: 'shpun',
 	method: 'state',
 	expect: { '': {} }
 });
 
-var callShpunOtaCheck = rpc.declare({
+var callShpunUpdate = rpc.declare({
 	object: 'shpun',
-	method: 'ota_check',
-	expect: { '': {} }
-});
-
-var callShpunOtaInstall = rpc.declare({
-	object: 'shpun',
-	method: 'ota_install',
+	method: 'update_router',
 	expect: { '': {} }
 });
 
@@ -28,11 +26,203 @@ var callShpunResetVpn = rpc.declare({
 	expect: { '': {} }
 });
 
-/* если у тебя есть отдельная функция injectStyles() — оставляем;
- * если нет, можно сделать заглушку:
- */
+/* ============================================================
+ *  Стили виджета (однократная инъекция <style> в <head>)
+ * ========================================================== */
+
 function injectStyles() {
-	/* no-op, если стили уже подключены из CSS */
+	if (document.getElementById('shpun-widget-style'))
+		return;
+
+	var css = ''
+		/* Карточка-обёртка */
+		+ '.shpun-widget-card {'
+		+ '  border-radius: 10px;'
+		+ '  padding: 12px 14px;'
+		+ '  background: #1f2933;'
+		+ '  color: #f9fafb;'
+		+ '  box-shadow: 0 2px 5px rgba(0,0,0,0.35);'
+		+ '  margin-bottom: 16px;'
+		+ '  display: flex;'
+		+ '  flex-direction: column;'
+		+ '  gap: 10px;'
+		+ '}'
+		/* Шапка */
+		+ '.shpun-widget-header {'
+		+ '  display: flex;'
+		+ '  justify-content: space-between;'
+		+ '  align-items: center;'
+		+ '}'
+		+ '.shpun-title {'
+		+ '  font-weight: 600;'
+		+ '  font-size: 15px;'
+		+ '}'
+		+ '.shpun-subtitle {'
+		+ '  font-size: 11px;'
+		+ '  color: #d1d5db;'
+		+ '}'
+		/* Бейдж статуса */
+		+ '.shpun-badge {'
+		+ '  display: inline-flex;'
+		+ '  align-items: center;'
+		+ '  border-radius: 999px;'
+		+ '  padding: 2px 8px;'
+		+ '  font-size: 11px;'
+		+ '  font-weight: 500;'
+		+ '}'
+		+ '.shpun-badge-dot {'
+		+ '  width: 8px;'
+		+ '  height: 8px;'
+		+ '  border-radius: 999px;'
+		+ '  margin-right: 6px;'
+		+ '}'
+		+ '.shpun-badge--off {'
+		+ '  background: rgba(148,163,184,0.15);'
+		+ '  color: #e5e7eb;'
+		+ '}'
+		+ '.shpun-badge--off .shpun-badge-dot {'
+		+ '  background: #6b7280;'
+		+ '}'
+		+ '.shpun-badge--warn {'
+		+ '  background: rgba(250,204,21,0.15);'
+		+ '  color: #facc15;'
+		+ '}'
+		+ '.shpun-badge--warn .shpun-badge-dot {'
+		+ '  background: #facc15;'
+		+ '}'
+		+ '.shpun-badge--ok {'
+		+ '  background: rgba(34,197,94,0.20);'
+		+ '  color: #bbf7d0;'
+		+ '}'
+		+ '.shpun-badge--ok .shpun-badge-dot {'
+		+ '  background: #22c55e;'
+		+ '}'
+		+ '.shpun-badge--err {'
+		+ '  background: rgba(248,113,113,0.20);'
+		+ '  color: #fecaca;'
+		+ '}'
+		+ '.shpun-badge--err .shpun-badge-dot {'
+		+ '  background: #f87171;'
+		+ '}'
+		/* Основная зона: две колонки */
+		+ '.shpun-card-main {'
+		+ '  display: flex;'
+		+ '  flex-wrap: wrap;'
+		+ '  gap: 16px;'
+		+ '  align-items: flex-start;'
+		+ '}'
+		+ '.shpun-col-main {'
+		+ '  flex: 2 1 220px;'
+		+ '  display: flex;'
+		+ '  flex-direction: column;'
+		+ '  gap: 10px;'
+		+ '}'
+		+ '.shpun-col-side {'
+		+ '  flex: 1 1 160px;'
+		+ '  display: flex;'
+		+ '  flex-direction: column;'
+		+ '  align-items: center;'
+		+ '  gap: 6px;'
+		+ '}'
+		/* Поля слева — в столбик */
+		+ '.shpun-field {'
+		+ '  min-width: 130px;'
+		+ '  margin-bottom: 4px;'
+		+ '}'
+		+ '.shpun-field-label {'
+		+ '  font-size: 11px;'
+		+ '  color: #9ca3af;'
+		+ '  text-transform: uppercase;'
+		+ '  letter-spacing: .04em;'
+		+ '  margin-bottom: 2px;'
+		+ '}'
+		+ '.shpun-field-value {'
+		+ '  font-size: 13px;'
+		+ '  font-weight: 500;'
+		+ '  line-height: 1.35;'
+		+ '}'
+		+ '.shpun-code {'
+		+ '  font-family: monospace;'
+		+ '  font-size: 16px;'
+		+ '  font-weight: 700;'
+		+ '  letter-spacing: 0.12em;'
+		+ '}'
+		+ '.shpun-code-copy {'
+		+ '  cursor: pointer;'
+		+ '  border-bottom: 1px dashed rgba(148,163,184,0.7);'
+		+ '}'
+		+ '.shpun-code-copy:hover {'
+		+ '  color: #bae6fd;'
+		+ '  border-bottom-color: #38bdf8;'
+		+ '}'
+		/* Кнопки внизу */
+		+ '.shpun-actions {'
+		+ '  display: flex;'
+		+ '  flex-wrap: wrap;'
+		+ '  gap: 6px;'
+		+ '  margin-top: 4px;'
+		+ '  align-items: center;'
+		+ '  justify-content: space-between;'
+		+ '}'
+		+ '.shpun-actions-left {'
+		+ '  display: flex;'
+		+ '  flex-wrap: wrap;'
+		+ '  gap: 6px;'
+		+ '  flex: 2 1 220px;'
+		+ '}'
+		+ '.shpun-actions-right {'
+		+ '  flex: 1 1 160px;'
+		+ '  display: flex;'
+		+ '  justify-content: center;'
+		+ '}'
+		+ '.shpun-btn {'
+		+ '  border-radius: 999px;'
+		+ '  border: 1px solid rgba(148,163,184,0.6);'
+		+ '  background: rgba(15,23,42,0.8);'
+		+ '  color: #e5e7eb;'
+		+ '  padding: 4px 10px;'
+		+ '  font-size: 11px;'
+		+ '  cursor: pointer;'
+		+ '  text-decoration: none;'
+		+ '  display: inline-flex;'
+		+ '  align-items: center;'
+		+ '  gap: 4px;'
+		+ '}'
+		+ '.shpun-btn:hover {'
+		+ '  background: rgba(31,41,55,0.95);'
+		+ '}'
+		+ '.shpun-btn-primary {'
+		+ '  border-color: #38bdf8;'
+		+ '  background: #0f172a;'
+		+ '  color: #e0f2fe;'
+		+ '}'
+		/* Подпись/FAQ */
+		+ '.shpun-hint {'
+		+ '  font-size: 11px;'
+		+ '  color: #9ca3af;'
+		+ '  margin-top: 4px;'
+		+ '}'
+		/* QR-код + подпись */
+		+ '.shpun-qr {'
+		+ '  border: 1px solid rgba(148,163,184,0.6);'
+		+ '  border-radius: 8px;'
+		+ '  padding: 4px;'
+		+ '  background: #0b1120;'
+		+ '  max-width: 140px;'
+		+ '  height: auto;'
+		+ '  display: block;'
+		+ '}'
+		+ '.shpun-qr-caption {'
+		+ '  font-size: 11px;'
+		+ '  color: #9ca3af;'
+		+ '  text-align: center;'
+		+ '}';
+
+	var style = document.createElement('style');
+	style.id = 'shpun-widget-style';
+	style.type = 'text/css';
+	style.appendChild(document.createTextNode(css));
+	document.head.appendChild(style);
 }
 
 /* ============================================================
@@ -103,9 +293,6 @@ return view.extend({
 		injectStyles();
 		return callShpunState().then(function(data) {
 			return data || {};
-		}).catch(function(err) {
-			/* чтобы виджет не падал, если ubus/шпун ещё не готов */
-			return {};
 		});
 	},
 
@@ -130,10 +317,12 @@ return view.extend({
 		var vpnReady  = !!state.vpn_ready;
 		var err       = (state.vpn_error || '').trim();
 
+		/* Ссылка на бота и QR — всегда одна и та же */
 		var deepLink = 'https://t.me/shpunvpn_bot';
 		var qrUrl    = 'https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=' +
 			encodeURIComponent(deepLink);
 
+		/* код: клик = копирование в буфер */
 		var codeNode = E('span', {
 			'class': 'shpun-code shpun-code-copy',
 			'click': ui.createHandlerFn(this, 'handleCopyCode', code)
@@ -141,6 +330,7 @@ return view.extend({
 
 		var widget = E('div', { 'class': 'shpun-widget-card' }, [
 
+			/* Заголовок + бейдж */
 			E('div', { 'class': 'shpun-widget-header' }, [
 				E('div', {}, [
 					E('div', { 'class': 'shpun-title' }, [ 'Shpun Router / SDN System' ]),
@@ -153,8 +343,10 @@ return view.extend({
 				buildStatusBadge(state)
 			]),
 
+			/* Основной блок: две колонки */
 			E('div', { 'class': 'shpun-card-main' }, [
 
+				/* Левая колонка: параметры (без IP) */
 				E('div', { 'class': 'shpun-col-main' }, [
 					E('div', { 'class': 'shpun-field' }, [
 						E('div', { 'class': 'shpun-field-label' }, [ 'КОД РОУТЕРА' ]),
@@ -178,6 +370,7 @@ return view.extend({
 					])
 				]),
 
+				/* Правая колонка: QR */
 				E('div', { 'class': 'shpun-col-side' }, [
 					E('img', {
 						'class': 'shpun-qr',
@@ -188,6 +381,7 @@ return view.extend({
 				])
 			]),
 
+			/* Кнопки */
 			E('div', { 'class': 'shpun-actions' }, [
 				E('div', { 'class': 'shpun-actions-left' }, [
 					E('button', {
@@ -213,6 +407,7 @@ return view.extend({
 				])
 			]),
 
+			/* Мини-инструкция */
 			E('div', { 'class': 'shpun-hint' }, [
 				!code
 					? 'Дождитесь генерации кода роутера. Затем откройте бота Shpun SDN System и закажите услугу для роутеров.'
@@ -230,6 +425,7 @@ return view.extend({
 		return widget;
 	},
 
+	/* Клик по коду: копирование в буфер */
 	handleCopyCode: function(ev, code) {
 		if (ev) {
 			ev.preventDefault();
@@ -268,6 +464,7 @@ return view.extend({
 		}
 	},
 
+	/* Ручное обновление по кнопке */
 	handleRefresh: function(ev) {
 		if (ev)
 			ev.preventDefault();
@@ -291,6 +488,10 @@ return view.extend({
 		});
 	},
 
+	/* Кнопка "Проверить обновление прошивки" — двухшаговый режим:
+	 *  1) ota_check: обновляем подписку и считаем fw_latest
+	 *  2) если fw_latest > fw_current — спрашиваем подтверждение и запускаем ota_install
+	 */
 	handleUpdateFirmware: function(ev) {
 		if (ev)
 			ev.preventDefault();
@@ -303,11 +504,14 @@ return view.extend({
 			'info'
 		);
 
+		/* Шаг 1: форсим проверку обновлений на роутере (обновление subscription.json + CHECK_ONLY) */
 		return callShpunOtaCheck().then(function(res) {
+			/* Даём роутеру время закончить запрос и обновить файлы */
 			return new Promise(function(resolve) {
 				window.setTimeout(resolve, 12000);
 			});
 		}).then(function() {
+			/* Шаг 2: перечитываем состояние */
 			return callShpunState();
 		}).then(function(st) {
 			st = st || {};
@@ -319,6 +523,7 @@ return view.extend({
 			var fwLatest = (st.fw_latest || '').trim();
 			var hasNew   = fwLatest && fwLatest !== fwCurrent;
 
+			/* Обновляем виджет текущими данными */
 			var root = view.render(st);
 			var container = view.container;
 			if (container && container.parentNode) {
@@ -336,6 +541,7 @@ return view.extend({
 				return;
 			}
 
+			/* Есть новая версия — спрашиваем подтверждение у пользователя */
 			ui.showModal('Обнаружено обновление прошивки', [
 				E('p', {}, [
 					'Доступна новая версия прошивки Shpun Router: ',
@@ -364,7 +570,9 @@ return view.extend({
 								'info'
 							);
 
+							/* Шаг 3: запускаем фактическую установку */
 							callShpunOtaInstall().then(function(res) {
+								/* Через ~20 секунд пробуем обновить статус */
 								window.setTimeout(function() {
 									callShpunState().then(function(st2) {
 										st2 = st2 || {};
@@ -473,6 +681,7 @@ return view.extend({
 
 		var view = this;
 
+		/* Автообновление статуса раз в 10 секунд */
 		this._pollId = poll.add(function() {
 			if (!view.container || !view.container.parentNode)
 				return;
@@ -486,8 +695,6 @@ return view.extend({
 					view.container = root;
 					hideLuCIHeader(root);
 				}
-			}).catch(function(err) {
-				/* глушим ошибки, чтобы не ломать виджет */
 			});
 		}, 10);
 	},
