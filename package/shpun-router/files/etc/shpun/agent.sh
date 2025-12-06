@@ -189,10 +189,10 @@ load_conf() {
 	[ -z "$SUB_CHECK_INTERVAL" ] && SUB_CHECK_INTERVAL="$SUB_CHECK_INTERVAL_DEFAULT"
 
 	[ -z "$MIN_UPTIME" ]       && MIN_UPTIME="$MIN_UPTIME_DEFAULT"
-	[ -з "$NET_FAIL_TIMEOUT" ] && NET_FAIL_TIMEOUT="$NET_FAIL_TIMEOUT_DEFAULT"
-	[ -з "$MAIN_LOOP_SLEEP" ]  && MAIN_LOOP_SLEEP="$MAIN_LOOP_SLEEP_DEFAULT"
+	[ -z "$NET_FAIL_TIMEOUT" ] && NET_FAIL_TIMEOUT="$NET_FAIL_TIMEOUT_DEFAULT"
+	[ -z "$MAIN_LOOP_SLEEP" ]  && MAIN_LOOP_SLEEP="$MAIN_LOOP_SLEEP_DEFAULT"
 
-	if [ -з "$PING_HOST" ]; then
+	if [ -z "$PING_HOST" ]; then
 		if [ -n "$DNS_ADDR1" ]; then
 			PING_HOST="$DNS_ADDR1"
 		else
@@ -200,7 +200,7 @@ load_conf() {
 		fi
 	fi
 
-	if [ -з "$ENGINE_URL" ]; then
+	if [ -z "$ENGINE_URL" ]; then
 		ENGINE_URL="$(build_engine_url)"
 	fi
 }
@@ -221,14 +221,14 @@ get_code() {
 
 	CODE="$(printf '%s' "$CODE" | tr -d '\r\n')"
 
-	if [ -з "$CODE" ]; then
+	if [ -z "$CODE" ]; then
 		log "router code is empty"
 		return 1
 	fi
 
 	CLEAN_CODE="$(printf '%s' "$CODE" | tr '[:lower:]' '[:upper:]' | tr -dc 'A-Z0-9')"
 
-	if [ -з "$CLEAN_CODE" ]; then
+	if [ -z "$CLEAN_CODE" ]; then
 		log "clean code is empty after filtering: $CODE"
 		return 1
 	fi
@@ -241,7 +241,7 @@ get_code() {
 #######################################
 
 engine_download() {
-	if [ -з "$ENGINE_URL" ]; then
+	if [ -z "$ENGINE_URL" ]; then
 		log "ENGINE_URL not set, skip engine download"
 		return 1
 	fi
@@ -252,7 +252,7 @@ engine_download() {
 	fi
 
 	detect_http_client
-	if [ -з "$HTTP_BIN" ]; then
+	if [ -z "$HTTP_BIN" ]; then
 		log "engine_download: no HTTP client (curl/wget/uclient-fetch), cannot download engine"
 		return 1
 	fi
@@ -331,12 +331,12 @@ wait_for_default_route() {
 #######################################
 
 fetch_subscription_once() {
-	if [ -з "$CLEAN_CODE" ] || [ -з "$API_URL" ]; then
+	if [ -z "$CLEAN_CODE" ] || [ -z "$API_URL" ]; then
 		return 1
 	fi
 
 	detect_http_client
-	if [ -з "$HTTP_BIN" ]; then
+	if [ -z "$HTTP_BIN" ]; then
 		log "fetch_subscription_once: no HTTP client (curl/wget/uclient-fetch)"
 		return 1
 	fi
@@ -346,7 +346,7 @@ fetch_subscription_once() {
 	log "query router_public: $URL"
 	BODY="$(http_get_stdout "$URL" 2>/dev/null || true)"
 
-	if [ -з "$BODY" ]; then
+	if [ -z "$BODY" ]; then
 		log "empty response from router_public"
 		return 1
 	fi
@@ -355,14 +355,14 @@ fetch_subscription_once() {
 
 	if [ "$OK" != "1" ]; then
 		ERR="$(printf '%s' "$BODY" | jsonfilter -e '@.error' 2>/dev/null || echo "")"
-		[ -з "$ERR" ] && ERR="unknown_error"
+		[ -z "$ERR" ] && ERR="unknown_error"
 		log "router_public error: ok=$OK, error=$ERR"
 		return 1
 	fi
 
 	CONFIG_PATH="$(printf '%s' "$BODY" | jsonfilter -e '@.config_url' 2>/dev/null || echo "")"
 
-	if [ -з "$CONFIG_PATH" ]; then
+	if [ -z "$CONFIG_PATH" ]; then
 		log "router_public ok=1 but config_url is empty"
 		return 1
 	fi
@@ -403,7 +403,7 @@ ensure_vpn_from_subscription() {
 
 	if ! wait_for_default_route; then
 		log "ensure_vpn_from_subscription: proceed without confirmed default route"
-	endif
+	fi
 
 	if ! engine_download; then
 		log "engine_download failed in ensure_vpn_from_subscription"
@@ -468,10 +468,10 @@ check_subscription_alive() {
 
 	if [ "$((now_ts - last_ts))" -lt "$SUB_CHECK_INTERVAL" ]; then
 		return 0
-	endif
+	fi
 
 	detect_http_client
-	if [ -з "$HTTP_BIN" ]; then
+	if [ -z "$HTTP_BIN" ]; then
 		log "check_subscription_alive: no HTTP client (curl/wget/uclient-fetch)"
 		echo "$now_ts" >"$LAST_CHECK_FILE"
 		return 0
@@ -480,7 +480,7 @@ check_subscription_alive() {
 	UID_SUB="$(jsonfilter -i "$SUB_FILE" -e '@.uid' 2>/dev/null || echo "")"
 	USI_SUB="$(jsonfilter -i "$SUB_FILE" -e '@.usi' 2>/dev/null || echo "")"
 
-	if [ -з "$UID_SUB" ] || [ -з "$USI_SUB" ]; then
+	if [ -z "$UID_SUB" ] || [ -z "$USI_SUB" ]; then
 		log "check_subscription_alive: uid/usi missing in subscription.json"
 		echo "$now_ts" >"$LAST_CHECK_FILE"
 		return 0
@@ -499,7 +499,7 @@ check_subscription_alive() {
 
 	BODY="$(http_get_stdout "$CHECK_URL" 2>/dev/null || true)"
 
-	if [ -з "$BODY" ]; then
+	if [ -z "$BODY" ]; then
 		log "check_subscription_alive: empty response from router_config"
 		echo "$now_ts" >"$LAST_CHECK_FILE"
 		return 0
