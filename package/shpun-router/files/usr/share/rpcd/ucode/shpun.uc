@@ -163,6 +163,31 @@ return {
 					return { ok: 0, error: String(e) };
 				}
 			}
+		},
+
+		/* --- DETECT_VPN_IP: ручное определение IP за VPN --- */
+		detect_vpn_ip: {
+			call: function(req) {
+				try {
+					/* Одноразово запускаем агент в режиме detect_vpn_ip (без & — ждём завершения) */
+					let proc = popen("/etc/shpun/agent.sh detect_vpn_ip >/dev/null 2>&1");
+					if (proc)
+						proc.close();
+
+					/* Читаем то, что агент положил в /tmp/shpun_vpn_ip */
+					let vpn_raw = readfile(VPN_IP);
+					let vpn_ip  = vpn_raw ? vpn_raw.trim() : "";
+
+					if (!vpn_ip) {
+						return { ok: 0, error: "vpn_ip is empty (detect_vpn_ip failed or no external access)" };
+					}
+
+					return { ok: 1, vpn_ip: vpn_ip };
+				}
+				catch (e) {
+					return { ok: 0, error: String(e) };
+				}
+			}
 		}
 	}
 };

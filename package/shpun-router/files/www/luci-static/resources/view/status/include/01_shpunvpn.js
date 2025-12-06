@@ -267,32 +267,22 @@ function buildStatusBadge(state) {
 
 /* ============================================================
  *  Хелпер: спрятать заголовки LuCI над нашим виджетом
+ *  (Status и [AnonymousNNClass] { _state: object })
  * ========================================================== */
-function hideLuCIHeader(node) {
-	if (!node || !node.parentNode)
+function hideLuCIHeader(rootNode) {
+	if (!rootNode)
 		return;
 
-	var parent = node.parentNode;
-	var children = parent.children;
+	var parent = rootNode.parentNode;
+	if (!parent)
+		return;
 
-	for (var i = 0; i < children.length; i++) {
-		var el = children[i];
-
-		/* дошли до нашего виджета — дальше не трогаем */
-		if (el === node)
-			break;
-
-		/* прячем любые H1–H6 над ним */
-		if (el.tagName && /^h[1-6]$/i.test(el.tagName)) {
-			el.style.display = 'none';
-		}
-
-		/* на всякий случай — если текст явно содержит Anonymous45Class */
-		var t = (el.textContent || '').trim();
-		if (t.indexOf('[Anonymous45Class') !== -1 ||
-		    t.indexOf('_state: object') !== -1) {
-			el.style.display = 'none';
-		}
+	/* Прячем все элементы выше нашего виджета внутри того же контейнера */
+	var prev = rootNode.previousSibling;
+	while (prev) {
+		if (prev.style !== undefined)
+			prev.style.display = 'none';
+		prev = prev.previousSibling;
 	}
 }
 
@@ -311,41 +301,43 @@ return view.extend({
 	render: function(state) {
 		state = state || {};
 
-		var code        = (state.code || '').trim();
-		var fwCurrent   = (state.fw_current || '').trim();
+		var code      = (state.code || '').trim();
 
-		/* vpn_ip сейчас по факту = IP WAN */
-		var vpnIPRaw    = (state.vpn_ip || '').trim();
-
-		var hasSub      = !!state.has_sub;
-		var vpnReady    = !!state.vpn_ready;
-		var err         = (state.vpn_error || '').trim();
-
-		var wanIP       = vpnIPRaw || '';
-		var vpnIP       = '';
-
+		/* Если бекенд не отдал версию — показываем 1.0.0 как базовую */
+		var fwCurrent = (state.fw_current || '').trim();
 		if (!fwCurrent)
-			fwCurrent = 'неизвестно';
+			fwCurrent = '1.0.0';
 
-		/* WAN IP — если пусто, просто тире */
+		/* Сейчас backend кладёт в vpn_ip фактически IP WAN */
+		var vpnIPRaw  = (state.vpn_ip || '').trim();
+
+		var hasSub    = !!state.has_sub;
+		var vpnReady  = !!state.vpn_ready;
+		var err       = (state.vpn_error || '').trim();
+
+		var wanIP     = vpnIPRaw || '';
+		var vpnIP     = '—';
+
+		/* WAN IP — если пусто/unknown, просто тире */
 		if (!wanIP || wanIP === 'unknown')
 			wanIP = '—';
 
-		/* IP за VPN — пока мы его не умеем честно получать, не врем:
-		 *  - VPN не поднят  -> "—"
-		 *  - VPN поднят     -> "определяется…"
+		/* IP за VPN:
+		 *  - пока отдельного IP нет, не врем: показываем "—"
+		 *  - позже агент будет писать реальный VPN-IP в /tmp/shpun_vpn_ip
+		 *    и мы сюда его подставим (отличный от WAN)
 		 */
-		if (!vpnReady)
-			vpnIP = '—';
+		if (vpnReady && vpnIPRaw && vpnIPRaw !== 'unknown' && vpnIPRaw !== wanIP)
+			vpnIP = vpnIPRaw;
 		else
-			vpnIP = 'определяется…';
+			vpnIP = '—';
 
 		/* Ссылка на бота и QR — всегда одна и та же */
 		var deepLink = 'https://t.me/shpunvpn_bot';
 		var qrUrl    = 'https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=' +
 			encodeURIComponent(deepLink);
 
-		/* код: клик = копирование в буфер */
+		/* код: клик = копирование в буфер (без всплытия клика наверх) */
 		var codeNode = E('span', {
 			'class': 'shpun-code shpun-code-copy',
 			'click': ui.createHandlerFn(this, 'handleCopyCode', code)
@@ -509,7 +501,7 @@ return view.extend({
 			if (container && container.parentNode) {
 				container.parentNode.replaceChild(root, container);
 				view.container = root;
-				hideLuCIHeader(view.container);
+				hideLuCIHeader(root);
 			}
 		}).catch(function(err) {
 			ui.addNotification(null, E('p', {}, [
@@ -575,7 +567,7 @@ return view.extend({
 									if (container && container.parentNode) {
 										container.parentNode.replaceChild(root, container);
 										view.container = root;
-										hideLuCIHeader(view.container);
+										hideLuCIHeader(root);
 									}
 								});
 							}
@@ -607,7 +599,7 @@ return view.extend({
 	onmount: function(node) {
 		this.container = node;
 
-		hideLuCIHeader(this.container);
+		hideLuCIHeader(node);
 
 		var view = this;
 
@@ -623,12 +615,11 @@ return view.extend({
 				if (container && container.parentNode) {
 					container.parentNode.replaceChild(root, container);
 					view.container = root;
-					hideLuCIHeader(view.container);
+					hideLuCIHeader(root);
 				}
 			});
 		}, 10);
 	},
-
 
 	onunload: function() {
 		if (this._pollId != null)

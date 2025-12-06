@@ -194,8 +194,9 @@ load_conf() {
 	[ -z "$MAIN_LOOP_SLEEP" ]  && MAIN_LOOP_SLEEP="$MAIN_LOOP_SLEEP_DEFAULT"
 
 	# keepalive: интервал и URL по умолчанию, если не заданы в agent.conf
-	[ -z "$KEEPALIVE_INTERVAL" ] && KEEPALIVE_INTERVAL=600
-	[ -z "$KEEPALIVE_URL" ]      && KEEPALIVE_URL="http://ifconfig.me/ip"
+	[ -z "$KEEPALIVE_INTERVAL" ] && KEEPALIVE_INTERVAL=0
+	# по умолчанию используем внешний сервис определения IP
+	[ -z "$KEEPALIVE_URL" ]      && KEEPALIVE_URL="https://ifconfig.me/ip"
 
 	if [ -z "$PING_HOST" ]; then
 		if [ -n "$DNS_ADDR1" ]; then
@@ -343,10 +344,16 @@ detect_vpn_ip() {
 		return 1
 	fi
 
-	local url ip
-	url="${KEEPALIVE_URL:-http://ifconfig.me/ip}"
+	# основной внешний сервис
+	local url ip alt
+	url="${KEEPALIVE_URL:-https://ifconfig.me/ip}"
+	alt="https://api.ipify.org"
 
 	ip="$(http_get_stdout "$url" 2>/dev/null | tr -d '\r\n ' | head -n1 || true)"
+
+	if [ -z "$ip" ] && [ -n "$alt" ]; then
+		ip="$(http_get_stdout "$alt" 2>/dev/null | tr -d '\r\n ' | head -n1 || true)"
+	fi
 
 	if [ -z "$ip" ]; then
 		ip="unknown"
@@ -362,7 +369,7 @@ vpn_keepalive() {
 	# Периодически обновляем внешний IP через туннель (или через WAN, если OUTPUT не в REDIR).
 	if [ ! -s "$VPN_READY_FILE" ]; then
 		return 0
-	fi
+	end
 
 	detect_vpn_ip
 }
@@ -471,11 +478,10 @@ ensure_vpn_from_subscription() {
 	rm -f "$VERROR_FILE"
 	log "vpn_ready marked in $VPN_READY_FILE"
 
-	# попытка определить внешний IP (через туннель, если firewall всё гонит через REDIR)
-	detect_vpn_ip
-
+	# IP за VPN определяем только по ручному запросу (через ubus / кнопку в LuCI)
 	return 0
 }
+
 
 poll_subscription_loop() {
 	if [ -s "$SUB_FILE" ]; then
@@ -555,9 +561,8 @@ check_subscription_alive() {
 		printf '%s' "$BODY" >"$SUB_FILE"
 		log "subscription_alive: ok=1, subscription.json refreshed"
 		echo "$now_ts" >"$LAST_CHECK_FILE"
-		# подписка живая, очищаем возможную старую ошибку и обновляем IP
+		# подписка живая, очищаем возможную старую ошибку
 		rm -f "$VERROR_FILE"
-		detect_vpn_ip
 		return 0
 	fi
 
@@ -586,9 +591,8 @@ main_loop() {
 	ensure_state_dir
 	ensure_router_code
 
-	log "shpun-agent started (API_URL=$API_URL, ENGINE_BIN=$ENGINE_BIN, ENGINE_URL=$ENGINE_URL, MIN_UPTIME=$MIN_UPTIME, NET_FAIL_TIMEOUT=$NET_FAIL_TIMEOUT, PING_HOST=$PING_HOST)"
+	log "shpun-agent started (API_URL=$API_URL, ENGINE_BIN=$ENGINE_BIN, ENGINE_URL=$ENGINE_URL, MIN_UPTIME=$MIN_UPTIME, NET_FAIL_TIMEOUT=$NET_FAIL_TIMEOUT, PING_HOST=$PING_HOST, KEEPALIVE_URL=${KEEPALIVE_URL:-https://ifconfig.me/ip})"
 
-	NET_FAIL_SECONDS=0
 	VPN_KEEPALIVE_SECONDS=0
 
 	while :; do
@@ -633,21 +637,17 @@ main_loop() {
 
 			check_subscription_alive
 		fi
-
-		# --- KEEPALIVE + VPN IP detection ---
-		if [ -s "$VPN_READY_FILE" ] && [ "${KEEPALIVE_INTERVAL:-0}" -gt 0 ]; then
-			VPN_KEEPALIVE_SECONDS=$((VPN_KEEPALIVE_SECONDS + MAIN_LOOP_SLEEP))
-
-			if [ "$VPN_KEEPALIVE_SECONDS" -ge "$KEEPALIVE_INTERVAL" ]; then
-				vpn_keepalive
-				VPN_KEEPALIVE_SECONDS=0
-			fi
-		else
-			VPN_KEEPALIVE_SECONDS=0
-		fi
-
 		sleep "$MAIN_LOOP_SLEEP"
 	done
 }
 
+# Однократный режим: ручное определение IP за VPN
+if [ "$1" = "detect_vpn_ip" ]; then
+	load_conf
+	ensure_state_dir
+	detect_vpn_ip
+	exit 0
+fi
+
 main_loop "$@"
+
