@@ -220,7 +220,7 @@ function injectStyles() {
 }
 
 /* ============================================================
- *  Построение бейджа статуса (верхний правый кружочек)
+ *  Построение бейджа статуса
  * ========================================================== */
 
 function buildStatusBadge(state) {
@@ -229,27 +229,27 @@ function buildStatusBadge(state) {
 	var ready   = !!state.vpn_ready;
 	var err     = (state.vpn_error || '').trim();
 
-	var cls = 'shpun-badge shpun-badge--off';
+	var cls  = 'shpun-badge shpun-badge--off';
 	var text = 'Ожидает кода';
 
 	if (!hasCode) {
-		cls = 'shpun-badge shpun-badge--off';
+		cls  = 'shpun-badge shpun-badge--off';
 		text = 'Код роутера ещё не создан';
 	}
 	else if (hasCode && !hasSub) {
-		cls = 'shpun-badge shpun-badge--warn';
+		cls  = 'shpun-badge shpun-badge--warn';
 		text = 'Ожидает привязки в Shpun SDN System';
 	}
 	else if (hasCode && hasSub && !ready && !err) {
-		cls = 'shpun-badge shpun-badge--warn';
+		cls  = 'shpun-badge shpun-badge--warn';
 		text = 'Подписка найдена, подключаемся…';
 	}
 	else if (hasCode && hasSub && ready && !err) {
-		cls = 'shpun-badge shpun-badge--ok';
+		cls  = 'shpun-badge shpun-badge--ok';
 		text = 'VPN подключен';
 	}
 	else if (err) {
-		cls = 'shpun-badge shpun-badge--err';
+		cls  = 'shpun-badge shpun-badge--err';
 		text = 'Ошибка: ' + err;
 	}
 
@@ -274,12 +274,12 @@ return view.extend({
 	render: function(state) {
 		state = state || {};
 
-		var code       = (state.code || '').trim();
-		var fwCurrent  = (state.fw_current || '').trim();
-		var vpnIP      = (state.vpn_ip || '').trim();
-		var hasSub     = !!state.has_sub;
-		var vpnReady   = !!state.vpn_ready;
-		var err        = (state.vpn_error || '').trim();
+		var code      = (state.code || '').trim();
+		var fwCurrent = (state.fw_current || '').trim();
+		var vpnIP     = (state.vpn_ip || '').trim();
+		var hasSub    = !!state.has_sub;
+		var vpnReady  = !!state.vpn_ready;
+		var err       = (state.vpn_error || '').trim();
 
 		if (!fwCurrent)
 			fwCurrent = 'неизвестно';
@@ -287,17 +287,10 @@ return view.extend({
 		if (!vpnIP || vpnIP === 'unknown')
 			vpnIP = vpnReady ? 'определяется…' : '—';
 
-		/* deep-link и QR для бота */
-		var deepLink = null;
-		var qrUrl    = null;
-
-		if (code) {
-			var cleanCode  = code.replace(/\s+/g, '');
-			var startParam = 'router_' + cleanCode;
-
-			deepLink = 'https://t.me/shpunvpn_bot';
-			qrUrl    = 'https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=';
-		}
+		/* Ссылка на бота и QR — всегда одна и та же */
+		var deepLink = 'https://t.me/shpunvpn_bot';
+		var qrUrl    = 'https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=' +
+			encodeURIComponent(deepLink);
 
 		/* код: клик = копирование в буфер (без всплытия клика наверх) */
 		var codeNode = E('span', {
@@ -353,13 +346,11 @@ return view.extend({
 
 				/* Правая колонка: QR */
 				E('div', { 'class': 'shpun-col-side' }, [
-					qrUrl
-						? E('img', {
-							'class': 'shpun-qr',
-							'src': qrUrl,
-							'alt': 'QR-код для добавления роутера в Shpun SDN System'
-						  })
-						: E('div', { 'class': 'shpun-qr-caption' }, 'QR появится после генерации кода'),
+					E('img', {
+						'class': 'shpun-qr',
+						'src': qrUrl,
+						'alt': 'QR-код для добавления роутера в Shpun SDN System'
+					}),
 					E('div', { 'class': 'shpun-qr-caption' }, 'Наведите камеру телефона, чтобы открыть бота')
 				])
 			]),
@@ -377,17 +368,12 @@ return view.extend({
 					}, 'Проверить обновление прошивки')
 				]),
 				E('div', { 'class': 'shpun-actions-right' }, [
-					deepLink
-						? E('a', {
-							'class': 'shpun-btn shpun-btn-primary',
-							'href': deepLink,
-							'target': '_blank',
-							'rel': 'noreferrer'
-						}, 'Открыть бота Shpun SDN System')
-						: E('button', {
-							'class': 'shpun-btn',
-							'disabled': 'disabled'
-						}, 'Открыть бота Shpun SDN System')
+					E('a', {
+						'class': 'shpun-btn shpun-btn-primary',
+						'href': deepLink,
+						'target': '_blank',
+						'rel': 'noreferrer'
+					}, 'Открыть бота Shpun SDN System')
 				])
 			]),
 
@@ -409,7 +395,7 @@ return view.extend({
 		return widget;
 	},
 
-	/* Клик по коду: копирование в буфер (без всплытия клика) */
+	/* Клик по коду: копирование в буфер */
 	handleCopyCode: function(ev, code) {
 		if (ev) {
 			ev.preventDefault();
@@ -467,7 +453,7 @@ return view.extend({
 			ui.addNotification(null, E('p', {}, [
 				'Не удалось обновить статус Shpun Router: ',
 				String(err)
-			]));
+			]), 'error');
 		});
 	},
 
@@ -514,7 +500,6 @@ return view.extend({
 	},
 
 	onunload: function() {
-		/* Отключаем поллинг при уходе со страницы */
 		if (this._pollId != null)
 			poll.remove(this._pollId);
 	}
