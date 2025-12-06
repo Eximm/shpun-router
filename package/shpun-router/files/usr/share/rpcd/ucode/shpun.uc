@@ -117,37 +117,47 @@ return {
 			}
 		},
 
-		/* --- RESET_VPN: сброс VPN-конфигурации и возврат к первоначальной настройке --- */
+		/* --- RESET_VPN: полный сброс в состояние "только что поставили пакет" --- */
 		reset_vpn: {
 			call: function(req) {
 				try {
-					/* 1. Остановить VPN-движок */
+					/* 1. Остановить VPN-движок и агента, чтобы не было гонок */
 					let p1 = popen("/etc/init.d/shpun-vpn stop >/dev/null 2>&1 &");
-					if (p1)
-						p1.close();
+					if (p1) p1.close();
 
-					/* 2. Удалить файлы состояния VPN (без трогания кода роутера) */
-					/* subscription.json, xray.json, vpn_ready, vpn_error, vpn_ip, router_latest_version */
+					let p2 = popen("/etc/init.d/shpun-agent stop >/dev/null 2>&1 &");
+					if (p2) p2.close();
+
+					/* 2. Удалить ВСЕ состояние Shpun, как после свежей установки
+					 *    - код роутера (будет сгенерен заново)
+					 *    - subscription.json, xray.json
+					 *    - vpn_ready, vpn_error
+					 *    - временный vpn_ip
+					 *    - версии прошивки (чтобы виджет вернулся к "неизвестно")
+					 */
 					let cmd =
 						"rm -f " +
-						SUB + " " +
-						DIR + "/xray.json " +
-						READY + " " +
-						VERROR + " " +
-						VPN_IP + " " +
-						FW_LAST +
+						CODE + " " +            /* router_code */
+						SUB + " " +             /* subscription.json */
+						DIR + "/xray.json " +   /* сгенерированный конфиг Xray */
+						READY + " " +           /* vpn_ready */
+						VERROR + " " +          /* vpn_error */
+						VPN_IP + " " +          /* временный VPN IP */
+						FW_CUR + " " +          /* текущая версия прошивки Shpun */
+						FW_LAST +               /* последняя доступная версия */
 						" >/dev/null 2>&1";
 
-					let p2 = popen(cmd);
-					if (p2)
-						p2.close();
+					let p3 = popen(cmd);
+					if (p3) p3.close();
 
-					/* (опционально можно пнуть shpun-agent, чтобы он сам заново начал цикл) */
-					/* let p3 = popen("/etc/init.d/shpun-agent restart >/dev/null 2>&1 &");
-					if (p3)
-						p3.close(); */
+					/* 3. Запустить shpun-agent заново:
+					 *    он увидит, что router_code нет, сгенерирует новый
+					 *    и перейдёт в режим ожидания привязки в боте.
+					 */
+					let p4 = popen("/etc/init.d/shpun-agent start >/dev/null 2>&1 &");
+					if (p4) p4.close();
 
-					return { ok: 1, msg: "vpn reset done" };
+					return { ok: 1, msg: "vpn reset to initial state" };
 				}
 				catch (e) {
 					return { ok: 0, error: String(e) };

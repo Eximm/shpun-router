@@ -489,40 +489,65 @@ return view.extend({
 
 		var view = this;
 
-		return callShpunResetVpn().then(function(res) {
-			res = res || {};
-			if (res.ok) {
-				ui.addNotification(
-					null,
-					E('p', {}, 'VPN-конфигурация сброшена. Роутер переведён в режим первоначальной настройки.'),
-					'info'
-				);
-				/* после сброса сразу обновим состояние виджета */
-				return callShpunState().then(function(st) {
-					st = st || {};
-					var root = view.render(st);
-					var container = view.container;
-					if (container && container.parentNode) {
-						container.parentNode.replaceChild(root, container);
-						view.container = root;
+		/* показываем модальное окно с подтверждением */
+		ui.showModal('Сброс VPN и настроек', [
+			E('p', {}, [
+				'Вы действительно хотите полностью сбросить VPN-конфигурацию Shpun Router ',
+				'и вернуть устройство в состояние после установки пакета? ',
+				'Будет сгенерирован новый код роутера, текущая привязка в боте и конфигурация VPN будут потеряны.'
+			]),
+			E('div', { 'style': 'margin-top:10px; text-align:right' }, [
+				E('button', {
+					'class': 'btn',
+					'click': function() {
+						ui.hideModal();
 					}
-				});
-			}
-			else {
-				ui.addNotification(
-					null,
-					E('p', {}, 'Не удалось сбросить VPN-настройки: ' +
-						(res.error ? String(res.error) : 'неизвестная ошибка')),
-					'error'
-				);
-			}
-		}).catch(function(err) {
-			ui.addNotification(
-				null,
-				E('p', {}, 'Ошибка при вызове сброса VPN-настроек: ' + String(err)),
-				'error'
-			);
-		});
+				}, 'Отмена'),
+				E('button', {
+					'class': 'btn cbi-button cbi-button-negative',
+					'style': 'margin-left:8px',
+					'click': function() {
+						ui.hideModal();
+
+						/* тут идёт логика, которая раньше была в handleResetVpn */
+						return callShpunResetVpn().then(function(res) {
+							res = res || {};
+							if (res.ok) {
+								ui.addNotification(
+									null,
+									E('p', {}, 'VPN-конфигурация сброшена. Роутер переведён в режим первоначальной настройки (будет создан новый код).'),
+									'info'
+								);
+								/* после сброса сразу обновим состояние виджета */
+								return callShpunState().then(function(st) {
+									st = st || {};
+									var root = view.render(st);
+									var container = view.container;
+									if (container && container.parentNode) {
+										container.parentNode.replaceChild(root, container);
+										view.container = root;
+									}
+								});
+							}
+							else {
+								ui.addNotification(
+									null,
+									E('p', {}, 'Не удалось сбросить VPN-настройки: ' +
+										(res.error ? String(res.error) : 'неизвестная ошибка')),
+									'error'
+								);
+							}
+						}).catch(function(err) {
+							ui.addNotification(
+								null,
+								E('p', {}, 'Ошибка при вызове сброса VPN-настроек: ' + String(err)),
+								'error'
+							);
+						});
+					}
+				}, 'Сбросить VPN')
+			])
+		]);
 	},
 
 	handleSaveApply: null,
