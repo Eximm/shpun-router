@@ -6,7 +6,9 @@ CONF_DIR="/etc/shpun"
 SUB_FILE="$CONF_DIR/subscription.json"
 LOCAL_VER_FILE="$CONF_DIR/router_version"
 LOCAL_VER_PREV_FILE="$CONF_DIR/router_version.prev"
+LATEST_VER_FILE="$CONF_DIR/router_latest_version"
 LOCK_FILE="/var/run/shpun-update.lock"
+
 LOG_TAG="shpun-update"
 PKG_NAME="shpun-router"
 
@@ -15,6 +17,10 @@ log() {
 }
 
 # --- version compare ---
+# ver_cmp A B -> echo:
+#   0  если A < B
+#   1  если A = B
+#   2  если A > B
 ver_cmp() {
     local v1="${1:-0.0.0}"
     local v2="${2:-0.0.0}"
@@ -26,14 +32,14 @@ ver_cmp() {
     a1=$((a1+0)); a2=$((a2+0)); a3=$((a3+0))
     b1=$((b1+0)); b2=$((b2+0)); b3=$((b3+0))
 
-    [ $a1 -lt $b1 ] && { echo 0; return; }
-    [ $a1 -gt $b1 ] && { echo 2; return; }
+    [ "$a1" -lt "$b1" ] && { echo 0; return; }
+    [ "$a1" -gt "$b1" ] && { echo 2; return; }
 
-    [ $a2 -lt $b2 ] && { echo 0; return; }
-    [ $a2 -gt $b2 ] && { echo 2; return; }
+    [ "$a2" -lt "$b2" ] && { echo 0; return; }
+    [ "$a2" -gt "$b2" ] && { echo 2; return; }
 
-    [ $a3 -lt $b3 ] && { echo 0; return; }
-    [ $a3 -gt $b3 ] && { echo 2; return; }
+    [ "$a3" -lt "$b3" ] && { echo 0; return; }
+    [ "$a3" -gt "$b3" ] && { echo 2; return; }
 
     echo 1
 }
@@ -46,11 +52,14 @@ if [ -e "$LOCK_FILE" ]; then
     fi
 fi
 echo $$ >"$LOCK_FILE"
-trap "rm -f $LOCK_FILE" EXIT
+trap 'rm -f "$LOCK_FILE"' EXIT
 
 # --- deps ---
-for bin in jsonfilter uclient-fetch opkg; do
-    command -v "$bin" >/dev/null || { log "$bin missing"; exit 1; }
+for bin in jsonfilter uclient-fetch opkg tar; do
+    if ! command -v "$bin" >/dev/null 2>&1; then
+        log "dependency missing: $bin"
+        exit 1
+    fi
 done
 
 [ -f "$SUB_FILE" ] || { log "subscription.json missing"; exit 1; }
@@ -64,13 +73,38 @@ LOCAL_VER=""
 
 log "local=${LOCAL_VER:-none}, remote=${REMOTE_VER:-none}, min=${MIN_VER:-none}"
 
-[ -z "$UPDATE_URL" ] && { log "empty update_url"; exit 1; }
+# --- всегда обновляем файл с последней известной версией ---
+if [ -n "$REMOTE_VER" ]; then
+    echo "$REMOTE_VER" >"$LATEST_VER_FILE"
+    log "router_latest_version set to remote=$REMOTE_VER"
+elif [ -n "$LOCAL_VER" ]; then
+    echo "$LOCAL_VER" >"$LATEST_VER_FILE"
+    log "router_latest_version set to local=$LOCAL_VER (remote unknown)"
+fi
+
+# если нет URL обновления — обновлять нечем
+if [ -z "$UPDATE_URL" ]; then
+    log "empty update_url, nothing to do"
+    exit 0
+fi
 
 # --- version check ---
 if [ -n "$REMOTE_VER" ] && [ -n "$LOCAL_VER" ]; then
     cmp="$(ver_cmp "$LOCAL_VER" "$REMOTE_VER")"
-    [ "$cmp" = "1" ] && { log "already up-to-date"; exit 0; }
-    [ "$cmp" = "2" ] && { log "local version newer; skipping"; exit 0; }
+    case "$cmp" in
+        1)
+            log "already up-to-date"
+            exit 0
+            ;;
+        2)
+            log "local version newer than remote; skipping update"
+            exit 0
+            ;;
+        0)
+            # local < remote — обновляем
+            :
+            ;;
+    esac
 fi
 
 TMP_IPK="/tmp/${PKG_NAME}_update.ipk"
@@ -98,9 +132,11 @@ if ! tar -tf "$TMP_IPK" >/dev/null 2>&1; then
 fi
 
 # save old version
-[ -n "$LOCAL_VER" ] && echo "$LOCAL_VER" >"$LOCAL_VER_PREV_FILE"
+if [ -n "$LOCAL_VER" ]; then
+    echo "$LOCAL_VER" >"$LOCAL_VER_PREV_FILE"
+fi
 
-log "installing update"
+log "installing update from $TMP_IPK"
 
 if ! opkg install --force-reinstall "$TMP_IPK"; then
     log "opkg failed"
@@ -110,12 +146,15 @@ fi
 
 rm -f "$TMP_IPK"
 
-# write new version
-[ -n "$REMOTE_VER" ] && echo "$REMOTE_VER" >"$LOCAL_VER_FILE"
+# write new version (и одновременно обновляем latest, если есть REMOTE_VER)
+if [ -n "$REMOTE_VER" ]; then
+    echo "$REMOTE_VER" >"$LOCAL_VER_FILE"
+    echo "$REMOTE_VER" >"$LATEST_VER_FILE"
+    log "local version updated to $REMOTE_VER"
+fi
 
 log "restart services"
 
-# avoid killing uhttpd too early; minimal restarts only
 /etc/init.d/shpun-agent stop  2>/dev/null || true
 /etc/init.d/shpun-vpn stop    2>/dev/null || true
 

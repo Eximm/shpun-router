@@ -1,0 +1,9 @@
+{
+  "title": "Shpun SDN System",
+  "order": 20,
+  "depends": {},
+  "contents": {
+    "type": "view",
+    "path": "status/include/shpunvpn"
+  }
+}

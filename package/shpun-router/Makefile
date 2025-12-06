@@ -18,15 +18,13 @@ define Package/shpun-router
   DEPENDS:=+luci-base +jsonfilter +ucode +ucode-mod-fs +ucode-mod-uci +rpcd-mod-ucode
 endef
 
-
 define Package/$(PKG_NAME)/description
 Shpun Router Integration:
  - automatic router code generation
  - integration with Shpun VPN billing
  - Shadowsocks/VLESS auto-detection (future expand)
  - automatic engine fetch (multi-arch)
- - LuCI setup wizard
- - VPN status widget
+ - VPN status widget (LuCI Dashboard)
  - OTA firmware update (from widget)
 endef
 
@@ -44,41 +42,35 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_DIR) $(1)/usr/share/rpcd/ucode
 	$(INSTALL_DIR) $(1)/usr/share/rpcd/acl.d
-	$(INSTALL_DIR) $(1)/usr/share/luci/menu.d
-	$(INSTALL_DIR) $(1)/www/luci-static/resources/view/shpun
+	$(INSTALL_DIR) $(1)/usr/share/luci/status/include
 	$(INSTALL_DIR) $(1)/www/luci-static/resources/view/status/include
 	$(INSTALL_DIR) $(1)/etc/uci-defaults
 
-		# --- core scripts ---
-	$(INSTALL_BIN) ./files/etc/shpun/agent.sh            $(1)/etc/shpun/agent.sh
-	$(INSTALL_BIN) ./files/etc/shpun/build-config.sh     $(1)/etc/shpun/build-config.sh
-	$(INSTALL_BIN) ./files/etc/shpun/gen_code.sh         $(1)/etc/shpun/gen_code.sh
-	$(INSTALL_BIN) ./files/etc/shpun/firewall-xray.sh    $(1)/etc/shpun/firewall-xray.sh
-	$(INSTALL_BIN) ./files/etc/shpun/router_updater.sh   $(1)/etc/shpun/router_updater.sh
-	$(INSTALL_BIN) ./files/etc/shpun/b64dec.sh           $(1)/etc/shpun/b64dec.sh
-
+	# --- core scripts ---
+	$(INSTALL_BIN) ./files/etc/shpun/agent.sh         $(1)/etc/shpun/agent.sh
+	$(INSTALL_BIN) ./files/etc/shpun/build-config.sh  $(1)/etc/shpun/build-config.sh
+	$(INSTALL_BIN) ./files/etc/shpun/gen_code.sh      $(1)/etc/shpun/gen_code.sh
+	$(INSTALL_BIN) ./files/etc/shpun/firewall-xray.sh $(1)/etc/shpun/firewall-xray.sh
+	$(INSTALL_BIN) ./files/etc/shpun/router_updater   $(1)/etc/shpun/router_updater
 
 	# default config
-	$(INSTALL_CONF) ./files/etc/shpun/agent.conf $(1)/etc/shpun/agent.conf
+	$(INSTALL_CONF) ./files/etc/shpun/agent.conf      $(1)/etc/shpun/agent.conf
 
 	# --- init scripts ---
-	$(INSTALL_BIN) ./files/etc/init.d/shpun-agent $(1)/etc/init.d/shpun-agent
-	$(INSTALL_BIN) ./files/etc/init.d/shpun-vpn   $(1)/etc/init.d/shpun-vpn
+	$(INSTALL_BIN) ./files/etc/init.d/shpun-agent     $(1)/etc/init.d/shpun-agent
+	$(INSTALL_BIN) ./files/etc/init.d/shpun-vpn       $(1)/etc/init.d/shpun-vpn
 
 	# --- rpcd ucode backend ---
-	$(INSTALL_DATA) ./files/usr/share/rpcd/ucode/shpun.uc $(1)/usr/share/rpcd/ucode/shpun.uc
+	$(INSTALL_DATA) ./files/usr/share/rpcd/ucode/shpun.uc  $(1)/usr/share/rpcd/ucode/shpun.uc
 
 	# --- ACL ---
 	$(INSTALL_DATA) ./files/usr/share/rpcd/acl.d/shpun.json $(1)/usr/share/rpcd/acl.d/shpun.json
 
-	# --- LuCI menu ---
-	$(INSTALL_DATA) ./files/usr/share/luci/menu.d/shpun.json $(1)/usr/share/luci/menu.d/shpun.json
+	# --- Status widget descriptor (JSON) ---
+	$(INSTALL_DATA) ./files/usr/share/luci/status/include/20_shpunsdn.json \
+		$(1)/usr/share/luci/status/include/20_shpunsdn.json
 
-	# --- Wizard JS ---
-	$(INSTALL_DATA) ./files/www/luci-static/resources/view/shpun/wizard.js \
-		$(1)/www/luci-static/resources/view/shpun/wizard.js
-
-	# --- Status widget (новый JS виджет для Dashboard) ---
+	# --- Status widget JS ---
 	$(INSTALL_DATA) ./files/www/luci-static/resources/view/status/include/01_shpunvpn.js \
 		$(1)/www/luci-static/resources/view/status/include/01_shpunvpn.js
 

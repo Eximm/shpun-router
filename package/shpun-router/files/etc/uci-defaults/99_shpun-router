@@ -57,7 +57,7 @@ if ! grep -q "shpun-firewall-xray" /etc/firewall.user 2>/dev/null; then
     cat >> /etc/firewall.user << 'EOF'
 
 # --- shpun-firewall-xray ---
-[ -x /etc/shpun/firewall-xray.sh ] && /etc/shpun/firewall-xray.sh
+[ -x /etc/shpun/firewall-xray.sh ] && /etc/shpun/firewall-xray.sh start
 # --- end shpun-firewall-xray ---
 EOF
 fi

@@ -30,6 +30,39 @@ log() {
 }
 
 #######################################
+# State dir helper
+#######################################
+
+ensure_state_dir() {
+	[ -d "$STATE_DIR" ] || mkdir -p "$STATE_DIR" 2>/dev/null || true
+}
+
+#######################################
+# Router code helper
+#######################################
+
+ensure_router_code() {
+	# если код уже есть и не пустой — ничего не делаем
+	if [ -s "$CODE_FILE" ]; then
+		return 0
+	fi
+
+	# пробуем сгенерировать новый код
+	if [ -x /etc/shpun/gen_code.sh ]; then
+		local new_code
+		new_code="$(/etc/shpun/gen_code.sh 2>/dev/null | tr -d '\r\n ' || true)"
+		if [ -n "$new_code" ]; then
+			printf '%s\n' "$new_code" >"$CODE_FILE"
+			log "generated new router code: $new_code"
+			return 0
+		fi
+	fi
+
+	log "failed to generate router code (gen_code.sh missing or returned empty)"
+	return 1
+}
+
+#######################################
 # HTTP client detection
 #######################################
 
@@ -176,6 +209,7 @@ load_conf() {
 		ENGINE_URL="$(build_engine_url)"
 	fi
 }
+
 #######################################
 # Router code
 #######################################
@@ -298,42 +332,39 @@ wait_for_default_route() {
 }
 
 #######################################
-# VPN keepalive + IP detection
+# VPN IP detection + keepalive
 #######################################
 
-vpn_keepalive() {
-	# Никаких curl — используем то же самое, что и агент.
+detect_vpn_ip() {
 	detect_http_client
-
 	if [ -z "$HTTP_BIN" ]; then
-		log "vpn_keepalive: no HTTP client available"
+		log "detect_vpn_ip: no HTTP client (curl/wget/uclient-fetch)"
 		echo "unknown" >"$VPN_IP_FILE"
-		return 0
-	}
+		return 1
+	fi
 
-	# ВРЕМЕННО прокидываем исходящий HTTP/HTTPS самого роутера
-	# через dokodemo-door (REDIR_PORT) для этого одного запроса.
-	local url="${KEEPALIVE_URL:-http://ifconfig.me/ip}"
-	local ip=""
+	local url ip
+	url="${KEEPALIVE_URL:-http://ifconfig.me/ip}"
 
-	iptables -t nat -I OUTPUT -p tcp --dport 80  -j REDIRECT --to-ports "$REDIR_PORT" 2>/dev/null || true
-	iptables -t nat -I OUTPUT -p tcp --dport 443 -j REDIRECT --to-ports "$REDIR_PORT" 2>/dev/null || true
-
-	ip="$(http_get_stdout "$url" 2>/dev/null || true)"
-	ip="$(printf '%s' "$ip" | tr -d '\r\n ' )"
-
-	# ВСЕГДА убираем правила, даже если запрос не удался
-	iptables -t nat -D OUTPUT -p tcp --dport 80  -j REDIRECT --to-ports "$REDIR_PORT" 2>/dev/null || true
-	iptables -t nat -D OUTPUT -p tcp --dport 443 -j REDIRECT --to-ports "$REDIR_PORT" 2>/dev/null || true
+	ip="$(http_get_stdout "$url" 2>/dev/null | tr -d '\r\n ' | head -n1 || true)"
 
 	if [ -z "$ip" ]; then
 		ip="unknown"
-		log "vpn_keepalive: failed via REDIR, ip=unknown"
-	else
-		log "vpn_keepalive: ok via REDIR, ip=$ip"
 	fi
 
-	echo "$ip" >"$VPN_IP_FILE"
+	printf '%s\n' "$ip" >"$VPN_IP_FILE"
+	log "detect_vpn_ip: vpn_ip=$ip (url=$url)"
+
+	return 0
+}
+
+vpn_keepalive() {
+	# Периодически обновляем внешний IP через туннель (или через WAN, если OUTPUT не в REDIR).
+	if [ ! -s "$VPN_READY_FILE" ]; then
+		return 0
+	fi
+
+	detect_vpn_ip
 }
 
 #######################################
@@ -440,7 +471,7 @@ ensure_vpn_from_subscription() {
 	rm -f "$VERROR_FILE"
 	log "vpn_ready marked in $VPN_READY_FILE"
 
-	# попытка определить внешний IP через туннель
+	# попытка определить внешний IP (через туннель, если firewall всё гонит через REDIR)
 	detect_vpn_ip
 
 	return 0
@@ -553,6 +584,7 @@ check_subscription_alive() {
 main_loop() {
 	load_conf
 	ensure_state_dir
+	ensure_router_code
 
 	log "shpun-agent started (API_URL=$API_URL, ENGINE_BIN=$ENGINE_BIN, ENGINE_URL=$ENGINE_URL, MIN_UPTIME=$MIN_UPTIME, NET_FAIL_TIMEOUT=$NET_FAIL_TIMEOUT, PING_HOST=$PING_HOST)"
 
@@ -569,6 +601,7 @@ main_loop() {
 			continue
 		fi
 
+		# --- INTERNET FAILSAFE ---
 		if [ -s "$VPN_READY_FILE" ]; then
 			if check_internet; then
 				[ "$NET_FAIL_SECONDS" -gt 0 ] && log "internet is back, resetting fail counter (was ${NET_FAIL_SECONDS}s)"
@@ -590,6 +623,7 @@ main_loop() {
 			NET_FAIL_SECONDS=0
 		fi
 
+		# --- SUBSCRIPTION HANDLING ---
 		if [ ! -s "$SUB_FILE" ]; then
 			poll_subscription_loop
 		else
@@ -600,8 +634,7 @@ main_loop() {
 			check_subscription_alive
 		fi
 
-		# --- VPN keepalive + IP detection ---
-		# Если VPN активен и KEEPALIVE_INTERVAL > 0, периодически дергаем vpn_keepalive()
+		# --- KEEPALIVE + VPN IP detection ---
 		if [ -s "$VPN_READY_FILE" ] && [ "${KEEPALIVE_INTERVAL:-0}" -gt 0 ]; then
 			VPN_KEEPALIVE_SECONDS=$((VPN_KEEPALIVE_SECONDS + MAIN_LOOP_SLEEP))
 

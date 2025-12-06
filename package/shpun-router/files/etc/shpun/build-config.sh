@@ -19,49 +19,101 @@ command -v jsonfilter >/dev/null 2>&1 || {
 }
 
 # ==========================
-# 0. Универсальный base64-декодер без внешних DEPENDS
+# 0. Универсальный base64-декодер (URL-safe, только awk)
 # ==========================
-# b64_decode:
-#   - если есть системный base64, используем его;
-#   - иначе используем встроенный awk-декодер (только busybox awk).
-b64_decode() {
-    if command -v base64 >/dev/null 2>&1; then
-        base64 -d 2>/dev/null
-        return
-    fi
+# b64_url_decode "STRING" -> печатает декодированную строку в stdout.
+# Не требует внешнего base64, использует только awk.
+b64_url_decode() {
+    local in="$1"
+    local mod out
 
-    awk -v tbl='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/' '
-    function val(c,   p) {
-        p = index(tbl, c)
-        return (p ? p - 1 : -1)
-    }
-    {
-        # убираем мусор и переносы
-        gsub(/[^A-Za-z0-9+\/=]/, "", $0)
+    # Заменяем URL-safe символы на обычные
+    in="${in//-/+}"
+    in="${in//_/\/}"
 
-        out = ""
-        for (i = 1; i <= length($0); i += 4) {
-            c1 = substr($0, i, 1)
-            c2 = substr($0, i+1, 1)
-            c3 = substr($0, i+2, 1)
-            c4 = substr($0, i+3, 1)
+    # Добавляем паддинг до кратности 4
+    mod=$(( ${#in} % 4 ))
+    case "$mod" in
+        0) ;;
+        2) in="${in}==";;
+        3) in="${in}=";;
+        1)
+            logger -t shpun-build "Invalid base64 length %4==1: len=${#in}, data='$1'"
+            return 1
+            ;;
+    esac
 
-            v1 = val(c1); v2 = val(c2)
-            v3 = (c3 == "=" ? -1 : val(c3))
-            v4 = (c4 == "=" ? -1 : val(c4))
+    out="$(printf '%s' "$in" | awk '
+        BEGIN {
+            b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+        }
 
-            b1 = (v1 << 2) | (v2 >> 4)
-            b2 = ((v2 & 15) << 4) | (v3 < 0 ? 0 : (v3 >> 2))
-            b3 = ((v3 & 3) << 6) | (v4 < 0 ? 0 : v4)
+        # Возвращает индекс символа в таблице b64 (0..63), или -1 для "="
+        function b64val(c,  p) {
+            if (c == "=") return -1
+            p = index(b64, c)
+            if (p == 0) return -2
+            return p - 1
+        }
 
-            out = out sprintf("%c", b1)
+        function decode_quad(q,    c1,c2,c3,c4,v1,v2,v3,v4,b1,b2,b3,out) {
+            c1 = substr(q,1,1)
+            c2 = substr(q,2,1)
+            c3 = substr(q,3,1)
+            c4 = substr(q,4,1)
+
+            v1 = b64val(c1)
+            v2 = b64val(c2)
+            v3 = b64val(c3)
+            v4 = b64val(c4)
+
+            if (v1 < 0 || v2 < 0 || v3 < -1 || v4 < -1)
+                return ""
+
+            # Пересчитываем без битовых сдвигов, только через * / %
+            b1 = v1 * 4 + int(v2 / 16)
+            b2 = (v2 % 16) * 16 + int((v3 < 0 ? 0 : v3) / 4)
+            b3 = (v3 < 0 ? 0 : (v3 % 4) * 64) + (v4 < 0 ? 0 : v4)
+
+            out = sprintf("%c", b1)
             if (v3 >= 0)
                 out = out sprintf("%c", b2)
             if (v4 >= 0)
                 out = out sprintf("%c", b3)
+
+            return out
         }
-        printf "%s", out
-    }'
+
+        {
+            # чистим мусор
+            gsub(/[^A-Za-z0-9+\/=]/, "", $0)
+            line = $0
+            out  = ""
+
+            for (i = 1; i <= length(line); i += 4) {
+                quad = substr(line, i, 4)
+                if (length(quad) < 4)
+                    break
+
+                chunk = decode_quad(quad)
+                if (chunk == "") {
+                    # некорректные данные
+                    out = ""
+                    break
+                }
+                out = out chunk
+            }
+
+            printf "%s", out
+        }
+    ' 2>/dev/null)"
+
+    if [ -z "$out" ]; then
+        logger -t shpun-build "Failed to base64-decode (awk): '$1'"
+        return 1
+    fi
+
+    printf '%s' "$out"
 }
 
 # ==========================
@@ -105,20 +157,6 @@ logger -t shpun-build "router profile proto=$ROUTER_PROTO, link_scheme=$(printf 
 REDIR_PORT="${REDIR_PORT:-12345}"
 
 # ==========================
-# 2. Вспомогательная функция для правки URL-safe base64
-# ==========================
-fix_b64() {
-    local s="$1"
-    s="${s//-/+}"
-    s="${s//_/\/}"
-    case $((${#s} % 4)) in
-        2) s="${s}==";;
-        3) s="${s}=";;
-    esac
-    printf '%s' "$s"
-}
-
-# ==========================
 # 3. Ветвление по типу профиля
 # ==========================
 
@@ -150,27 +188,19 @@ case "$ROUTER_PROTO" in
             if echo "$USERINFO" | grep -q ':'; then
                 CRED="$USERINFO"
             else
-                B64_FIXED="$(fix_b64 "$USERINFO")"
-                DECODED="$(printf '%s' "$B64_FIXED" | b64_decode 2>/dev/null)"
-
-                [ -n "$DECODED" ] || {
+                CRED="$(b64_url_decode "$USERINFO")" || {
                     logger -t shpun-build "Failed to base64-decode ss userinfo"
                     exit 1
                 }
-
-                CRED="$DECODED"
             fi
         else
             # Вариант 2: старый стиль BASE64(method:password@host:port)
-            B64_FIXED="$(fix_b64 "$BASE_PART")"
-            DECODED="$(printf '%s' "$B64_FIXED" | b64_decode 2>/dev/null)"
-
-            [ -n "$DECODED" ] || {
+            DECODED_LINK="$(b64_url_decode "$BASE_PART")" || {
                 logger -t shpun-build "Failed to base64-decode ss link payload (old style)"
                 exit 1
             }
 
-            USERINFO_HOSTPORT="$DECODED"
+            USERINFO_HOSTPORT="$DECODED_LINK"
             CRED="${USERINFO_HOSTPORT%%@*}"
             HOSTPORT="${USERINFO_HOSTPORT#*@}"
         fi
