@@ -480,6 +480,12 @@ return view.extend({
 	onmount: function(node) {
 		this.container = node;
 
+		/* Спрятать заголовок секции LuCI перед нашим виджетом ([Anonymous45Class] и т.п.) */
+		var prev = node.previousElementSibling;
+		if (prev && prev.tagName && prev.tagName.toLowerCase() === 'h3') {
+			prev.style.display = 'none';
+		}
+
 		var view = this;
 
 		/* Автообновление статуса раз в 10 секунд */
@@ -498,6 +504,7 @@ return view.extend({
 			});
 		}, 10);
 	},
+
 
 	onunload: function() {
 		if (this._pollId != null)
