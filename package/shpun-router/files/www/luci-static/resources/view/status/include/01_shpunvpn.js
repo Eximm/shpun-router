@@ -267,7 +267,6 @@ function buildStatusBadge(state) {
 
 /* ============================================================
  *  Хелпер: спрятать заголовки LuCI над нашим виджетом
- *  (Status и [AnonymousNNClass] { _state: object })
  * ========================================================== */
 function hideLuCIHeader(rootNode) {
 	if (!rootNode)
@@ -277,7 +276,6 @@ function hideLuCIHeader(rootNode) {
 	if (!parent)
 		return;
 
-	/* Прячем все элементы выше нашего виджета внутри того же контейнера */
 	var prev = rootNode.previousSibling;
 	while (prev) {
 		if (prev.style !== undefined)
@@ -308,36 +306,16 @@ return view.extend({
 		if (!fwCurrent)
 			fwCurrent = '1.0.0';
 
-		/* Сейчас backend кладёт в vpn_ip фактически IP WAN */
-		var vpnIPRaw  = (state.vpn_ip || '').trim();
-
 		var hasSub    = !!state.has_sub;
 		var vpnReady  = !!state.vpn_ready;
 		var err       = (state.vpn_error || '').trim();
-
-		var wanIP     = vpnIPRaw || '';
-		var vpnIP     = '—';
-
-		/* WAN IP — если пусто/unknown, просто тире */
-		if (!wanIP || wanIP === 'unknown')
-			wanIP = '—';
-
-		/* IP за VPN:
-		 *  - пока отдельного IP нет, не врем: показываем "—"
-		 *  - позже агент будет писать реальный VPN-IP в /tmp/shpun_vpn_ip
-		 *    и мы сюда его подставим (отличный от WAN)
-		 */
-		if (vpnReady && vpnIPRaw && vpnIPRaw !== 'unknown' && vpnIPRaw !== wanIP)
-			vpnIP = vpnIPRaw;
-		else
-			vpnIP = '—';
 
 		/* Ссылка на бота и QR — всегда одна и та же */
 		var deepLink = 'https://t.me/shpunvpn_bot';
 		var qrUrl    = 'https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=' +
 			encodeURIComponent(deepLink);
 
-		/* код: клик = копирование в буфер (без всплытия клика наверх) */
+		/* код: клик = копирование в буфер */
 		var codeNode = E('span', {
 			'class': 'shpun-code shpun-code-copy',
 			'click': ui.createHandlerFn(this, 'handleCopyCode', code)
@@ -361,7 +339,7 @@ return view.extend({
 			/* Основной блок: две колонки */
 			E('div', { 'class': 'shpun-card-main' }, [
 
-				/* Левая колонка: параметры */
+				/* Левая колонка: параметры (без IP) */
 				E('div', { 'class': 'shpun-col-main' }, [
 					E('div', { 'class': 'shpun-field' }, [
 						E('div', { 'class': 'shpun-field-label' }, [ 'КОД РОУТЕРА' ]),
@@ -382,14 +360,6 @@ return view.extend({
 					E('div', { 'class': 'shpun-field' }, [
 						E('div', { 'class': 'shpun-field-label' }, [ 'ПРОШИВКА' ]),
 						E('div', { 'class': 'shpun-field-value' }, [ fwCurrent ])
-					]),
-					E('div', { 'class': 'shpun-field' }, [
-						E('div', { 'class': 'shpun-field-label' }, [ 'IP WAN' ]),
-						E('div', { 'class': 'shpun-field-value' }, [ wanIP ])
-					]),
-					E('div', { 'class': 'shpun-field' }, [
-						E('div', { 'class': 'shpun-field-label' }, [ 'IP за VPN' ]),
-						E('div', { 'class': 'shpun-field-value' }, [ vpnIP ])
 					])
 				]),
 

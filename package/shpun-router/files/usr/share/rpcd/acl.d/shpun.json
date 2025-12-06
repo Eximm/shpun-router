@@ -8,7 +8,7 @@
     },
     "write": {
       "ubus": {
-        "shpun": [ "update_router", "reset_vpn" ]
+        "shpun": [ "update_router", "reset_vpn", "detect_vpn_ip" ]
       }
     }
   }

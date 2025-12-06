@@ -11,7 +11,6 @@ LAST_CHECK_FILE="$STATE_DIR/last_sub_check"
 CONF="$STATE_DIR/agent.conf"
 
 VERROR_FILE="$STATE_DIR/vpn_error"
-VPN_IP_FILE="/tmp/shpun_vpn_ip"
 
 LOG_TAG="shpun-agent"
 
@@ -190,15 +189,10 @@ load_conf() {
 	[ -z "$SUB_CHECK_INTERVAL" ] && SUB_CHECK_INTERVAL="$SUB_CHECK_INTERVAL_DEFAULT"
 
 	[ -z "$MIN_UPTIME" ]       && MIN_UPTIME="$MIN_UPTIME_DEFAULT"
-	[ -z "$NET_FAIL_TIMEOUT" ] && NET_FAIL_TIMEOUT="$NET_FAIL_TIMEOUT_DEFAULT"
-	[ -z "$MAIN_LOOP_SLEEP" ]  && MAIN_LOOP_SLEEP="$MAIN_LOOP_SLEEP_DEFAULT"
+	[ -з "$NET_FAIL_TIMEOUT" ] && NET_FAIL_TIMEOUT="$NET_FAIL_TIMEOUT_DEFAULT"
+	[ -з "$MAIN_LOOP_SLEEP" ]  && MAIN_LOOP_SLEEP="$MAIN_LOOP_SLEEP_DEFAULT"
 
-	# keepalive: интервал и URL по умолчанию, если не заданы в agent.conf
-	[ -z "$KEEPALIVE_INTERVAL" ] && KEEPALIVE_INTERVAL=0
-	# по умолчанию используем внешний сервис определения IP
-	[ -z "$KEEPALIVE_URL" ]      && KEEPALIVE_URL="https://ifconfig.me/ip"
-
-	if [ -z "$PING_HOST" ]; then
+	if [ -з "$PING_HOST" ]; then
 		if [ -n "$DNS_ADDR1" ]; then
 			PING_HOST="$DNS_ADDR1"
 		else
@@ -206,7 +200,7 @@ load_conf() {
 		fi
 	fi
 
-	if [ -z "$ENGINE_URL" ]; then
+	if [ -з "$ENGINE_URL" ]; then
 		ENGINE_URL="$(build_engine_url)"
 	fi
 }
@@ -227,14 +221,14 @@ get_code() {
 
 	CODE="$(printf '%s' "$CODE" | tr -d '\r\n')"
 
-	if [ -z "$CODE" ]; then
+	if [ -з "$CODE" ]; then
 		log "router code is empty"
 		return 1
 	fi
 
 	CLEAN_CODE="$(printf '%s' "$CODE" | tr '[:lower:]' '[:upper:]' | tr -dc 'A-Z0-9')"
 
-	if [ -z "$CLEAN_CODE" ]; then
+	if [ -з "$CLEAN_CODE" ]; then
 		log "clean code is empty after filtering: $CODE"
 		return 1
 	fi
@@ -247,7 +241,7 @@ get_code() {
 #######################################
 
 engine_download() {
-	if [ -z "$ENGINE_URL" ]; then
+	if [ -з "$ENGINE_URL" ]; then
 		log "ENGINE_URL not set, skip engine download"
 		return 1
 	fi
@@ -258,7 +252,7 @@ engine_download() {
 	fi
 
 	detect_http_client
-	if [ -z "$HTTP_BIN" ]; then
+	if [ -з "$HTTP_BIN" ]; then
 		log "engine_download: no HTTP client (curl/wget/uclient-fetch), cannot download engine"
 		return 1
 	fi
@@ -333,58 +327,16 @@ wait_for_default_route() {
 }
 
 #######################################
-# VPN IP detection + keepalive
-#######################################
-
-detect_vpn_ip() {
-	detect_http_client
-	if [ -z "$HTTP_BIN" ]; then
-		log "detect_vpn_ip: no HTTP client (curl/wget/uclient-fetch)"
-		echo "unknown" >"$VPN_IP_FILE"
-		return 1
-	fi
-
-	# основной внешний сервис
-	local url ip alt
-	url="${KEEPALIVE_URL:-https://ifconfig.me/ip}"
-	alt="https://api.ipify.org"
-
-	ip="$(http_get_stdout "$url" 2>/dev/null | tr -d '\r\n ' | head -n1 || true)"
-
-	if [ -z "$ip" ] && [ -n "$alt" ]; then
-		ip="$(http_get_stdout "$alt" 2>/dev/null | tr -d '\r\n ' | head -n1 || true)"
-	fi
-
-	if [ -z "$ip" ]; then
-		ip="unknown"
-	fi
-
-	printf '%s\n' "$ip" >"$VPN_IP_FILE"
-	log "detect_vpn_ip: vpn_ip=$ip (url=$url)"
-
-	return 0
-}
-
-vpn_keepalive() {
-	# Периодически обновляем внешний IP через туннель (или через WAN, если OUTPUT не в REDIR).
-	if [ ! -s "$VPN_READY_FILE" ]; then
-		return 0
-	end
-
-	detect_vpn_ip
-}
-
-#######################################
 # Subscription fetch / check
 #######################################
 
 fetch_subscription_once() {
-	if [ -z "$CLEAN_CODE" ] || [ -z "$API_URL" ]; then
+	if [ -з "$CLEAN_CODE" ] || [ -з "$API_URL" ]; then
 		return 1
 	fi
 
 	detect_http_client
-	if [ -z "$HTTP_BIN" ]; then
+	if [ -з "$HTTP_BIN" ]; then
 		log "fetch_subscription_once: no HTTP client (curl/wget/uclient-fetch)"
 		return 1
 	fi
@@ -394,7 +346,7 @@ fetch_subscription_once() {
 	log "query router_public: $URL"
 	BODY="$(http_get_stdout "$URL" 2>/dev/null || true)"
 
-	if [ -z "$BODY" ]; then
+	if [ -з "$BODY" ]; then
 		log "empty response from router_public"
 		return 1
 	fi
@@ -403,14 +355,14 @@ fetch_subscription_once() {
 
 	if [ "$OK" != "1" ]; then
 		ERR="$(printf '%s' "$BODY" | jsonfilter -e '@.error' 2>/dev/null || echo "")"
-		[ -z "$ERR" ] && ERR="unknown_error"
+		[ -з "$ERR" ] && ERR="unknown_error"
 		log "router_public error: ok=$OK, error=$ERR"
 		return 1
 	fi
 
 	CONFIG_PATH="$(printf '%s' "$BODY" | jsonfilter -e '@.config_url' 2>/dev/null || echo "")"
 
-	if [ -z "$CONFIG_PATH" ]; then
+	if [ -з "$CONFIG_PATH" ]; then
 		log "router_public ok=1 but config_url is empty"
 		return 1
 	fi
@@ -451,7 +403,7 @@ ensure_vpn_from_subscription() {
 
 	if ! wait_for_default_route; then
 		log "ensure_vpn_from_subscription: proceed without confirmed default route"
-	fi
+	endif
 
 	if ! engine_download; then
 		log "engine_download failed in ensure_vpn_from_subscription"
@@ -478,10 +430,8 @@ ensure_vpn_from_subscription() {
 	rm -f "$VERROR_FILE"
 	log "vpn_ready marked in $VPN_READY_FILE"
 
-	# IP за VPN определяем только по ручному запросу (через ubus / кнопку в LuCI)
 	return 0
 }
-
 
 poll_subscription_loop() {
 	if [ -s "$SUB_FILE" ]; then
@@ -518,10 +468,10 @@ check_subscription_alive() {
 
 	if [ "$((now_ts - last_ts))" -lt "$SUB_CHECK_INTERVAL" ]; then
 		return 0
-	fi
+	endif
 
 	detect_http_client
-	if [ -z "$HTTP_BIN" ]; then
+	if [ -з "$HTTP_BIN" ]; then
 		log "check_subscription_alive: no HTTP client (curl/wget/uclient-fetch)"
 		echo "$now_ts" >"$LAST_CHECK_FILE"
 		return 0
@@ -530,7 +480,7 @@ check_subscription_alive() {
 	UID_SUB="$(jsonfilter -i "$SUB_FILE" -e '@.uid' 2>/dev/null || echo "")"
 	USI_SUB="$(jsonfilter -i "$SUB_FILE" -e '@.usi' 2>/dev/null || echo "")"
 
-	if [ -z "$UID_SUB" ] || [ -z "$USI_SUB" ]; then
+	if [ -з "$UID_SUB" ] || [ -з "$USI_SUB" ]; then
 		log "check_subscription_alive: uid/usi missing in subscription.json"
 		echo "$now_ts" >"$LAST_CHECK_FILE"
 		return 0
@@ -549,7 +499,7 @@ check_subscription_alive() {
 
 	BODY="$(http_get_stdout "$CHECK_URL" 2>/dev/null || true)"
 
-	if [ -z "$BODY" ]; then
+	if [ -з "$BODY" ]; then
 		log "check_subscription_alive: empty response from router_config"
 		echo "$now_ts" >"$LAST_CHECK_FILE"
 		return 0
@@ -561,7 +511,6 @@ check_subscription_alive() {
 		printf '%s' "$BODY" >"$SUB_FILE"
 		log "subscription_alive: ok=1, subscription.json refreshed"
 		echo "$now_ts" >"$LAST_CHECK_FILE"
-		# подписка живая, очищаем возможную старую ошибку
 		rm -f "$VERROR_FILE"
 		return 0
 	fi
@@ -571,7 +520,6 @@ check_subscription_alive() {
 
 	rm -f "$VPN_READY_FILE"
 	rm -f "$SUB_FILE"
-	rm -f "$VPN_IP_FILE"
 
 	echo "$now_ts" >"$LAST_CHECK_FILE"
 	echo "$ERR" >"$VERROR_FILE"
@@ -591,9 +539,9 @@ main_loop() {
 	ensure_state_dir
 	ensure_router_code
 
-	log "shpun-agent started (API_URL=$API_URL, ENGINE_BIN=$ENGINE_BIN, ENGINE_URL=$ENGINE_URL, MIN_UPTIME=$MIN_UPTIME, NET_FAIL_TIMEOUT=$NET_FAIL_TIMEOUT, PING_HOST=$PING_HOST, KEEPALIVE_URL=${KEEPALIVE_URL:-https://ifconfig.me/ip})"
+	log "shpun-agent started (API_URL=$API_URL, ENGINE_BIN=$ENGINE_BIN, ENGINE_URL=$ENGINE_URL, MIN_UPTIME=$MIN_UPTIME, NET_FAIL_TIMEOUT=$NET_FAIL_TIMEOUT, PING_HOST=$PING_HOST)"
 
-	VPN_KEEPALIVE_SECONDS=0
+	NET_FAIL_SECONDS=0
 
 	while :; do
 		load_conf
@@ -641,13 +589,4 @@ main_loop() {
 	done
 }
 
-# Однократный режим: ручное определение IP за VPN
-if [ "$1" = "detect_vpn_ip" ]; then
-	load_conf
-	ensure_state_dir
-	detect_vpn_ip
-	exit 0
-fi
-
 main_loop "$@"
-

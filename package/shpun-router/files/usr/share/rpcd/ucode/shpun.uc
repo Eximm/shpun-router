@@ -10,7 +10,6 @@ const SUB      = DIR + "/subscription.json";
 const READY    = DIR + "/vpn_ready";
 const VERROR   = DIR + "/vpn_error";
 
-const VPN_IP   = "/tmp/shpun_vpn_ip";
 const FW_CUR   = DIR + "/router_version";
 const FW_LAST  = DIR + "/router_latest_version";
 
@@ -60,14 +59,12 @@ return {
 					let code_raw    = readfile(CODE);
 					let sub_raw     = readfile(SUB);
 					let err_raw     = readfile(VERROR);
-					let vpn_raw     = readfile(VPN_IP);
 					let fw_cur_raw  = readfile(FW_CUR);
 					let fw_last_raw = readfile(FW_LAST);
 
 					let code    = code_raw    ? code_raw    : "";
 					let sub     = sub_raw     ? sub_raw     : "";
 					let verr    = err_raw     ? err_raw     : "";
-					let vpn_ip  = vpn_raw     ? vpn_raw     : "";
 					let fw_cur  = fw_cur_raw  ? fw_cur_raw  : "";
 					let fw_last = fw_last_raw ? fw_last_raw : "";
 
@@ -78,9 +75,6 @@ return {
 						vpn_ready: exists(READY),
 						vpn_error: verr
 					};
-
-					if (vpn_ip != "")
-						res.vpn_ip = vpn_ip;
 
 					if (fw_cur != "")
 						res.fw_current = fw_cur;
@@ -132,7 +126,6 @@ return {
 					 *    - код роутера (будет сгенерен заново)
 					 *    - subscription.json, xray.json
 					 *    - vpn_ready, vpn_error
-					 *    - временный vpn_ip
 					 *    - latest-версию (чтобы обновлялка заново её подтянула)
 					 *    ТЕКУЩУЮ версию прошивки (FW_CUR) НЕ трогаем.
 					 */
@@ -143,7 +136,6 @@ return {
 						DIR + "/xray.json " +   /* сгенерированный конфиг Xray */
 						READY + " " +           /* vpn_ready */
 						VERROR + " " +          /* vpn_error */
-						VPN_IP + " " +          /* временный VPN/VAN IP */
 						FW_LAST +               /* последняя доступная версия */
 						" >/dev/null 2>&1";
 
@@ -158,31 +150,6 @@ return {
 					if (p4) p4.close();
 
 					return { ok: 1, msg: "vpn reset to initial state" };
-				}
-				catch (e) {
-					return { ok: 0, error: String(e) };
-				}
-			}
-		},
-
-		/* --- DETECT_VPN_IP: ручное определение IP за VPN --- */
-		detect_vpn_ip: {
-			call: function(req) {
-				try {
-					/* Одноразово запускаем агент в режиме detect_vpn_ip (без & — ждём завершения) */
-					let proc = popen("/etc/shpun/agent.sh detect_vpn_ip >/dev/null 2>&1");
-					if (proc)
-						proc.close();
-
-					/* Читаем то, что агент положил в /tmp/shpun_vpn_ip */
-					let vpn_raw = readfile(VPN_IP);
-					let vpn_ip  = vpn_raw ? vpn_raw.trim() : "";
-
-					if (!vpn_ip) {
-						return { ok: 0, error: "vpn_ip is empty (detect_vpn_ip failed or no external access)" };
-					}
-
-					return { ok: 1, vpn_ip: vpn_ip };
 				}
 				catch (e) {
 					return { ok: 0, error: String(e) };
