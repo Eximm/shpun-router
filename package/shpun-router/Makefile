@@ -90,7 +90,13 @@ define Package/$(PKG_NAME)/postinst
 	mkdir -p /etc/shpun
 
 	# --- local router version (update on releases) ---
-	echo "1.0.0" > /etc/shpun/router_version
+	# Не перетираем существующую версию, только создаём, если файла ещё нет.
+	if [ ! -f /etc/shpun/router_software_version ]; then
+		echo "$(PKG_VERSION)" > /etc/shpun/router_software_version
+	fi
+	if [ ! -f /etc/shpun/router_version ]; then
+		echo "$(PKG_VERSION)" > /etc/shpun/router_version
+	fi
 
 	# enable services
 	/etc/init.d/shpun-agent enable 2>/dev/null || true
@@ -116,6 +122,10 @@ endef
 
 define Package/$(PKG_NAME)/conffiles
 /etc/shpun/agent.conf
+/etc/shpun/firewall-xray.sh
+/etc/shpun/build-config.sh
+/etc/shpun/router_software_version
+/etc/shpun/router_version
 endef
 
 #######################################

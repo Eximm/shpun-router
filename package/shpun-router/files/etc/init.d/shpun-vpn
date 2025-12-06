@@ -6,7 +6,7 @@
 # Обёртка вокруг Xray для Shpun Router:
 #  - читает ENGINE_BIN / ENGINE_CONFIG из /etc/shpun/agent.conf
 #  - стартует "xray run -config <file>" через procd
-#  - после успешного старта применяет /etc/shpun/firewall-xray.sh (REDIRECT на dokodemo-door)
+#  - перед стартом накатывает /etc/shpun/firewall-xray.sh (REDIRECT на dokodemo-door)
 
 START=96
 USE_PROCD=1
@@ -19,60 +19,61 @@ ENGINE_BIN="/tmp/xray"
 ENGINE_CONFIG="/etc/shpun/xray.json"
 
 load_conf() {
-    # shellcheck disable=SC1090,SC1091
-    [ -f "$CONF" ] && . "$CONF"
+	# shellcheck disable=SC1090,SC1091
+	[ -f "$CONF" ] && . "$CONF"
 
-    # значения по умолчанию, если в конфиге не заданы
-    [ -z "$ENGINE_BIN" ]    && ENGINE_BIN="/tmp/xray"
-    [ -z "$ENGINE_CONFIG" ] && ENGINE_CONFIG="/etc/shpun/xray.json"
+	# значения по умолчанию, если в конфиге не заданы
+	[ -z "$ENGINE_BIN" ]    && ENGINE_BIN="/tmp/xray"
+	[ -z "$ENGINE_CONFIG" ] && ENGINE_CONFIG="/etc/shpun/xray.json"
 }
 
 start_service() {
-    load_conf
+	load_conf
 
-    # минимальная валидация конфигурации
-    if [ -z "$ENGINE_BIN" ] || [ -z "$ENGINE_CONFIG" ]; then
-        logger -t "$LOG_TAG" "ENGINE_BIN or ENGINE_CONFIG is not set, nothing to start"
-        return 1
-    fi
+	# минимальная валидация конфигурации
+	if [ -z "$ENGINE_BIN" ] || [ -z "$ENGINE_CONFIG" ]; then
+		logger -t "$LOG_TAG" "ENGINE_BIN or ENGINE_CONFIG is not set, nothing to start"
+		return 1
+	fi
 
-    if [ ! -x "$ENGINE_BIN" ]; then
-        logger -t "$LOG_TAG" "engine binary not found or not executable: $ENGINE_BIN (waiting for shpun-agent)"
-        return 0
-    fi
+	if [ ! -x "$ENGINE_BIN" ]; then
+		logger -t "$LOG_TAG" "engine binary not found or not executable: $ENGINE_BIN (waiting for shpun-agent)"
+		return 0
+	fi
 
-    if [ ! -s "$ENGINE_CONFIG" ]; then
-        logger -t "$LOG_TAG" "engine config not found or empty: $ENGINE_CONFIG (waiting for build-config.sh)"
-        return 0
-    fi
+	if [ ! -s "$ENGINE_CONFIG" ]; then
+		logger -t "$LOG_TAG" "engine config not found or empty: $ENGINE_CONFIG (waiting for build-config.sh)"
+		return 0
+	fi
 
-    logger -t "$LOG_TAG" "starting xray: $ENGINE_BIN run -config $ENGINE_CONFIG"
+	# СНАЧАЛА накатываем firewall для прозрачного прокси
+	if [ -x /etc/shpun/firewall-xray.sh ]; then
+		/etc/shpun/firewall-xray.sh start || logger -t "$LOG_TAG" "firewall-xray.sh start failed (ignored)"
+	fi
 
-    procd_open_instance
+	logger -t "$LOG_TAG" "starting xray: $ENGINE_BIN run -config $ENGINE_CONFIG"
 
-    # Xray: стандартный запуск "run -config <file>"
-    procd_set_param command "$ENGINE_BIN" run -config "$ENGINE_CONFIG"
-    # respawn: (min_sec) (max_sec) (∞ попыток)
-    procd_set_param respawn 5 10 0
-    procd_set_param stdout 1
-    procd_set_param stderr 1
+	procd_open_instance
 
-    procd_close_instance
+	# Xray: стандартный запуск "run -config <file>"
+	procd_set_param command "$ENGINE_BIN" run -config "$ENGINE_CONFIG"
+	# respawn: (min_sec) (max_sec) (∞ попыток)
+	procd_set_param respawn 5 10 0
+	procd_set_param stdout 1
+	procd_set_param stderr 1
 
-    # После запуска Xray накатываем правила firewall (прозрачный редирект dokodemo-door)
-    [ -x /etc/shpun/firewall-xray.sh ] && /etc/shpun/firewall-xray.sh start || true
+	procd_close_instance
 }
 
 stop_service() {
-    logger -t "$LOG_TAG" "stopping xray"
-    # procd сам убьёт процесс инстанса
-
-    # Если нужно, можно чистить правила firewall:
-    [ -x /etc/shpun/firewall-xray.sh ] && /etc/shpun/firewall-xray.sh stop || true
+	logger -t "$LOG_TAG" "stopping xray"
+	# procd сам убьёт процесс инстанса
+	# firewall специально НЕ трогаем, чтобы трафик не убежал мимо VPN,
+	# если кто-то перезапускает xray/агент.
 }
 
 reload_service() {
-    # Простая перезагрузка: стоп → старт
-    stop
-    start
+	# Простая перезагрузка: стоп → старт
+	stop
+	start
 }
