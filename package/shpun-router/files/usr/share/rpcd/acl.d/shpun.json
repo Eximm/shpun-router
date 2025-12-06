@@ -1,14 +1,14 @@
 {
   "luci-base": {
-    "description": "Access to Shpun Router backend (wizard + status widget)",
+    "description": "Access to Shpun Router / SDN System backend",
     "read": {
       "ubus": {
-        "shpun": [ "state", "apply_wan", "apply_wifi", "update_router" ]
+        "shpun": [ "state" ]
       }
     },
     "write": {
       "ubus": {
-        "shpun": [ "state", "apply_wan", "apply_wifi", "update_router" ]
+        "shpun": [ "update_router", "reset_vpn" ]
       }
     }
   }
