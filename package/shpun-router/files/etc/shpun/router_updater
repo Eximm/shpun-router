@@ -125,20 +125,25 @@ fi
 
 # --- version check (если известна локальная версия) ---
 if [ -n "$REMOTE_VER" ] && [ -n "$LOCAL_VER" ]; then
-	cmp="$(ver_cmp "$LOCAL_VER" "$REMOTE_VER")"
-	case "$cmp" in
-		1)
-			log "already up-to-date (local=$LOCAL_VER, remote=$REMOTE_VER)"
-			exit 0
-			;;
-		2)
-			log "local version newer than remote; skipping update (local=$LOCAL_VER, remote=$REMOTE_VER)"
-			exit 0
-			;;
-		0)
-			log "update required: local=$LOCAL_VER < remote=$REMOTE_VER"
-			;;
-	esac
+    cmp="$(ver_cmp "$LOCAL_VER" "$REMOTE_VER")"
+    case "$cmp" in
+        1)
+            log "already up-to-date (local=$LOCAL_VER, remote=$REMOTE_VER)"
+            exit 0
+            ;;
+        2)
+            log "local version newer than remote; skipping update (local=$LOCAL_VER, remote=$REMOTE_VER)"
+            exit 0
+            ;;
+        0)
+            log "update required: local=$LOCAL_VER < remote=$REMOTE_VER"
+            if [ "$CHECK_ONLY" = "1" ]; then
+                log "CHECK_ONLY=1, skipping install (check mode)"
+                exit 0
+            fi
+            ;;
+    esac
+
 else
 	log "one of versions is empty (local='${LOCAL_VER:-}', remote='${REMOTE_VER:-}'), will update anyway if URL is set"
 fi

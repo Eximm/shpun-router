@@ -301,10 +301,17 @@ return view.extend({
 
 		var code      = (state.code || '').trim();
 
-		/* Если бекенд не отдал версию — показываем 1.0.0 как базовую */
+		/* Версии прошивки */
 		var fwCurrent = (state.fw_current || '').trim();
 		if (!fwCurrent)
 			fwCurrent = '1.0.0';
+
+		var fwLatest  = (state.fw_latest || '').trim();
+		var hasNewFw  = fwLatest && fwLatest !== fwCurrent;
+
+		var fwLabel = fwCurrent;
+		if (hasNewFw)
+			fwLabel = fwCurrent + ' (доступна ' + fwLatest + ')';
 
 		var hasSub    = !!state.has_sub;
 		var vpnReady  = !!state.vpn_ready;
@@ -359,7 +366,7 @@ return view.extend({
 					]),
 					E('div', { 'class': 'shpun-field' }, [
 						E('div', { 'class': 'shpun-field-label' }, [ 'ПРОШИВКА' ]),
-						E('div', { 'class': 'shpun-field-value' }, [ fwCurrent ])
+						E('div', { 'class': 'shpun-field-value' }, [ fwLabel ])
 					])
 				]),
 
@@ -481,19 +488,120 @@ return view.extend({
 		});
 	},
 
+	/* Кнопка "Проверить обновление прошивки" — двухшаговый режим:
+	 *  1) ota_check: обновляем подписку и считаем fw_latest
+	 *  2) если fw_latest > fw_current — спрашиваем подтверждение и запускаем ota_install
+	 */
 	handleUpdateFirmware: function(ev) {
 		if (ev)
 			ev.preventDefault();
 
-		return callShpunUpdate().then(function(res) {
-			res = res || {};
-			if (res.ok)
-				ui.addNotification(null, E('p', {}, 'Проверка обновлений и авто-обновление прошивки запущены в фоне.'), 'info');
-			else
-				ui.addNotification(null, E('p', {}, 'Не удалось запустить обновление прошивки: ' +
-					(res.error ? String(res.error) : 'неизвестная ошибка')), 'error');
+		var view = this;
+
+		ui.addNotification(
+			null,
+			E('p', {}, 'Проверка обновлений запущена… Роутер связывается с сервером Shpun SDN System.'),
+			'info'
+		);
+
+		/* Шаг 1: форсим проверку обновлений на роутере (обновление subscription.json + CHECK_ONLY) */
+		return callShpunOtaCheck().then(function(res) {
+			/* Даём роутеру время закончить запрос и обновить файлы */
+			return new Promise(function(resolve) {
+				window.setTimeout(resolve, 12000);
+			});
+		}).then(function() {
+			/* Шаг 2: перечитываем состояние */
+			return callShpunState();
+		}).then(function(st) {
+			st = st || {};
+
+			var fwCurrent = (st.fw_current || '').trim();
+			if (!fwCurrent)
+				fwCurrent = '1.0.0';
+
+			var fwLatest = (st.fw_latest || '').trim();
+			var hasNew   = fwLatest && fwLatest !== fwCurrent;
+
+			/* Обновляем виджет текущими данными */
+			var root = view.render(st);
+			var container = view.container;
+			if (container && container.parentNode) {
+				container.parentNode.replaceChild(root, container);
+				view.container = root;
+				hideLuCIHeader(root);
+			}
+
+			if (!hasNew) {
+				ui.addNotification(
+					null,
+					E('p', {}, 'Новая версия прошивки не найдена. Установлена актуальная версия: ' + fwCurrent + '.'),
+					'info'
+				);
+				return;
+			}
+
+			/* Есть новая версия — спрашиваем подтверждение у пользователя */
+			ui.showModal('Обнаружено обновление прошивки', [
+				E('p', {}, [
+					'Доступна новая версия прошивки Shpun Router: ',
+					E('strong', {}, fwCurrent),
+					' → ',
+					E('strong', {}, fwLatest),
+					'.'
+				]),
+				E('p', {}, 'Установить обновление сейчас? В процессе VPN-соединение будет перезапущено.'),
+				E('div', { 'style': 'margin-top:10px; text-align:right' }, [
+					E('button', {
+						'class': 'btn',
+						'click': function() {
+							ui.hideModal();
+						}
+					}, 'Отмена'),
+					E('button', {
+						'class': 'btn cbi-button cbi-button-apply',
+						'style': 'margin-left:8px',
+						'click': function() {
+							ui.hideModal();
+
+							ui.addNotification(
+								null,
+								E('p', {}, 'Установка обновления прошивки запущена. Не отключайте питание роутера.'),
+								'info'
+							);
+
+							/* Шаг 3: запускаем фактическую установку */
+							callShpunOtaInstall().then(function(res) {
+								/* Через ~20 секунд пробуем обновить статус */
+								window.setTimeout(function() {
+									callShpunState().then(function(st2) {
+										st2 = st2 || {};
+										var root2 = view.render(st2);
+										var container2 = view.container;
+										if (container2 && container2.parentNode) {
+											container2.parentNode.replaceChild(root2, container2);
+											view.container = root2;
+											hideLuCIHeader(root2);
+										}
+									});
+								}, 20000);
+							}).catch(function(err) {
+								ui.addNotification(
+									null,
+									E('p', {}, 'Ошибка при запуске установки обновления: ' + String(err)),
+									'error'
+								);
+							});
+						}
+					}, 'Установить ' + fwLatest)
+				])
+			]);
 		}).catch(function(err) {
-			ui.addNotification(null, E('p', {}, 'Ошибка при вызове обновления прошивки: ' + String(err)), 'error');
+			ui.addNotification(
+				null,
+				E('p', {}, 'Ошибка при проверке обновления прошивки: ' + String(err)),
+				'error'
+			);
 		});
 	},
 
