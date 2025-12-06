@@ -20,6 +20,12 @@ var callShpunUpdate = rpc.declare({
 	expect: { '': {} }
 });
 
+var callShpunResetVpn = rpc.declare({
+	object: 'shpun',
+	method: 'reset_vpn',
+	expect: { '': {} }
+});
+
 /* ============================================================
  *  Стили виджета (однократная инъекция <style> в <head>)
  * ========================================================== */
@@ -365,7 +371,11 @@ return view.extend({
 					E('button', {
 						'class': 'shpun-btn',
 						'click': ui.createHandlerFn(this, 'handleUpdateFirmware')
-					}, 'Проверить обновление прошивки')
+					}, 'Проверить обновление прошивки'),
+					E('button', {
+						'class': 'shpun-btn',
+						'click': ui.createHandlerFn(this, 'handleResetVpn')
+					}, 'Сбросить VPN и настройки')
 				]),
 				E('div', { 'class': 'shpun-actions-right' }, [
 					E('a', {
@@ -470,6 +480,48 @@ return view.extend({
 					(res.error ? String(res.error) : 'неизвестная ошибка')), 'error');
 		}).catch(function(err) {
 			ui.addNotification(null, E('p', {}, 'Ошибка при вызове обновления прошивки: ' + String(err)), 'error');
+		});
+	},
+
+	handleResetVpn: function(ev) {
+		if (ev)
+			ev.preventDefault();
+
+		var view = this;
+
+		return callShpunResetVpn().then(function(res) {
+			res = res || {};
+			if (res.ok) {
+				ui.addNotification(
+					null,
+					E('p', {}, 'VPN-конфигурация сброшена. Роутер переведён в режим первоначальной настройки.'),
+					'info'
+				);
+				/* после сброса сразу обновим состояние виджета */
+				return callShpunState().then(function(st) {
+					st = st || {};
+					var root = view.render(st);
+					var container = view.container;
+					if (container && container.parentNode) {
+						container.parentNode.replaceChild(root, container);
+						view.container = root;
+					}
+				});
+			}
+			else {
+				ui.addNotification(
+					null,
+					E('p', {}, 'Не удалось сбросить VPN-настройки: ' +
+						(res.error ? String(res.error) : 'неизвестная ошибка')),
+					'error'
+				);
+			}
+		}).catch(function(err) {
+			ui.addNotification(
+				null,
+				E('p', {}, 'Ошибка при вызове сброса VPN-настроек: ' + String(err)),
+				'error'
+			);
 		});
 	},
 

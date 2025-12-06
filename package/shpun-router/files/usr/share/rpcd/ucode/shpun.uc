@@ -115,6 +115,44 @@ return {
 					return { ok: 0, error: String(e) };
 				}
 			}
+		},
+
+		/* --- RESET_VPN: сброс VPN-конфигурации и возврат к первоначальной настройке --- */
+		reset_vpn: {
+			call: function(req) {
+				try {
+					/* 1. Остановить VPN-движок */
+					let p1 = popen("/etc/init.d/shpun-vpn stop >/dev/null 2>&1 &");
+					if (p1)
+						p1.close();
+
+					/* 2. Удалить файлы состояния VPN (без трогания кода роутера) */
+					/* subscription.json, xray.json, vpn_ready, vpn_error, vpn_ip, router_latest_version */
+					let cmd =
+						"rm -f " +
+						SUB + " " +
+						DIR + "/xray.json " +
+						READY + " " +
+						VERROR + " " +
+						VPN_IP + " " +
+						FW_LAST +
+						" >/dev/null 2>&1";
+
+					let p2 = popen(cmd);
+					if (p2)
+						p2.close();
+
+					/* (опционально можно пнуть shpun-agent, чтобы он сам заново начал цикл) */
+					/* let p3 = popen("/etc/init.d/shpun-agent restart >/dev/null 2>&1 &");
+					if (p3)
+						p3.close(); */
+
+					return { ok: 1, msg: "vpn reset done" };
+				}
+				catch (e) {
+					return { ok: 0, error: String(e) };
+				}
+			}
 		}
 	}
 };
