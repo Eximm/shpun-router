@@ -290,7 +290,7 @@ restart_vpn() {
 	fi
 
 	log "restarting shpun-vpn"
-	if ! /etc/init.d/shpun-vpn.restart 2>/dev/null; then
+	if ! /etc/init.d/shpun-vpn restart 2>/dev/null; then
 		log "failed to restart shpun-vpn"
 		return 1
 	fi
@@ -365,7 +365,7 @@ fetch_subscription_once() {
 	if [ -z "$CONFIG_PATH" ]; then
 		log "router_public ok=1 but config_url is empty"
 		return 1
-	endif
+	fi
 
 	BASE_URL="${API_URL%/shm/v1/public/router_public}"
 	CONFIG_URL="${BASE_URL}${CONFIG_PATH}"
@@ -537,7 +537,11 @@ check_subscription_alive() {
 main_loop() {
 	load_conf
 	ensure_state_dir
-	ensure_router_code
+
+	# 1) Первый проход: сразу пытаемся гарантировать код
+	if ! ensure_router_code; then
+		log "initial ensure_router_code failed (router_code empty), will retry in loop"
+	fi
 
 	log "shpun-agent started (API_URL=$API_URL, ENGINE_BIN=$ENGINE_BIN, ENGINE_URL=$ENGINE_URL, MIN_UPTIME=$MIN_UPTIME, NET_FAIL_TIMEOUT=$NET_FAIL_TIMEOUT, PING_HOST=$PING_HOST)"
 
@@ -545,6 +549,15 @@ main_loop() {
 
 	while :; do
 		load_conf
+
+		# 2) На каждом цикле: если код по какой-то причине исчез — создаём заново
+		if [ ! -s "$CODE_FILE" ]; then
+			if ! ensure_router_code; then
+				log "ensure_router_code failed in loop (router_code still empty), retry in 10s"
+				sleep 10
+				continue
+			fi
+		fi
 
 		UPTIME_SECS="$(get_uptime_secs)"
 		if [ "$UPTIME_SECS" -lt "$MIN_UPTIME" ]; then
