@@ -295,6 +295,16 @@ restart_vpn() {
 		return 1
 	fi
 
+	# Здесь движок уже перезапущен — можно безопасно накатывать redirect
+	if [ -x /etc/shpun/firewall-xray.sh ]; then
+		log "applying firewall redirect rules via firewall-xray.sh"
+		if ! /etc/shpun/firewall-xray.sh start 2>/dev/null; then
+			log "firewall-xray.sh start failed (ignored)"
+		fi
+	else
+		log "firewall-xray.sh not found or not executable, skipping firewall rules"
+	fi
+
 	return 0
 }
 
@@ -531,6 +541,27 @@ check_subscription_alive() {
 }
 
 #######################################
+# Sanity-check vpn_ready vs реальность
+#######################################
+
+vpn_sanity_check() {
+	# Если vpn_ready есть, но движок/конфиг отсутствуют или процесс не запущен —
+	# считаем, что VPN по факту не работает и сбрасываем флаг.
+	if [ -s "$VPN_READY_FILE" ]; then
+		if [ ! -x "$ENGINE_BIN" ] || [ ! -s "$ENGINE_CONFIG" ]; then
+			log "vpn_sanity_check: vpn_ready set but engine or config missing, clearing vpn_ready"
+			rm -f "$VPN_READY_FILE"
+			return
+		fi
+
+		if ! pgrep -f "$ENGINE_BIN" >/dev/null 2>&1; then
+			log "vpn_sanity_check: vpn_ready set but engine not running, clearing vpn_ready"
+			rm -f "$VPN_READY_FILE"
+		fi
+	fi
+}
+
+#######################################
 # Main loop
 #######################################
 
@@ -565,6 +596,9 @@ main_loop() {
 			sleep "$MAIN_LOOP_SLEEP"
 			continue
 		fi
+
+		# Проверяем, что vpn_ready не «протухший» (например, после ребута)
+		vpn_sanity_check
 
 		# --- INTERNET FAILSAFE ---
 		if [ -s "$VPN_READY_FILE" ]; then
