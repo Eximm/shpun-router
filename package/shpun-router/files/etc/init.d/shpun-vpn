@@ -6,7 +6,8 @@
 # Обёртка вокруг Xray для Shpun Router:
 #  - читает ENGINE_BIN / ENGINE_CONFIG из /etc/shpun/agent.conf
 #  - стартует "xray run -config <file>" через procd
-#  - перед стартом накатывает /etc/shpun/firewall-xray.sh (REDIRECT на dokodemo-door)
+#  - ПЕРЕД проверкой бинарника накатывает /etc/shpun/firewall-xray.sh (REDIRECT на dokodemo-door),
+#    чтобы после ребута трафик не уходил напрямую в WAN
 
 START=96
 USE_PROCD=1
@@ -30,7 +31,18 @@ load_conf() {
 start_service() {
 	load_conf
 
-	# минимальная валидация конфигурации
+	#
+	# 1) СНАЧАЛА накатываем firewall для прозрачного прокси,
+	#    чтобы после ребута трафик не ушёл в чистый WAN,
+	#    даже если бинарь ещё не скачан (ждём shpun-agent).
+	#
+	if [ -x /etc/shpun/firewall-xray.sh ]; then
+		/etc/shpun/firewall-xray.sh start || logger -t "$LOG_TAG" "firewall-xray.sh start failed (ignored)"
+	fi
+
+	#
+	# 2) Минимальная валидация конфигурации Xray
+	#
 	if [ -z "$ENGINE_BIN" ] || [ -z "$ENGINE_CONFIG" ]; then
 		logger -t "$LOG_TAG" "ENGINE_BIN or ENGINE_CONFIG is not set, nothing to start"
 		return 1
@@ -38,17 +50,14 @@ start_service() {
 
 	if [ ! -x "$ENGINE_BIN" ]; then
 		logger -t "$LOG_TAG" "engine binary not found or not executable: $ENGINE_BIN (waiting for shpun-agent)"
+		# firewall уже накатан, трафик не убежит мимо VPN
 		return 0
 	fi
 
 	if [ ! -s "$ENGINE_CONFIG" ]; then
 		logger -t "$LOG_TAG" "engine config not found or empty: $ENGINE_CONFIG (waiting for build-config.sh)"
+		# firewall уже накатан
 		return 0
-	fi
-
-	# СНАЧАЛА накатываем firewall для прозрачного прокси
-	if [ -x /etc/shpun/firewall-xray.sh ]; then
-		/etc/shpun/firewall-xray.sh start || logger -t "$LOG_TAG" "firewall-xray.sh start failed (ignored)"
 	fi
 
 	logger -t "$LOG_TAG" "starting xray: $ENGINE_BIN run -config $ENGINE_CONFIG"
