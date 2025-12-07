@@ -76,6 +76,16 @@ define Package/$(PKG_NAME)/install
 
 	# --- uci-defaults ---
 	$(INSTALL_BIN) ./files/etc/uci-defaults/99_shpun-router $(1)/etc/uci-defaults/99_shpun-router
+
+	# --- firmware version files ---
+	# Основной источник истины по версии — fw_current.
+	# Они ДОЛЖНЫ перезаписываться при обновлении пакета, поэтому
+	# мы не объявляем их как conffiles.
+	echo "$(PKG_VERSION)" > $(1)/etc/shpun/fw_current
+
+	# Для совместимости со старыми версиями backend-а (если вдруг где-то используется):
+	echo "$(PKG_VERSION)" > $(1)/etc/shpun/router_software_version
+	echo "$(PKG_VERSION)" > $(1)/etc/shpun/router_version
 endef
 
 
@@ -88,15 +98,6 @@ define Package/$(PKG_NAME)/postinst
 [ -n "$$IPKG_INSTROOT" ] || {
 
 	mkdir -p /etc/shpun
-
-	# --- local router version (update on releases) ---
-	# Не перетираем существующую версию, только создаём, если файла ещё нет.
-	if [ ! -f /etc/shpun/router_software_version ]; then
-		echo "$(PKG_VERSION)" > /etc/shpun/router_software_version
-	fi
-	if [ ! -f /etc/shpun/router_version ]; then
-		echo "$(PKG_VERSION)" > /etc/shpun/router_version
-	fi
 
 	# enable services
 	/etc/init.d/shpun-agent enable 2>/dev/null || true
@@ -124,8 +125,6 @@ define Package/$(PKG_NAME)/conffiles
 /etc/shpun/agent.conf
 /etc/shpun/firewall-xray.sh
 /etc/shpun/build-config.sh
-/etc/shpun/router_software_version
-/etc/shpun/router_version
 endef
 
 #######################################
