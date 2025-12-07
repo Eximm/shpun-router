@@ -183,7 +183,7 @@ return {
 			}
 		},
 
-		/* --- RESET_VPN: полный сброс в состояние "только что поставили пакет" --- */
+		/* --- RESET_VPN: полный сброс VPN-состояния, но без отката версии ПО --- */
 		reset_vpn: {
 			call: function(req) {
 				try {
@@ -194,7 +194,16 @@ return {
 					let p2 = popen("/etc/init.d/shpun-agent stop >/dev/null 2>&1 &");
 					if (p2) p2.close();
 
-					/* удалить состояние: код, подписку, конфиг, флаги VPN и все версии */
+					/* удалить состояние VPN:
+					 * - код роутера (чтобы при старте агент мог сгенерировать новый, если нужно),
+					 * - подписку,
+					 * - сгенерированный конфиг,
+					 * - флаги готовности/ошибки,
+					 * - last_sub_check.
+					 *
+					 * ВАЖНО: НЕ трогаем файлы версий (fw_current/fw_latest и старые имена),
+					 * чтобы установленная версия пакета не "откатывалась" логически назад.
+					 */
 					let cmd =
 						"rm -f " +
 						CODE + " " +           /* router_code */ 
@@ -202,12 +211,7 @@ return {
 						DIR + "/xray.json " +  /* сгенерированный xray.json */
 						READY + " " +          /* vpn_ready */
 						VERROR + " " +         /* vpn_error */
-						FW_CUR_NEW + " " +     /* fw_current */
-						FW_LAST_NEW + " " +    /* fw_latest */
-						FW_CUR_MAIN + " " +    /* router_software_version */
-						FW_LAST_MAIN + " " +   /* router_latest_version */
-						FW_CUR_OLD + " " +     /* router_version (старое имя) */
-						LASTCHK + " " +        /* last_sub_check */
+						LASTCHK + " " +        /* last_sub_check */ 
 						">/dev/null 2>&1";
 
 					let p3 = popen(cmd);
