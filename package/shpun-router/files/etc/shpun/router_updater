@@ -5,13 +5,16 @@
 CONF_DIR="/etc/shpun"
 SUB_FILE="$CONF_DIR/subscription.json"
 
-# новый файл версии
+# новые имена (для ucode / виджета)
+FW_CURRENT_FILE="$CONF_DIR/fw_current"
+FW_LATEST_FILE="$CONF_DIR/fw_latest"
+
+# старые имена (для совместимости)
 LOCAL_VER_FILE="$CONF_DIR/router_software_version"
-# старый (для совместимости)
 LOCAL_VER_FILE_LEGACY="$CONF_DIR/router_version"
+LATEST_VER_FILE="$CONF_DIR/router_latest_version"
 
 LOCAL_VER_PREV_FILE="$CONF_DIR/router_software_version.prev"
-LATEST_VER_FILE="$CONF_DIR/router_latest_version"
 LOCK_FILE="/var/run/shpun-update.lock"
 
 LOG_TAG="shpun-update"
@@ -44,7 +47,6 @@ ver_cmp() {
 	[ "$a2" -gt "$b2" ] && { echo 2; return; }
 
 	[ "$a3" -lt "$b3" ] && { echo 0; return; }
-	[ "$a3" -gt "$b3" ] && { echo 2; return; }
 
 	echo 1
 }
@@ -67,7 +69,12 @@ for bin in jsonfilter uclient-fetch opkg; do
 	fi
 done
 
-[ -f "$SUB_FILE" ] || { log "subscription.json missing"; exit 1; }
+# нам нужна только информация о router_software из subscription.json;
+# если файла нет — просто ничего не делаем (не считаем это ошибкой привязки)
+if [ ! -f "$SUB_FILE" ]; then
+	log "subscription.json missing, nothing to update"
+	exit 0
+fi
 
 # --- read remote fields (поддержка двух имён блока) ---
 REMOTE_VER="$(
@@ -88,9 +95,11 @@ MIN_VER="$(
 	|| echo ""
 )"
 
-# --- read local version (новый файл; при отсутствии — старый) ---
+# --- read local version (новые + старые имена) ---
 LOCAL_VER=""
-if [ -f "$LOCAL_VER_FILE" ]; then
+if [ -f "$FW_CURRENT_FILE" ]; then
+	LOCAL_VER="$(tr -d '\r\n ' < "$FW_CURRENT_FILE")"
+elif [ -f "$LOCAL_VER_FILE" ]; then
 	LOCAL_VER="$(tr -d '\r\n ' < "$LOCAL_VER_FILE")"
 elif [ -f "$LOCAL_VER_FILE_LEGACY" ]; then
 	LOCAL_VER="$(tr -d '\r\n ' < "$LOCAL_VER_FILE_LEGACY")"
@@ -98,13 +107,15 @@ fi
 
 log "start update check: local=${LOCAL_VER:-none}, remote=${REMOTE_VER:-none}, min=${MIN_VER:-none}"
 
-# --- всегда обновляем файл с последней известной версией ---
+# --- всегда обновляем файлы с последней известной версией ---
 if [ -n "$REMOTE_VER" ]; then
 	echo "$REMOTE_VER" >"$LATEST_VER_FILE"
-	log "router_latest_version set to remote=$REMOTE_VER"
+	echo "$REMOTE_VER" >"$FW_LATEST_FILE"
+	log "latest version set to remote=$REMOTE_VER"
 elif [ -n "$LOCAL_VER" ]; then
 	echo "$LOCAL_VER" >"$LATEST_VER_FILE"
-	log "router_latest_version set to local=$LOCAL_VER (remote unknown)"
+	echo "$LOCAL_VER" >"$FW_LATEST_FILE"
+	log "latest version set to local=$LOCAL_VER (remote unknown)"
 fi
 
 # если нет URL обновления — обновлять нечем
@@ -117,33 +128,31 @@ fi
 if [ -n "$MIN_VER" ] && [ -n "$LOCAL_VER" ]; then
 	cmp_min="$(ver_cmp "$LOCAL_VER" "$MIN_VER")"
 	if [ "$cmp_min" -eq 0 ]; then
-		# local < min_version — теоретически можно форсить обновление,
-		# но у нас и так сейчас просто обновление по version, поэтому только залогируем
 		log "local version below min_version (local=$LOCAL_VER, min=$MIN_VER)"
 	fi
 fi
 
 # --- version check (если известна локальная версия) ---
 if [ -n "$REMOTE_VER" ] && [ -n "$LOCAL_VER" ]; then
-    cmp="$(ver_cmp "$LOCAL_VER" "$REMOTE_VER")"
-    case "$cmp" in
-        1)
-            log "already up-to-date (local=$LOCAL_VER, remote=$REMOTE_VER)"
-            exit 0
-            ;;
-        2)
-            log "local version newer than remote; skipping update (local=$LOCAL_VER, remote=$REMOTE_VER)"
-            exit 0
-            ;;
-        0)
-            log "update required: local=$LOCAL_VER < remote=$REMOTE_VER"
-            if [ "$CHECK_ONLY" = "1" ]; then
-                log "CHECK_ONLY=1, skipping install (check mode)"
-                exit 0
-            fi
-            ;;
-    esac
-
+	cmp="$(ver_cmp "$LOCAL_VER" "$REMOTE_VER")"
+	case "$cmp" in
+		1)
+			log "already up-to-date (local=$LOCAL_VER, remote=$REMOTE_VER)"
+			exit 0
+			;;
+		2)
+			log "local version newer than remote; skipping update (local=$LOCAL_VER, remote=$REMOTE_VER)"
+			exit 0
+			;;
+		0)
+			log "update required: local=$LOCAL_VER < remote=$REMOTE_VER"
+			if [ "$CHECK_ONLY" = "1" ]; then
+				log "CHECK_ONLY=1, skipping install (check mode)"
+				# при check-mode уже обновили LATEST-файлы, этого достаточно
+				exit 0
+			fi
+			;;
+	esac
 else
 	log "one of versions is empty (local='${LOCAL_VER:-}', remote='${REMOTE_VER:-}'), will update anyway if URL is set"
 fi
@@ -181,12 +190,13 @@ fi
 
 rm -f "$TMP_IPK"
 
-# write new version
+# write new version (во все имена файлов)
 if [ -n "$REMOTE_VER" ]; then
 	echo "$REMOTE_VER" >"$LOCAL_VER_FILE"
-	# для совместимости можно дублировать и в старый файл
 	echo "$REMOTE_VER" >"$LOCAL_VER_FILE_LEGACY"
+	echo "$REMOTE_VER" >"$FW_CURRENT_FILE"
 	echo "$REMOTE_VER" >"$LATEST_VER_FILE"
+	echo "$REMOTE_VER" >"$FW_LATEST_FILE"
 	log "local version updated to $REMOTE_VER"
 fi
 

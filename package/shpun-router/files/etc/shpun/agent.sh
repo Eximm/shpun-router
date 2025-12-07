@@ -290,7 +290,7 @@ restart_vpn() {
 	fi
 
 	log "restarting shpun-vpn"
-	if ! /etc/init.d/shpun-vpn restart 2>/dev/null; then
+	if ! /etc/init.d/shpun-vpn.restart 2>/dev/null; then
 		log "failed to restart shpun-vpn"
 		return 1
 	fi
@@ -365,7 +365,7 @@ fetch_subscription_once() {
 	if [ -z "$CONFIG_PATH" ]; then
 		log "router_public ok=1 but config_url is empty"
 		return 1
-	fi
+	endif
 
 	BASE_URL="${API_URL%/shm/v1/public/router_public}"
 	CONFIG_URL="${BASE_URL}${CONFIG_PATH}"
@@ -585,6 +585,7 @@ main_loop() {
 
 			check_subscription_alive
 		fi
+
 		sleep "$MAIN_LOOP_SLEEP"
 	done
 }

@@ -1,20 +1,28 @@
 'use strict';
 
 import { open, popen } from 'fs';
-import { cursor } from 'uci';  /* можно не использовать, но пусть будет */
 
-/* пути */
-const DIR      = "/etc/shpun";
-const CODE     = DIR + "/router_code";
-const SUB      = DIR + "/subscription.json";
-const READY    = DIR + "/vpn_ready";
-const VERROR   = DIR + "/vpn_error";
+/* базовый каталог */
+const DIR       = "/etc/shpun";
 
-const FW_CUR   = DIR + "/router_version";
-const FW_LAST  = DIR + "/router_latest_version";
-const LASTCHK  = DIR + "/last_sub_check";
+/* основные файлы состояния */
+const CODE      = DIR + "/router_code";
+const SUB       = DIR + "/subscription.json";
+const READY     = DIR + "/vpn_ready";
+const VERROR    = DIR + "/vpn_error";
 
-/* безопасное чтение файла */
+/* новые файлы версий */
+const FW_CUR_NEW   = DIR + "/fw_current";
+const FW_LAST_NEW  = DIR + "/fw_latest";
+
+/* старые/совместимые файлы версий */
+const FW_CUR_MAIN  = DIR + "/router_software_version";
+const FW_LAST_MAIN = DIR + "/router_latest_version";
+const FW_CUR_OLD   = DIR + "/router_version";
+
+const LASTCHK   = DIR + "/last_sub_check";
+
+/* безопасное чтение файла (без trim) */
 function readfile(path) {
 	try {
 		let f = open(path, "r");
@@ -43,6 +51,32 @@ function exists(path) {
 	}
 }
 
+/* прочитать текущую версию прошивки (новые и старые файлы) */
+function read_fw_current() {
+	let v = "";
+
+	if (exists(FW_CUR_NEW))
+		v = readfile(FW_CUR_NEW);
+	else if (exists(FW_CUR_MAIN))
+		v = readfile(FW_CUR_MAIN);
+	else if (exists(FW_CUR_OLD))
+		v = readfile(FW_CUR_OLD);
+
+	return v || "";
+}
+
+/* прочитать последнюю известную версию прошивки */
+function read_fw_latest() {
+	let v = "";
+
+	if (exists(FW_LAST_NEW))
+		v = readfile(FW_LAST_NEW);
+	else if (exists(FW_LAST_MAIN))
+		v = readfile(FW_LAST_MAIN);
+
+	return v || "";
+}
+
 return {
 	shpun: {
 
@@ -57,21 +91,23 @@ return {
 		state: {
 			call: function(req) {
 				try {
-					let code_raw    = readfile(CODE);
-					let sub_raw     = readfile(SUB);
-					let err_raw     = readfile(VERROR);
-					let fw_cur_raw  = readfile(FW_CUR);
-					let fw_last_raw = readfile(FW_LAST);
+					let code_raw = readfile(CODE);
+					let sub_raw  = readfile(SUB);
+					let err_raw  = readfile(VERROR);
 
-					let code    = code_raw    ? code_raw    : "";
-					let sub     = sub_raw     ? sub_raw     : "";
-					let verr    = err_raw     ? err_raw     : "";
-					let fw_cur  = fw_cur_raw  ? fw_cur_raw  : "";
-					let fw_last = fw_last_raw ? fw_last_raw : "";
+					let code = code_raw || "";
+					let sub  = sub_raw  || "";
+					let verr = err_raw  || "";
+
+					let fw_cur  = read_fw_current();
+					let fw_last = read_fw_latest();
 
 					let res = {
 						code: code,
 						has_sub: (sub != ""),
+						/* subscription_url сейчас виджету особо не нужен,
+						 * но вернём содержимое для совместимости
+						 */
 						subscription_url: sub,
 						vpn_ready: exists(READY),
 						vpn_error: verr
@@ -86,12 +122,13 @@ return {
 					return res;
 				}
 				catch (e) {
+					/* на всякий случай не роняем ubus */
 					return { ok: 0, error: String(e) };
 				}
 			}
 		},
 
-		/* --- OTA_CHECK: обновить подписку с сервера и только вычислить fw_latest --- */
+		/* --- OTA_CHECK: форсируем проверку версии, не ломая привязку --- */
 		ota_check: {
 			call: function(req) {
 				try {
@@ -101,15 +138,17 @@ return {
 					if (!exists(DIR + "/router_updater"))
 						return { ok: 0, error: "router_updater not found" };
 
-					/* 1) сбрасываем last_sub_check и subscription.json,
-					 * 2) рестартуем агента (он тянет свежий subscription.json),
-					 * 3) ждём немного,
-					 * 4) запускаем router_updater в режиме CHECK_ONLY=1,
-					 *    чтобы он только записал router_latest_version.
+					/* ЛОГИКА:
+					 * 1) удаляем только last_sub_check;
+					 * 2) перезапускаем shpun-agent;
+					 * 3) ждём 10 секунд;
+					 * 4) CHECK_ONLY=1 /etc/shpun/router_updater
+					 *
+					 * ВАЖНО: НЕ трогаем subscription.json и router_code.
 					 */
 					let cmd =
 						"sh -c '" +
-							"rm -f " + LASTCHK + " " + SUB + " >/dev/null 2>&1; " +
+							"rm -f " + LASTCHK + " >/dev/null 2>&1; " +
 							"/etc/init.d/shpun-agent restart >/dev/null 2>&1; " +
 							"sleep 10; " +
 							"CHECK_ONLY=1 /etc/shpun/router_updater >/dev/null 2>&1" +
@@ -148,25 +187,33 @@ return {
 		reset_vpn: {
 			call: function(req) {
 				try {
+					/* остановить сервисы */
 					let p1 = popen("/etc/init.d/shpun-vpn stop >/dev/null 2>&1 &");
 					if (p1) p1.close();
 
 					let p2 = popen("/etc/init.d/shpun-agent stop >/dev/null 2>&1 &");
 					if (p2) p2.close();
 
+					/* удалить состояние: код, подписку, конфиг, флаги VPN и все версии */
 					let cmd =
 						"rm -f " +
-						CODE + " " +            /* router_code */
-						SUB + " " +             /* subscription.json */
-						DIR + "/xray.json " +   /* сгенерированный конфиг Xray */
-						READY + " " +           /* vpn_ready */
-						VERROR + " " +          /* vpn_error */
-						FW_LAST +               /* последняя доступная версия */
-						" >/dev/null 2>&1";
+						CODE + " " +           /* router_code */ 
+						SUB + " " +            /* subscription.json */
+						DIR + "/xray.json " +  /* сгенерированный xray.json */
+						READY + " " +          /* vpn_ready */
+						VERROR + " " +         /* vpn_error */
+						FW_CUR_NEW + " " +     /* fw_current */
+						FW_LAST_NEW + " " +    /* fw_latest */
+						FW_CUR_MAIN + " " +    /* router_software_version */
+						FW_LAST_MAIN + " " +   /* router_latest_version */
+						FW_CUR_OLD + " " +     /* router_version (старое имя) */
+						LASTCHK + " " +        /* last_sub_check */
+						">/dev/null 2>&1";
 
 					let p3 = popen(cmd);
 					if (p3) p3.close();
 
+					/* стартуем агента заново — он сгенерит новый код и пойдёт в router_public */
 					let p4 = popen("/etc/init.d/shpun-agent start >/dev/null 2>&1 &");
 					if (p4) p4.close();
 

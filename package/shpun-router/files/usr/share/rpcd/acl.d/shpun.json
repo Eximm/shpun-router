@@ -1,14 +1,14 @@
 {
-  "luci-base": {
-    "description": "Access to Shpun Router / SDN System backend",
+  "luci": {
+    "description": "Access to Shpun Router backend",
     "read": {
       "ubus": {
-        "shpun": [ "state" ]
+        "shpun": [ "state", "ping" ]
       }
     },
     "write": {
       "ubus": {
-        "shpun": [ "update_router", "reset_vpn", "detect_vpn_ip" ]
+        "shpun": [ "reset_vpn", "ota_check", "ota_install", "update_router" ]
       }
     }
   }
