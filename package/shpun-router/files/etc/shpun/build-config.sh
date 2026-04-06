@@ -48,7 +48,6 @@ b64_url_decode() {
             b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
         }
 
-        # Возвращает индекс символа в таблице b64 (0..63), или -1 для "="
         function b64val(c,  p) {
             if (c == "=") return -1
             p = index(b64, c)
@@ -70,7 +69,6 @@ b64_url_decode() {
             if (v1 < 0 || v2 < 0 || v3 < -1 || v4 < -1)
                 return ""
 
-            # Пересчитываем без битовых сдвигов, только через * / %
             b1 = v1 * 4 + int(v2 / 16)
             b2 = (v2 % 16) * 16 + int((v3 < 0 ? 0 : v3) / 4)
             b3 = (v3 < 0 ? 0 : (v3 % 4) * 64) + (v4 < 0 ? 0 : v4)
@@ -85,7 +83,6 @@ b64_url_decode() {
         }
 
         {
-            # чистим мусор
             gsub(/[^A-Za-z0-9+\/=]/, "", $0)
             line = $0
             out  = ""
@@ -97,7 +94,6 @@ b64_url_decode() {
 
                 chunk = decode_quad(quad)
                 if (chunk == "") {
-                    # некорректные данные
                     out = ""
                     break
                 }
@@ -120,11 +116,7 @@ b64_url_decode() {
 # 1. Определяем тип профиля (ROUTER_PROTO)
 # ==========================
 
-# 1.1. Явный тип из JSON, если есть:
-# "router_profile": { "proto": "ss" | "vless" | ... }
-ROUTER_PROTO="$(jsonfilter -i "$SUB_FILE" -e '@.router_profile.proto' 2>/dev/null)"
-
-# 1.2. Первый линк из массива links[0]
+# Источник истины для роутера — первый линк links[0]
 LINK="$(jsonfilter -i "$SUB_FILE" -e '@.subscription.links[0]' 2>/dev/null)"
 
 [ -n "$LINK" ] || {
@@ -136,19 +128,24 @@ LINK="$(jsonfilter -i "$SUB_FILE" -e '@.subscription.links[0]' 2>/dev/null)"
 LINK="${LINK%\"}"
 LINK="${LINK#\"}"
 
-# 1.3. Если ROUTER_PROTO пустой — определяем по схеме
-if [ -z "$ROUTER_PROTO" ]; then
-    case "$LINK" in
-        ss://*)
-            ROUTER_PROTO="ss"
-            ;;
-        vless://*)
-            ROUTER_PROTO="vless"
-            ;;
-        *)
-            ROUTER_PROTO="unknown"
-            ;;
-    esac
+# Явный тип из JSON читаем только для диагностики
+JSON_PROTO="$(jsonfilter -i "$SUB_FILE" -e '@.router_profile.proto' 2>/dev/null)"
+
+# Реальный протокол определяем по схеме links[0]
+case "$LINK" in
+    ss://*)
+        ROUTER_PROTO="ss"
+        ;;
+    vless://*)
+        ROUTER_PROTO="vless"
+        ;;
+    *)
+        ROUTER_PROTO="unknown"
+        ;;
+esac
+
+if [ -n "$JSON_PROTO" ] && [ "$JSON_PROTO" != "$ROUTER_PROTO" ]; then
+    logger -t shpun-build "router_profile.proto mismatch: json='$JSON_PROTO', link_scheme='$ROUTER_PROTO' — using link_scheme"
 fi
 
 logger -t shpun-build "router profile proto=$ROUTER_PROTO, link_scheme=$(printf '%s' "$LINK" | cut -d: -f1)"
@@ -157,17 +154,15 @@ logger -t shpun-build "router profile proto=$ROUTER_PROTO, link_scheme=$(printf 
 REDIR_PORT="${REDIR_PORT:-12345}"
 
 # ==========================
-# 3. Ветвление по типу профиля
+# 2. Ветвление по типу профиля
 # ==========================
 
 case "$ROUTER_PROTO" in
     ss)
-        # -------- Shadowsocks-профиль (ТЕКУЩИЙ РАБОЧИЙ ВАРИАНТ) --------
-        #
+        # -------- Shadowsocks-профиль --------
         # Поддерживаем оба формата:
         # 1) ss://BASE64(method:password)@host:port#NAME
         # 2) ss://BASE64(method:password@host:port)#NAME
-        #
 
         LINK_NO_PROTO="${LINK#ss://}"
 
@@ -176,15 +171,12 @@ case "$ROUTER_PROTO" in
         SERVER=""
         PORT=""
 
-        # Часть до ?/# — userinfo@host:port или BASE64(...)
         BASE_PART="${LINK_NO_PROTO%%[\?#]*}"
 
         if echo "$BASE_PART" | grep -q '@'; then
-            # Вариант 1: userinfo@host:port
             USERINFO="${BASE_PART%%@*}"
             HOSTPORT="${BASE_PART#*@}"
 
-            # USERINFO: либо method:password, либо base64(method:password)
             if echo "$USERINFO" | grep -q ':'; then
                 CRED="$USERINFO"
             else
@@ -194,7 +186,6 @@ case "$ROUTER_PROTO" in
                 }
             fi
         else
-            # Вариант 2: старый стиль BASE64(method:password@host:port)
             DECODED_LINK="$(b64_url_decode "$BASE_PART")" || {
                 logger -t shpun-build "Failed to base64-decode ss link payload (old style)"
                 exit 1
@@ -210,7 +201,6 @@ case "$ROUTER_PROTO" in
         SERVER="${HOSTPORT%%:*}"
         PORT="${HOSTPORT##*:}"
 
-        # Валидация
         if [ -z "$METHOD" ] || [ -z "$PASSWORD" ] || [ -z "$SERVER" ] || [ -z "$PORT" ]; then
             logger -t shpun-build "Invalid SS link: method='$METHOD' password_len=${#PASSWORD} server='$SERVER' port='$PORT'"
             exit 1
@@ -312,80 +302,128 @@ EOF
         exit 0
         ;;
 
-vless)
-    # -------- VLESS / Reality --------
+    vless)
+        # -------- VLESS / Reality --------
 
-    LINK_NO_PROTO="${LINK#vless://}"
+        LINK_NO_PROTO="${LINK#vless://}"
 
-    # user@host:port?params
-    USER_HOST="${LINK_NO_PROTO%%\?*}"
-    PARAMS="${LINK_NO_PROTO#*\?}"
+        USER_HOST="${LINK_NO_PROTO%%\?*}"
+        PARAMS=""
+        [ "$LINK_NO_PROTO" != "$USER_HOST" ] && PARAMS="${LINK_NO_PROTO#*\?}"
 
-    UUID="${USER_HOST%%@*}"
-    HOSTPORT="${USER_HOST#*@}"
+        UUID="${USER_HOST%%@*}"
+        HOSTPORT="${USER_HOST#*@}"
 
-    SERVER="${HOSTPORT%%:*}"
-    PORT="${HOSTPORT##*:}"
+        SERVER="${HOSTPORT%%:*}"
+        PORT="${HOSTPORT##*:}"
 
-    # --- parse query params ---
-    get_param() {
-        echo "$PARAMS" | tr '&' '\n' | grep "^$1=" | head -n1 | cut -d= -f2-
-    }
+        url_decode() {
+            local data="${1//+/ }"
+            printf '%b' "${data//%/\\x}"
+        }
 
-    SECURITY="$(get_param security)"
-    TYPE="$(get_param type)"
-    HOST="$(get_param host)"
-    PATH="$(get_param path)"
-    PBK="$(get_param pbk)"
-    SID="$(get_param sid)"
-    FP="$(get_param fp)"
+        get_param() {
+            printf '%s' "$PARAMS" | tr '&' '\n' | awk -F= -v k="$1" '$1==k {sub(/^[^=]*=/,""); print; exit}'
+        }
 
-    # defaults
-    [ -z "$TYPE" ] && TYPE="tcp"
-    [ -z "$FP" ] && FP="chrome"
+        SECURITY="$(url_decode "$(get_param security)")"
+        TYPE="$(url_decode "$(get_param type)")"
+        HOST="$(url_decode "$(get_param host)")"
+        PATH_VAL="$(url_decode "$(get_param path)")"
+        PBK="$(url_decode "$(get_param pbk)")"
+        SID="$(url_decode "$(get_param sid)")"
+        FP="$(url_decode "$(get_param fp)")"
+        FLOW="$(url_decode "$(get_param flow)")"
+        SNI="$(url_decode "$(get_param sni)")"
+        ALPN="$(url_decode "$(get_param alpn)")"
+        ENCRYPTION="$(url_decode "$(get_param encryption)")"
+        HEADER_TYPE="$(url_decode "$(get_param headerType)")"
 
-    # validation
-    if [ -z "$UUID" ] || [ -z "$SERVER" ] || [ -z "$PORT" ]; then
-        logger -t shpun-build "Invalid VLESS link (uuid/server/port missing)"
-        exit 1
-    fi
+        [ -z "$TYPE" ] && TYPE="tcp"
+        [ -z "$FP" ] && FP="chrome"
+        [ -z "$ENCRYPTION" ] && ENCRYPTION="none"
+        [ -z "$SNI" ] && SNI="$HOST"
 
-    case "$PORT" in
-        *[!0-9]*)
-            logger -t shpun-build "Invalid port in VLESS link: '$PORT'"
+        if [ -z "$UUID" ] || [ -z "$SERVER" ] || [ -z "$PORT" ]; then
+            logger -t shpun-build "Invalid VLESS link (uuid/server/port missing)"
             exit 1
-            ;;
-    esac
+        fi
 
-    # --- streamSettings ---
-    STREAM_SETTINGS=""
+        case "$PORT" in
+            *[!0-9]*)
+                logger -t shpun-build "Invalid port in VLESS link: '$PORT'"
+                exit 1
+                ;;
+        esac
 
-    if [ "$SECURITY" = "reality" ]; then
-        STREAM_SETTINGS=$(cat <<EOF
+        if [ -n "$FLOW" ]; then
+            USER_FLOW_LINE=",\n                \"flow\": \"$FLOW\""
+        else
+            USER_FLOW_LINE=""
+        fi
+
+        TCP_HEADER_BLOCK=""
+        if [ "$TYPE" = "tcp" ] && [ -n "$HEADER_TYPE" ] && [ "$HEADER_TYPE" != "none" ]; then
+            TCP_HEADER_BLOCK=$(cat <<EOF
+        "tcpSettings": {
+          "header": {
+            "type": "$HEADER_TYPE"
+          }
+        },
+EOF
+)
+        fi
+
+        if [ "$SECURITY" = "reality" ]; then
+            if [ -z "$PBK" ]; then
+                logger -t shpun-build "VLESS reality link missing pbk"
+                exit 1
+            fi
+
+            STREAM_SETTINGS=$(cat <<EOF
       "streamSettings": {
         "network": "$TYPE",
         "security": "reality",
-        "realitySettings": {
-          "serverName": "$HOST",
+$TCP_HEADER_BLOCK        "realitySettings": {
+          "show": false,
+          "fingerprint": "$FP",
+          "serverName": "$SNI",
           "publicKey": "$PBK",
           "shortId": "$SID",
-          "fingerprint": "$FP"
+          "spiderX": "/"
         }
       }
 EOF
 )
-    else
-        # fallback (например если вдруг появится не reality)
-        STREAM_SETTINGS=$(cat <<EOF
+        elif [ "$SECURITY" = "tls" ]; then
+            STREAM_SETTINGS=$(cat <<EOF
       "streamSettings": {
-        "network": "$TYPE"
+        "network": "$TYPE",
+        "security": "tls",
+$TCP_HEADER_BLOCK        "tlsSettings": {
+          "serverName": "$SNI",
+          "fingerprint": "$FP",
+          "allowInsecure": false
+        }
       }
 EOF
 )
-    fi
+        else
+            STREAM_SETTINGS=$(cat <<EOF
+      "streamSettings": {
+        "network": "$TYPE",
+        "security": "none"
+      }
+EOF
+)
+        fi
 
-    # --- build config ---
-    cat >"$OUT_CFG" <<EOF
+        if [ "$TYPE" != "tcp" ]; then
+            logger -t shpun-build "Unsupported VLESS network type for current router config: '$TYPE'"
+            exit 1
+        fi
+
+        cat >"$OUT_CFG" <<EOF
 {
   "log": {
     "loglevel": "warning"
@@ -430,7 +468,7 @@ EOF
             "users": [
               {
                 "id": "$UUID",
-                "encryption": "none"
+                "encryption": "$ENCRYPTION"$USER_FLOW_LINE
               }
             ]
           }
@@ -471,12 +509,11 @@ $STREAM_SETTINGS
 }
 EOF
 
-    logger -t shpun-build "xray config built (VLESS, server=$SERVER:$PORT, reality=$SECURITY, redir_port=$REDIR_PORT)"
-    exit 0
-    ;;
+        logger -t shpun-build "xray config built (VLESS, server=$SERVER:$PORT, security=${SECURITY:-none}, network=$TYPE, sni=${SNI:-none}, redir_port=$REDIR_PORT)"
+        exit 0
+        ;;
 
     *)
-        # -------- Неизвестный протокол --------
         logger -t shpun-build "Unknown router profile proto='$ROUTER_PROTO', cannot build config"
         exit 1
         ;;

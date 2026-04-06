@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# shpun-agent (Xray + Shadowsocks transparent edition)
+# shpun-agent (Xray + Shadowsocks/VLESS transparent edition)
 #
 
 STATE_DIR="/etc/shpun"
@@ -41,12 +41,10 @@ ensure_state_dir() {
 #######################################
 
 ensure_router_code() {
-	# если код уже есть и не пустой — ничего не делаем
 	if [ -s "$CODE_FILE" ]; then
 		return 0
 	fi
 
-	# пробуем сгенерировать новый код
 	if [ -x /etc/shpun/gen_code.sh ]; then
 		local new_code
 		new_code="$(/etc/shpun/gen_code.sh 2>/dev/null | tr -d '\r\n ' || true)"
@@ -78,7 +76,6 @@ detect_http_client() {
 }
 
 http_get_to_file() {
-	# $1: url, $2: out_file
 	local url="$1"
 	local out="$2"
 
@@ -99,7 +96,6 @@ http_get_to_file() {
 }
 
 http_get_stdout() {
-	# $1: url
 	local url="$1"
 
 	case "$HTTP_BIN" in
@@ -126,7 +122,6 @@ detect_engine_arch() {
 	local arch
 
 	if [ -f /etc/openwrt_release ]; then
-		# shellcheck disable=SC1091
 		. /etc/openwrt_release
 		arch="$DISTRIB_ARCH"
 	fi
@@ -180,7 +175,6 @@ build_engine_url() {
 }
 
 load_conf() {
-	# shellcheck disable=SC1090,SC1091
 	[ -f "$CONF" ] && . "$CONF"
 
 	[ -z "$API_URL" ]            && API_URL="$API_URL_DEFAULT"
@@ -266,7 +260,6 @@ engine_download() {
 		return 1
 	fi
 
-	# проверка, что файл не пустой
 	if [ ! -s "$ENGINE_BIN" ]; then
 		log "downloaded engine file is empty"
 		rm -f "$ENGINE_BIN"
@@ -295,7 +288,6 @@ restart_vpn() {
 		return 1
 	fi
 
-	# Здесь движок уже перезапущен — можно безопасно накатывать redirect
 	if [ -x /etc/shpun/firewall-xray.sh ]; then
 		log "applying firewall redirect rules via firewall-xray.sh"
 		if ! /etc/shpun/firewall-xray.sh start 2>/dev/null; then
@@ -306,6 +298,18 @@ restart_vpn() {
 	fi
 
 	return 0
+}
+
+wait_vpn_started() {
+	local i=0
+	while [ "$i" -lt 10 ]; do
+		if pgrep -f "$ENGINE_BIN" >/dev/null 2>&1; then
+			return 0
+		fi
+		sleep 1
+		i=$((i + 1))
+	done
+	return 1
 }
 
 get_uptime_secs() {
@@ -390,7 +394,6 @@ fetch_subscription_once() {
 		return 1
 	fi
 
-	# минимальная проверка: файл не пустой
 	if [ ! -s "$TMP_SUB" ]; then
 		log "downloaded subscription json is empty"
 		rm -f "$TMP_SUB"
@@ -417,22 +420,37 @@ ensure_vpn_from_subscription() {
 
 	if ! engine_download; then
 		log "engine_download failed in ensure_vpn_from_subscription"
+		echo "engine_download_failed" >"$VERROR_FILE"
+		rm -f "$VPN_READY_FILE"
 		return 1
 	fi
 
 	if [ ! -x /etc/shpun/build-config.sh ]; then
 		log "/etc/shpun/build-config.sh not found or not executable"
+		echo "build_script_missing" >"$VERROR_FILE"
+		rm -f "$VPN_READY_FILE"
 		return 1
 	fi
 
 	log "building xray config from subscription.json"
 	if ! /etc/shpun/build-config.sh; then
 		log "build-config.sh failed"
+		echo "build_config_failed" >"$VERROR_FILE"
+		rm -f "$VPN_READY_FILE"
 		return 1
 	fi
 
 	if ! restart_vpn; then
 		log "restart_vpn failed, not marking vpn_ready"
+		echo "restart_vpn_failed" >"$VERROR_FILE"
+		rm -f "$VPN_READY_FILE"
+		return 1
+	fi
+
+	if ! wait_vpn_started; then
+		log "xray did not start successfully, not marking vpn_ready"
+		echo "xray_failed_to_start" >"$VERROR_FILE"
+		rm -f "$VPN_READY_FILE"
 		return 1
 	fi
 
@@ -545,8 +563,6 @@ check_subscription_alive() {
 #######################################
 
 vpn_sanity_check() {
-	# Если vpn_ready есть, но движок/конфиг отсутствуют или процесс не запущен —
-	# считаем, что VPN по факту не работает и сбрасываем флаг.
 	if [ -s "$VPN_READY_FILE" ]; then
 		if [ ! -x "$ENGINE_BIN" ] || [ ! -s "$ENGINE_CONFIG" ]; then
 			log "vpn_sanity_check: vpn_ready set but engine or config missing, clearing vpn_ready"
@@ -569,7 +585,6 @@ main_loop() {
 	load_conf
 	ensure_state_dir
 
-	# 1) Первый проход: сразу пытаемся гарантировать код
 	if ! ensure_router_code; then
 		log "initial ensure_router_code failed (router_code empty), will retry in loop"
 	fi
@@ -581,7 +596,6 @@ main_loop() {
 	while :; do
 		load_conf
 
-		# 2) На каждом цикле: если код по какой-то причине исчез — создаём заново
 		if [ ! -s "$CODE_FILE" ]; then
 			if ! ensure_router_code; then
 				log "ensure_router_code failed in loop (router_code still empty), retry in 10s"
@@ -597,10 +611,8 @@ main_loop() {
 			continue
 		fi
 
-		# Проверяем, что vpn_ready не «протухший» (например, после ребута)
 		vpn_sanity_check
 
-		# --- INTERNET FAILSAFE ---
 		if [ -s "$VPN_READY_FILE" ]; then
 			if check_internet; then
 				[ "$NET_FAIL_SECONDS" -gt 0 ] && log "internet is back, resetting fail counter (was ${NET_FAIL_SECONDS}s)"
@@ -622,7 +634,6 @@ main_loop() {
 			NET_FAIL_SECONDS=0
 		fi
 
-		# --- SUBSCRIPTION HANDLING ---
 		if [ ! -s "$SUB_FILE" ]; then
 			poll_subscription_loop
 		else
