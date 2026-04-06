@@ -3,12 +3,12 @@
     "description": "Access to Shpun Router backend",
     "read": {
       "ubus": {
-        "shpun": [ "state", "ping" ]
+        "shpun": [ "state", "ping", "ota_check", "ota_install", "refresh_connection", "reset_vpn" ]
       }
     },
     "write": {
       "ubus": {
-        "shpun": [ "reset_vpn", "ota_check", "ota_install", "update_router" ]
+        "shpun": [ "ota_check", "ota_install", "refresh_connection", "reset_vpn" ]
       }
     }
   }
