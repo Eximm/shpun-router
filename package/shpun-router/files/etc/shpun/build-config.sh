@@ -312,17 +312,168 @@ EOF
         exit 0
         ;;
 
-    vless)
-        # -------- VLESS / Reality (РЕЗЕРВ НА БУДУЩЕЕ) --------
-        #
-        # Текущая прошивка не собирает VLESS-конфиг на роутере.
-        # Но наличие ROUTER_PROTO=vless зафиксировано, так что
-        # при выпуске новой версии пакета достаточно дописать
-        # сюда генерацию конфига, без перепрошивки устройства.
-        #
-        logger -t shpun-build "VLESS router profile is not supported in this firmware version (proto=vless)"
+vless)
+    # -------- VLESS / Reality --------
+
+    LINK_NO_PROTO="${LINK#vless://}"
+
+    # user@host:port?params
+    USER_HOST="${LINK_NO_PROTO%%\?*}"
+    PARAMS="${LINK_NO_PROTO#*\?}"
+
+    UUID="${USER_HOST%%@*}"
+    HOSTPORT="${USER_HOST#*@}"
+
+    SERVER="${HOSTPORT%%:*}"
+    PORT="${HOSTPORT##*:}"
+
+    # --- parse query params ---
+    get_param() {
+        echo "$PARAMS" | tr '&' '\n' | grep "^$1=" | head -n1 | cut -d= -f2-
+    }
+
+    SECURITY="$(get_param security)"
+    TYPE="$(get_param type)"
+    HOST="$(get_param host)"
+    PATH="$(get_param path)"
+    PBK="$(get_param pbk)"
+    SID="$(get_param sid)"
+    FP="$(get_param fp)"
+
+    # defaults
+    [ -z "$TYPE" ] && TYPE="tcp"
+    [ -z "$FP" ] && FP="chrome"
+
+    # validation
+    if [ -z "$UUID" ] || [ -z "$SERVER" ] || [ -z "$PORT" ]; then
+        logger -t shpun-build "Invalid VLESS link (uuid/server/port missing)"
         exit 1
-        ;;
+    fi
+
+    case "$PORT" in
+        *[!0-9]*)
+            logger -t shpun-build "Invalid port in VLESS link: '$PORT'"
+            exit 1
+            ;;
+    esac
+
+    # --- streamSettings ---
+    STREAM_SETTINGS=""
+
+    if [ "$SECURITY" = "reality" ]; then
+        STREAM_SETTINGS=$(cat <<EOF
+      "streamSettings": {
+        "network": "$TYPE",
+        "security": "reality",
+        "realitySettings": {
+          "serverName": "$HOST",
+          "publicKey": "$PBK",
+          "shortId": "$SID",
+          "fingerprint": "$FP"
+        }
+      }
+EOF
+)
+    else
+        # fallback (например если вдруг появится не reality)
+        STREAM_SETTINGS=$(cat <<EOF
+      "streamSettings": {
+        "network": "$TYPE"
+      }
+EOF
+)
+    fi
+
+    # --- build config ---
+    cat >"$OUT_CFG" <<EOF
+{
+  "log": {
+    "loglevel": "warning"
+  },
+
+  "inbounds": [
+    {
+      "tag": "socks-in",
+      "listen": "127.0.0.1",
+      "port": 10808,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      }
+    },
+    {
+      "tag": "redir-in",
+      "listen": "0.0.0.0",
+      "port": $REDIR_PORT,
+      "protocol": "dokodemo-door",
+      "settings": {
+        "network": "tcp",
+        "followRedirect": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls"]
+      }
+    }
+  ],
+
+  "outbounds": [
+    {
+      "tag": "proxy",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "$SERVER",
+            "port": $PORT,
+            "users": [
+              {
+                "id": "$UUID",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+$STREAM_SETTINGS
+    },
+    {
+      "tag": "direct",
+      "protocol": "freedom",
+      "settings": {}
+    }
+  ],
+
+  "routing": {
+    "domainStrategy": "IPIfNonMatch",
+    "rules": [
+      {
+        "type": "field",
+        "outboundTag": "direct",
+        "ip": [
+          "127.0.0.0/8",
+          "10.0.0.0/8",
+          "172.16.0.0/12",
+          "192.168.0.0/16"
+        ],
+        "domain": [
+          "$SERVER"
+        ]
+      },
+      {
+        "type": "field",
+        "network": "tcp",
+        "outboundTag": "proxy"
+      }
+    ]
+  }
+}
+EOF
+
+    logger -t shpun-build "xray config built (VLESS, server=$SERVER:$PORT, reality=$SECURITY, redir_port=$REDIR_PORT)"
+    exit 0
+    ;;
 
     *)
         # -------- Неизвестный протокол --------
