@@ -47,6 +47,7 @@ ver_cmp() {
 	[ "$a2" -gt "$b2" ] && { echo 2; return; }
 
 	[ "$a3" -lt "$b3" ] && { echo 0; return; }
+	[ "$a3" -gt "$b3" ] && { echo 2; return; }
 
 	echo 1
 }
@@ -107,15 +108,36 @@ fi
 
 log "start update check: local=${LOCAL_VER:-none}, remote=${REMOTE_VER:-none}, min=${MIN_VER:-none}"
 
-# --- всегда обновляем файлы с последней известной версией ---
-if [ -n "$REMOTE_VER" ]; then
-	echo "$REMOTE_VER" >"$LATEST_VER_FILE"
-	echo "$REMOTE_VER" >"$FW_LATEST_FILE"
-	log "latest version set to remote=$REMOTE_VER"
+# --- корректно обновляем latest-файлы с учётом сравнения версий ---
+LATEST_EFFECTIVE=""
+
+if [ -n "$REMOTE_VER" ] && [ -n "$LOCAL_VER" ]; then
+	cmp_latest="$(ver_cmp "$LOCAL_VER" "$REMOTE_VER")"
+	case "$cmp_latest" in
+		0)
+			LATEST_EFFECTIVE="$REMOTE_VER"
+			log "effective latest version set to remote=$REMOTE_VER (remote newer)"
+			;;
+		1)
+			LATEST_EFFECTIVE="$LOCAL_VER"
+			log "effective latest version set to local=$LOCAL_VER (versions equal)"
+			;;
+		2)
+			LATEST_EFFECTIVE="$LOCAL_VER"
+			log "effective latest version set to local=$LOCAL_VER (local newer than remote)"
+			;;
+	esac
+elif [ -n "$REMOTE_VER" ]; then
+	LATEST_EFFECTIVE="$REMOTE_VER"
+	log "effective latest version set to remote=$REMOTE_VER (local unknown)"
 elif [ -n "$LOCAL_VER" ]; then
-	echo "$LOCAL_VER" >"$LATEST_VER_FILE"
-	echo "$LOCAL_VER" >"$FW_LATEST_FILE"
-	log "latest version set to local=$LOCAL_VER (remote unknown)"
+	LATEST_EFFECTIVE="$LOCAL_VER"
+	log "effective latest version set to local=$LOCAL_VER (remote unknown)"
+fi
+
+if [ -n "$LATEST_EFFECTIVE" ]; then
+	echo "$LATEST_EFFECTIVE" >"$LATEST_VER_FILE"
+	echo "$LATEST_EFFECTIVE" >"$FW_LATEST_FILE"
 fi
 
 # если нет URL обновления — обновлять нечем

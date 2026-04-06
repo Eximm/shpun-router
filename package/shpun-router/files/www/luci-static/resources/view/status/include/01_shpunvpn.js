@@ -26,6 +26,12 @@ var callShpunOtaInstall = rpc.declare({
 	expect: { '': {} }
 });
 
+var callShpunRefreshConnection = rpc.declare({
+	object: 'shpun',
+	method: 'refresh_connection',
+	expect: { '': {} }
+});
+
 var callShpunResetVpn = rpc.declare({
 	object: 'shpun',
 	method: 'reset_vpn',
@@ -41,7 +47,6 @@ function injectStyles() {
 		return;
 
 	var css = ''
-		/* Карточка */
 		+ '.shpun-widget-card{'
 		+ '  border-radius:10px;'
 		+ '  padding:12px 14px 14px;'
@@ -53,11 +58,9 @@ function injectStyles() {
 		+ '  flex-direction:column;'
 		+ '  gap:10px;'
 		+ '}'
-		/* Шапка */
 		+ '.shpun-widget-header{display:flex;justify-content:space-between;align-items:center;}'
 		+ '.shpun-title{font-weight:600;font-size:15px;}'
 		+ '.shpun-subtitle{font-size:11px;color:#d1d5db;}'
-		/* Бейджи */
 		+ '.shpun-badge{display:inline-flex;align-items:center;border-radius:999px;padding:2px 8px;font-size:11px;font-weight:500;}'
 		+ '.shpun-badge-dot{width:8px;height:8px;border-radius:999px;margin-right:6px;}'
 		+ '.shpun-badge--off{background:rgba(148,163,184,.15);color:#e5e7eb;}'
@@ -68,7 +71,6 @@ function injectStyles() {
 		+ '.shpun-badge--ok .shpun-badge-dot{background:#22c55e;}'
 		+ '.shpun-badge--err{background:rgba(248,113,113,.2);color:#fecaca;}'
 		+ '.shpun-badge--err .shpun-badge-dot{background:#f87171;}'
-		/* Основной блок: две колонки */
 		+ '.shpun-card-main{'
 		+ '  display:flex;'
 		+ '  flex-wrap:nowrap;'
@@ -77,7 +79,6 @@ function injectStyles() {
 		+ '  justify-content:space-between;'
 		+ '  margin-top:8px;'
 		+ '}'
-		/* Левая колонка */
 		+ '.shpun-col-main{'
 		+ '  flex:0 0 auto;'
 		+ '  min-width:260px;'
@@ -86,7 +87,6 @@ function injectStyles() {
 		+ '  gap:8px;'
 		+ '  margin-top:14px;'
 		+ '}'
-		/* Правая колонка с QR */
 		+ '.shpun-col-side{'
 		+ '  flex:0 0 auto;'
 		+ '  display:flex;'
@@ -98,14 +98,12 @@ function injectStyles() {
 		+ '  margin-left:auto;'
 		+ '  width:250px;'
 		+ '}'
-		/* Поля слева */
 		+ '.shpun-field{min-width:130px;margin-bottom:6px;}'
 		+ '.shpun-field-label{font-size:11px;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px;}'
 		+ '.shpun-field-value{font-size:13px;font-weight:500;line-height:1.35;}'
 		+ '.shpun-code{font-family:monospace;font-size:16px;font-weight:700;letter-spacing:.12em;}'
 		+ '.shpun-code-copy{cursor:pointer;border-bottom:1px dashed rgba(148,163,184,.7);}'
 		+ '.shpun-code-copy:hover{color:#bae6fd;border-bottom-color:#38bdf8;}'
-		/* Кнопки */
 		+ '.shpun-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;align-items:center;}'
 		+ '.shpun-actions-left{display:flex;flex-wrap:wrap;gap:6px;flex:1 1 auto;}'
 		+ '.shpun-actions-right{'
@@ -118,13 +116,10 @@ function injectStyles() {
 		+ '}'
 		+ '.shpun-btn{border-radius:999px;border:1px solid rgba(148,163,184,.6);background:rgba(15,23,42,.8);color:#e5e7eb;padding:4px 10px;font-size:11px;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:4px;}'
 		+ '.shpun-btn:hover{background:rgba(31,41,55,.95);}'
-		/* Подсказка в рамке */
 		+ '.shpun-hint-box{margin-top:6px;padding:6px 8px;border-radius:8px;border:1px solid rgba(148,163,184,.45);background:rgba(15,23,42,.85);font-size:11px;color:#9ca3af;}'
-		/* QR */
 		+ '.shpun-qr{border:1px solid rgba(148,163,184,.6);border-radius:8px;padding:4px;background:#0b1120;max-width:140px;height:auto;display:block;}'
 		+ '.shpun-qr-caption{font-size:11px;color:#9ca3af;text-align:center;}'
-		/* Бейдж новой версии */
-		+ '.shpun-fw-badge{display:inline-block;margin-left:4px;padding:1px 6px;border-radius:999px;font-size:10px;background:rgba(56,189,248,.15);color:#7dd3fc;box-shadow:0 0 0 0 rgba(56,189,248,.5);animation:shpun-fw-pulse 1.6s.ease-in-out infinite;}'
+		+ '.shpun-fw-badge{display:inline-block;margin-left:4px;padding:1px 6px;border-radius:999px;font-size:10px;background:rgba(56,189,248,.15);color:#7dd3fc;box-shadow:0 0 0 0 rgba(56,189,248,.5);animation:shpun-fw-pulse 1.6s ease-in-out infinite;}'
 		+ '@keyframes shpun-fw-pulse{0%{box-shadow:0 0 0 0 rgba(56,189,248,.5);}70%{box-shadow:0 0 0 6px rgba(56,189,248,0);}100%{box-shadow:0 0 0 0 rgba(56,189,248,0);}}';
 
 	var style = document.createElement('style');
@@ -132,6 +127,33 @@ function injectStyles() {
 	style.type = 'text/css';
 	style.appendChild(document.createTextNode(css));
 	document.head.appendChild(style);
+}
+
+/* ============================================================
+ *  Сравнение версий
+ * ========================================================== */
+
+function normalizeVersionPart(v) {
+	var n = parseInt(String(v || '0').replace(/[^0-9].*$/, ''), 10);
+	return isNaN(n) ? 0 : n;
+}
+
+function compareVersions(a, b) {
+	var pa = String(a || '').trim().split('.');
+	var pb = String(b || '').trim().split('.');
+	var len = Math.max(pa.length, pb.length, 3);
+
+	for (var i = 0; i < len; i++) {
+		var av = normalizeVersionPart(pa[i]);
+		var bv = normalizeVersionPart(pb[i]);
+
+		if (av < bv)
+			return -1;
+		if (av > bv)
+			return 1;
+	}
+
+	return 0;
 }
 
 /* ============================================================
@@ -194,6 +216,24 @@ function hideLuCIHeader(rootNode) {
 }
 
 /* ============================================================
+ *  Ререндер
+ * ========================================================== */
+
+function rerenderView(view, state) {
+	state = state || {};
+	view._state = state;
+
+	var root = view.render(state);
+	var container = view.container;
+
+	if (container && container.parentNode) {
+		container.parentNode.replaceChild(root, container);
+		view.container = root;
+		hideLuCIHeader(root);
+	}
+}
+
+/* ============================================================
  *  Основной view
  * ========================================================== */
 
@@ -215,7 +255,7 @@ return view.extend({
 		var fwCurrentDisplay = fwCurrentRaw || '—';
 
 		var fwLatest = (state.fw_latest || '').trim();
-		var hasNewFw = !!(fwLatest && fwCurrentRaw && fwLatest !== fwCurrentRaw);
+		var hasNewFw = !!(fwLatest && fwCurrentRaw && compareVersions(fwCurrentRaw, fwLatest) < 0);
 
 		var hasSub   = !!state.has_sub;
 		var vpnReady = !!state.vpn_ready;
@@ -236,7 +276,8 @@ return view.extend({
 				fwCurrentDisplay,
 				E('span', { 'class': 'shpun-fw-badge' }, 'доступна ' + fwLatest)
 			]);
-		} else {
+		}
+		else {
 			fwValue = fwCurrentDisplay;
 		}
 
@@ -253,11 +294,10 @@ return view.extend({
 						? (err
 							? 'Подписка найдена, но подключиться не удалось: ' + err
 							: 'Подписка найдена. Ожидаем подключение VPN, это может занять до минуты.')
-						: 'Трафик роутера направляется через Shpun SDN System. При необходимости используйте обновление прошивки для получения последней версии ПО.';
+						: 'Трафик роутера направляется через Shpun SDN System. Если вы изменили подключение в биллинге, используйте кнопку «Обновить подключение».';
 
 		var widget = E('div', { 'class': 'shpun-widget-card' }, [
 
-			/* Шапка */
 			E('div', { 'class': 'shpun-widget-header' }, [
 				E('div', {}, [
 					E('div', { 'class': 'shpun-title' }, 'Shpun Router / SDN System'),
@@ -270,10 +310,8 @@ return view.extend({
 				buildStatusBadge(state)
 			]),
 
-			/* Подсказка */
 			E('div', { 'class': 'shpun-hint-box' }, hintText),
 
-			/* Две колонки */
 			E('div', { 'class': 'shpun-card-main' }, [
 				E('div', { 'class': 'shpun-col-main' }, [
 					E('div', { 'class': 'shpun-field' }, [
@@ -298,7 +336,6 @@ return view.extend({
 					])
 				]),
 
-				/* Правая колонка: QR */
 				E('div', { 'class': 'shpun-col-side' }, [
 					E('a', {
 						'href': deepLink,
@@ -316,7 +353,6 @@ return view.extend({
 				])
 			]),
 
-			/* Кнопки */
 			E('div', { 'class': 'shpun-actions' }, [
 				E('div', { 'class': 'shpun-actions-left' }, [
 					E('button', {
@@ -329,8 +365,12 @@ return view.extend({
 					}, updateBtnLabel),
 					E('button', {
 						'class': 'shpun-btn',
+						'click': ui.createHandlerFn(this, 'handleRefreshConnection')
+					}, 'Обновить подключение'),
+					E('button', {
+						'class': 'shpun-btn',
 						'click': ui.createHandlerFn(this, 'handleResetVpn')
-					}, 'Сбросить VPN и настройки')
+					}, 'Сбросить конфиг')
 				]),
 				E('div', { 'class': 'shpun-actions-right' }, [
 					E('a', {
@@ -346,7 +386,6 @@ return view.extend({
 		return widget;
 	},
 
-	/* Копирование кода */
 	handleCopyCode: function(ev, code) {
 		if (ev) {
 			ev.preventDefault();
@@ -366,7 +405,8 @@ return view.extend({
 		try {
 			if (navigator.clipboard && navigator.clipboard.writeText) {
 				navigator.clipboard.writeText(text).then(notifyOk).catch(notifyErr);
-			} else {
+			}
+			else {
 				var input = document.createElement('input');
 				input.type = 'text';
 				input.value = text;
@@ -375,17 +415,18 @@ return view.extend({
 				try {
 					document.execCommand('copy');
 					notifyOk();
-				} catch (e) {
+				}
+				catch (e) {
 					notifyErr(e);
 				}
 				document.body.removeChild(input);
 			}
-		} catch (e) {
+		}
+		catch (e) {
 			notifyErr(e);
 		}
 	},
 
-	/* Обновить статус */
 	handleRefresh: function(ev) {
 		if (ev)
 			ev.preventDefault();
@@ -393,15 +434,7 @@ return view.extend({
 		var view = this;
 
 		return callShpunState().then(function(st) {
-			st = st || {};
-			view._state = st;
-			var root = view.render(st);
-			var container = view.container;
-			if (container && container.parentNode) {
-				container.parentNode.replaceChild(root, container);
-				view.container = root;
-				hideLuCIHeader(root);
-			}
+			rerenderView(view, st || {});
 		}).catch(function(err) {
 			ui.addNotification(null, E('p', {}, [
 				'Не удалось обновить статус Shpun Router: ',
@@ -410,7 +443,6 @@ return view.extend({
 		});
 	},
 
-	/* Проверка/установка обновления */
 	handleUpdateFirmware: function(ev) {
 		if (ev)
 			ev.preventDefault();
@@ -420,7 +452,7 @@ return view.extend({
 
 		var fwCurrentRaw = (st.fw_current || '').trim();
 		var fwLatest = (st.fw_latest || '').trim();
-		var hasNew   = !!(fwLatest && fwCurrentRaw && fwLatest !== fwCurrentRaw);
+		var hasNew = !!(fwLatest && fwCurrentRaw && compareVersions(fwCurrentRaw, fwLatest) < 0);
 		var fwCurrentDisplay = fwCurrentRaw || '—';
 
 		if (hasNew) {
@@ -452,15 +484,7 @@ return view.extend({
 							callShpunOtaInstall().then(function() {
 								window.setTimeout(function() {
 									callShpunState().then(function(st2) {
-										st2 = st2 || {};
-										view._state = st2;
-										var root2 = view.render(st2);
-										var container2 = view.container;
-										if (container2 && container2.parentNode) {
-											container2.parentNode.replaceChild(root2, container2);
-											view.container = root2;
-											hideLuCIHeader(root2);
-										}
+										rerenderView(view, st2 || {});
 									});
 								}, 20000);
 							}).catch(function(err) {
@@ -486,26 +510,18 @@ return view.extend({
 
 		return callShpunOtaCheck().then(function() {
 			return new Promise(function(resolve) {
-				window.setTimeout(resolve, 12000);
+				window.setTimeout(resolve, 15000);
 			});
 		}).then(function() {
 			return callShpunState();
 		}).then(function(st2) {
 			st2 = st2 || {};
-			view._state = st2;
+			rerenderView(view, st2);
 
 			var fwCurRaw = (st2.fw_current || '').trim();
 			var fwLat = (st2.fw_latest || '').trim();
 			var fwCurDisplay = fwCurRaw || '—';
-			var hasNewNow = !!(fwLat && fwCurRaw && fwLat !== fwCurRaw);
-
-			var root = view.render(st2);
-			var container = view.container;
-			if (container && container.parentNode) {
-				container.parentNode.replaceChild(root, container);
-				view.container = root;
-				hideLuCIHeader(root);
-			}
+			var hasNewNow = !!(fwLat && fwCurRaw && compareVersions(fwCurRaw, fwLat) < 0);
 
 			if (!hasNewNow) {
 				ui.addNotification(
@@ -523,16 +539,83 @@ return view.extend({
 		});
 	},
 
-	/* Сброс VPN */
+	handleRefreshConnection: function(ev) {
+		if (ev)
+			ev.preventDefault();
+
+		var view = this;
+		var st = view._state || {};
+		var code = (st.code || '').trim();
+
+		if (!code) {
+			ui.addNotification(
+				null,
+				E('p', {}, 'Сначала дождитесь генерации кода роутера.'),
+				'warning'
+			);
+			return;
+		}
+
+		ui.showModal('Обновить подключение', [
+			E('p', {}, 'Роутер заново получит актуальную подписку из биллинга по текущему коду и пересоберёт подключение.'),
+			E('p', {}, 'Используйте это действие после смены сервера или обновления ссылки подключения в биллинге.'),
+			E('div', { 'style': 'margin-top:10px; text-align:right' }, [
+				E('button', {
+					'class': 'btn',
+					'click': function() { ui.hideModal(); }
+				}, 'Отмена'),
+				E('button', {
+					'class': 'btn cbi-button cbi-button-apply',
+					'style': 'margin-left:8px',
+					'click': function() {
+						ui.hideModal();
+
+						ui.addNotification(
+							null,
+							E('p', {}, 'Обновление подключения запущено. Роутер перечитывает подписку и пересобирает туннель.'),
+							'info'
+						);
+
+						return callShpunRefreshConnection().then(function(res) {
+							res = res || {};
+
+							if (!res.ok) {
+								ui.addNotification(
+									null,
+									E('p', {}, 'Не удалось запустить обновление подключения: ' +
+										(res.error ? String(res.error) : 'неизвестная ошибка')),
+									'error'
+								);
+								return;
+							}
+
+							window.setTimeout(function() {
+								callShpunState().then(function(st2) {
+									rerenderView(view, st2 || {});
+								});
+							}, 15000);
+						}).catch(function(err) {
+							ui.addNotification(
+								null,
+								E('p', {}, 'Ошибка при запуске обновления подключения: ' + String(err)),
+								'error'
+							);
+						});
+					}
+				}, 'Обновить подключение')
+			])
+		]);
+	},
+
 	handleResetVpn: function(ev) {
 		if (ev)
 			ev.preventDefault();
 
 		var view = this;
 
-		ui.showModal('Сброс VPN и настроек', [
+		ui.showModal('Сброс конфигурации', [
 			E('p', {}, [
-				'Вы действительно хотите полностью сбросить VPN-конфигурацию Shpun Router ',
+				'Вы действительно хотите полностью сбросить конфигурацию Shpun Router ',
 				'и вернуть устройство в состояние после установки пакета? ',
 				'Будет сгенерирован новый код роутера, текущая привязка в боте и конфигурация VPN будут потеряны.'
 			]),
@@ -552,25 +635,20 @@ return view.extend({
 							if (res.ok) {
 								ui.addNotification(
 									null,
-									E('p', {}, 'VPN-конфигурация сброшена. Роутер переведён в режим первоначальной настройки (будет создан новый код).'),
+									E('p', {}, 'Конфигурация сброшена. Роутер переведён в режим первоначальной настройки и работает без VPN до новой привязки.'),
 									'info'
 								);
-								return callShpunState().then(function(st2) {
-									st2 = st2 || {};
-									view._state = st2;
-									var root2 = view.render(st2);
-									var container2 = view.container;
-									if (container2 && container2.parentNode) {
-										container2.parentNode.replaceChild(root2, container2);
-										view.container = root2;
-										hideLuCIHeader(root2);
-									}
-								});
+
+								window.setTimeout(function() {
+									callShpunState().then(function(st2) {
+										rerenderView(view, st2 || {});
+									});
+								}, 5000);
 							}
 							else {
 								ui.addNotification(
 									null,
-									E('p', {}, 'Не удалось сбросить VPN-настройки: ' +
+									E('p', {}, 'Не удалось сбросить конфигурацию: ' +
 										(res.error ? String(res.error) : 'неизвестная ошибка')),
 									'error'
 								);
@@ -578,12 +656,12 @@ return view.extend({
 						}).catch(function(err) {
 							ui.addNotification(
 								null,
-								E('p', {}, 'Ошибка при вызове сброса VPN-настроек: ' + String(err)),
+								E('p', {}, 'Ошибка при вызове сброса конфигурации: ' + String(err)),
 								'error'
 							);
 						});
 					}
-				}, 'Сбросить VPN')
+				}, 'Сбросить конфиг')
 			])
 		]);
 	},
@@ -603,15 +681,7 @@ return view.extend({
 				return;
 
 			return callShpunState().then(function(st) {
-				st = st || {};
-				view._state = st;
-				var root = view.render(st);
-				var container = view.container;
-				if (container && container.parentNode) {
-					container.parentNode.replaceChild(root, container);
-					view.container = root;
-					hideLuCIHeader(root);
-				}
+				rerenderView(view, st || {});
 			});
 		}, 10);
 	},

@@ -122,7 +122,6 @@ return {
 					return res;
 				}
 				catch (e) {
-					/* на всякий случай не роняем ubus */
 					return { ok: 0, error: String(e) };
 				}
 			}
@@ -138,14 +137,7 @@ return {
 					if (!exists(DIR + "/router_updater"))
 						return { ok: 0, error: "router_updater not found" };
 
-					/* ЛОГИКА:
-					 * 1) удаляем только last_sub_check;
-					 * 2) перезапускаем shpun-agent;
-					 * 3) ждём 10 секунд;
-					 * 4) CHECK_ONLY=1 /etc/shpun/router_updater
-					 *
-					 * ВАЖНО: НЕ трогаем subscription.json и router_code.
-					 */
+					/* НЕ трогаем subscription.json и router_code */
 					let cmd =
 						"sh -c '" +
 							"rm -f " + LASTCHK + " >/dev/null 2>&1; " +
@@ -183,41 +175,92 @@ return {
 			}
 		},
 
-		/* --- RESET_VPN: полный сброс VPN-состояния, но без отката версии ПО --- */
-		reset_vpn: {
+		/* --- REFRESH_CONNECTION: перечитать подключение из биллинга по текущему коду --- */
+		refresh_connection: {
 			call: function(req) {
 				try {
 					/* остановить сервисы */
-					let p1 = popen("/etc/init.d/shpun-vpn stop >/dev/null 2>&1 &");
+					let p1 = popen("/etc/init.d/shpun-vpn stop >/dev/null 2>&1");
 					if (p1) p1.close();
 
-					let p2 = popen("/etc/init.d/shpun-agent stop >/dev/null 2>&1 &");
+					let p2 = popen("/etc/init.d/shpun-agent stop >/dev/null 2>&1");
 					if (p2) p2.close();
 
-					/* удалить состояние VPN:
-					 * - код роутера (чтобы при старте агент мог сгенерировать новый, если нужно),
-					 * - подписку,
-					 * - сгенерированный конфиг,
-					 * - флаги готовности/ошибки,
-					 * - last_sub_check.
-					 *
-					 * ВАЖНО: НЕ трогаем файлы версий (fw_current/fw_latest и старые имена),
-					 * чтобы установленная версия пакета не "откатывалась" логически назад.
-					 */
+					/* снять firewall-правила туннеля */
+					if (exists(DIR + "/firewall-xray.sh")) {
+						let p_fw = popen(DIR + "/firewall-xray.sh stop >/dev/null 2>&1");
+						if (p_fw) p_fw.close();
+					}
+
+					/* удалить только текущее подключение, но не код роутера */
 					let cmd =
 						"rm -f " +
-						CODE + " " +           /* router_code */ 
-						SUB + " " +            /* subscription.json */
-						DIR + "/xray.json " +  /* сгенерированный xray.json */
-						READY + " " +          /* vpn_ready */
-						VERROR + " " +         /* vpn_error */
-						LASTCHK + " " +        /* last_sub_check */ 
+						SUB + " " +
+						DIR + "/xray.json " +
+						READY + " " +
+						VERROR + " " +
+						LASTCHK + " " +
 						">/dev/null 2>&1";
 
 					let p3 = popen(cmd);
 					if (p3) p3.close();
 
-					/* стартуем агента заново — он сгенерит новый код и пойдёт в router_public */
+					/* заново запустить агент — он сам перечитает актуальную подписку,
+					 * соберёт xray.json и поднимет VPN
+					 */
+					let p4 = popen("/etc/init.d/shpun-agent start >/dev/null 2>&1 &");
+					if (p4) p4.close();
+
+					return { ok: 1, msg: "connection refresh started" };
+				}
+				catch (e) {
+					return { ok: 0, error: String(e) };
+				}
+			}
+		},
+
+		/* --- RESET_VPN: полный сброс к начальному состоянию без отката версии ПО --- */
+		reset_vpn: {
+			call: function(req) {
+				try {
+					/* остановить сервисы */
+					let p1 = popen("/etc/init.d/shpun-vpn stop >/dev/null 2>&1");
+					if (p1) p1.close();
+
+					let p2 = popen("/etc/init.d/shpun-agent stop >/dev/null 2>&1");
+					if (p2) p2.close();
+
+					/* снять firewall-правила прозрачного туннеля,
+					 * чтобы после reset роутер работал напрямую
+					 */
+					if (exists(DIR + "/firewall-xray.sh")) {
+						let p_fw = popen(DIR + "/firewall-xray.sh stop >/dev/null 2>&1");
+						if (p_fw) p_fw.close();
+					}
+
+					/* удалить состояние VPN:
+					 * - код роутера,
+					 * - подписку,
+					 * - сгенерированный конфиг,
+					 * - флаги готовности/ошибки,
+					 * - last_sub_check.
+					 *
+					 * ВАЖНО: версии ПО не трогаем.
+					 */
+					let cmd =
+						"rm -f " +
+						CODE + " " +
+						SUB + " " +
+						DIR + "/xray.json " +
+						READY + " " +
+						VERROR + " " +
+						LASTCHK + " " +
+						">/dev/null 2>&1";
+
+					let p3 = popen(cmd);
+					if (p3) p3.close();
+
+					/* стартуем агента заново — роутер готов к новой привязке */
 					let p4 = popen("/etc/init.d/shpun-agent start >/dev/null 2>&1 &");
 					if (p4) p4.close();
 
