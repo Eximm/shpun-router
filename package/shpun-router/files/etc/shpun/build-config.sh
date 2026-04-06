@@ -21,17 +21,13 @@ command -v jsonfilter >/dev/null 2>&1 || {
 # ==========================
 # 0. Универсальный base64-декодер (URL-safe, только awk)
 # ==========================
-# b64_url_decode "STRING" -> печатает декодированную строку в stdout.
-# Не требует внешнего base64, использует только awk.
 b64_url_decode() {
     local in="$1"
     local mod out
 
-    # Заменяем URL-safe символы на обычные
     in="${in//-/+}"
     in="${in//_/\/}"
 
-    # Добавляем паддинг до кратности 4
     mod=$(( ${#in} % 4 ))
     case "$mod" in
         0) ;;
@@ -150,7 +146,6 @@ fi
 
 logger -t shpun-build "router profile proto=$ROUTER_PROTO, link_scheme=$(printf '%s' "$LINK" | cut -d: -f1)"
 
-# Порт для прозрачного dokodemo-door inbound
 REDIR_PORT="${REDIR_PORT:-12345}"
 
 # ==========================
@@ -307,9 +302,12 @@ EOF
 
         LINK_NO_PROTO="${LINK#vless://}"
 
-        USER_HOST="${LINK_NO_PROTO%%\?*}"
+        # Отрезаем fragment (#NAME), если есть
+        LINK_NO_FRAGMENT="${LINK_NO_PROTO%%#*}"
+
+        USER_HOST="${LINK_NO_FRAGMENT%%\?*}"
         PARAMS=""
-        [ "$LINK_NO_PROTO" != "$USER_HOST" ] && PARAMS="${LINK_NO_PROTO#*\?}"
+        [ "$LINK_NO_FRAGMENT" != "$USER_HOST" ] && PARAMS="${LINK_NO_FRAGMENT#*\?}"
 
         UUID="${USER_HOST%%@*}"
         HOSTPORT="${USER_HOST#*@}"
