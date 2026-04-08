@@ -5,7 +5,7 @@
 'require poll';
 
 /* ============================================================
- *  RPC-обёртки (ubus методы shpun)
+ *  RPC
  * ========================================================== */
 
 var callShpunState = rpc.declare({
@@ -39,7 +39,7 @@ var callShpunResetVpn = rpc.declare({
 });
 
 /* ============================================================
- *  Стили виджета
+ *  Styles
  * ========================================================== */
 
 function injectStyles() {
@@ -48,79 +48,356 @@ function injectStyles() {
 
 	var css = ''
 		+ '.shpun-widget-card{'
-		+ '  border-radius:10px;'
-		+ '  padding:12px 14px 14px;'
-		+ '  background:#1f2933;'
-		+ '  color:#f9fafb;'
-		+ '  box-shadow:0 2px 5px rgba(0,0,0,.35);'
+		+ '  position:relative;'
 		+ '  margin:0 0 16px;'
+		+ '  padding:20px;'
+		+ '  border-radius:24px;'
+		+ '  overflow:hidden;'
+		+ '  color:#eef2ff;'
+		+ '  background:linear-gradient(135deg, rgba(6,18,36,.98) 0%, rgba(8,24,50,.98) 42%, rgba(20,19,58,.98) 100%);'
+		+ '  border:1px solid rgba(110,130,185,.18);'
+		+ '  box-shadow:0 18px 44px rgba(0,0,0,.28);'
+		+ '}'
+
+		+ '.shpun-widget-card:before{'
+		+ '  content:"";'
+		+ '  position:absolute;'
+		+ '  inset:0;'
+		+ '  pointer-events:none;'
+		+ '  background:'
+		+ '    radial-gradient(circle at 0% 0%, rgba(95,140,255,.15), transparent 30%),'
+		+ '    radial-gradient(circle at 100% 0%, rgba(139,92,246,.14), transparent 28%),'
+		+ '    radial-gradient(circle at 50% 100%, rgba(59,130,246,.08), transparent 35%);'
+		+ '}'
+
+		+ '.shpun-widget-inner{'
+		+ '  position:relative;'
+		+ '  z-index:1;'
 		+ '  display:flex;'
 		+ '  flex-direction:column;'
-		+ '  gap:10px;'
+		+ '  gap:16px;'
 		+ '}'
-		+ '.shpun-widget-header{display:flex;justify-content:space-between;align-items:center;}'
-		+ '.shpun-title{font-weight:600;font-size:15px;}'
-		+ '.shpun-subtitle{font-size:11px;color:#d1d5db;}'
-		+ '.shpun-badge{display:inline-flex;align-items:center;border-radius:999px;padding:2px 8px;font-size:11px;font-weight:500;}'
-		+ '.shpun-badge-dot{width:8px;height:8px;border-radius:999px;margin-right:6px;}'
-		+ '.shpun-badge--off{background:rgba(148,163,184,.15);color:#e5e7eb;}'
-		+ '.shpun-badge--off .shpun-badge-dot{background:#6b7280;}'
-		+ '.shpun-badge--warn{background:rgba(250,204,21,.15);color:#facc15;}'
-		+ '.shpun-badge--warn .shpun-badge-dot{background:#facc15;}'
-		+ '.shpun-badge--ok{background:rgba(34,197,94,.2);color:#bbf7d0;}'
-		+ '.shpun-badge--ok .shpun-badge-dot{background:#22c55e;}'
-		+ '.shpun-badge--err{background:rgba(248,113,113,.2);color:#fecaca;}'
-		+ '.shpun-badge--err .shpun-badge-dot{background:#f87171;}'
-		+ '.shpun-card-main{'
+
+		+ '.shpun-widget-header{'
 		+ '  display:flex;'
-		+ '  flex-wrap:nowrap;'
-		+ '  gap:32px;'
-		+ '  align-items:flex-start;'
 		+ '  justify-content:space-between;'
-		+ '  margin-top:8px;'
+		+ '  align-items:flex-start;'
+		+ '  gap:16px;'
 		+ '}'
-		+ '.shpun-col-main{'
-		+ '  flex:0 0 auto;'
-		+ '  min-width:260px;'
+
+		+ '.shpun-title-wrap{'
 		+ '  display:flex;'
 		+ '  flex-direction:column;'
-		+ '  gap:8px;'
-		+ '  margin-top:14px;'
+		+ '  gap:5px;'
+		+ '  min-width:0;'
 		+ '}'
-		+ '.shpun-col-side{'
+
+		+ '.shpun-kicker{'
+		+ '  display:flex;'
+		+ '  align-items:center;'
+		+ '  gap:8px;'
+		+ '  font-size:12px;'
+		+ '  font-weight:700;'
+		+ '  color:#9fb5ff;'
+		+ '}'
+
+		+ '.shpun-kicker-dot{'
+		+ '  width:8px;'
+		+ '  height:8px;'
+		+ '  border-radius:999px;'
+		+ '  background:#6ea8ff;'
+		+ '  box-shadow:0 0 10px rgba(110,168,255,.65);'
+		+ '}'
+
+		+ '.shpun-title{'
+		+ '  font-size:22px;'
+		+ '  line-height:1.08;'
+		+ '  font-weight:800;'
+		+ '  letter-spacing:-.025em;'
+		+ '  color:#ffffff;'
+		+ '}'
+
+		+ '.shpun-subtitle{'
+		+ '  font-size:13px;'
+		+ '  line-height:1.45;'
+		+ '  color:#c2ccde;'
+		+ '  max-width:680px;'
+		+ '}'
+
+		+ '.shpun-badge{'
+		+ '  display:inline-flex;'
+		+ '  align-items:center;'
+		+ '  padding:7px 12px;'
+		+ '  border-radius:999px;'
+		+ '  font-size:12px;'
+		+ '  font-weight:800;'
+		+ '  white-space:nowrap;'
+		+ '  border:1px solid transparent;'
+		+ '  align-self:flex-start;'
+		+ '}'
+
+		+ '.shpun-badge-dot{'
+		+ '  width:8px;'
+		+ '  height:8px;'
+		+ '  margin-right:8px;'
+		+ '  border-radius:999px;'
 		+ '  flex:0 0 auto;'
+		+ '}'
+
+		+ '.shpun-badge--off{background:rgba(148,163,184,.11);color:#e5e7eb;border-color:rgba(148,163,184,.20);}'
+		+ '.shpun-badge--off .shpun-badge-dot{background:#94a3b8;}'
+		+ '.shpun-badge--warn{background:rgba(250,204,21,.12);color:#fde68a;border-color:rgba(250,204,21,.22);}'
+		+ '.shpun-badge--warn .shpun-badge-dot{background:#facc15;}'
+		+ '.shpun-badge--ok{background:rgba(34,197,94,.14);color:#bbf7d0;border-color:rgba(34,197,94,.24);}'
+		+ '.shpun-badge--ok .shpun-badge-dot{background:#22c55e;}'
+		+ '.shpun-badge--err{background:rgba(248,113,113,.14);color:#fecaca;border-color:rgba(248,113,113,.24);}'
+		+ '.shpun-badge--err .shpun-badge-dot{background:#f87171;}'
+
+		+ '.shpun-hint-box{'
+		+ '  padding:13px 15px;'
+		+ '  border-radius:16px;'
+		+ '  border:1px solid rgba(120,140,180,.16);'
+		+ '  background:rgba(10,17,32,.40);'
+		+ '  color:#cad4e4;'
+		+ '  font-size:13px;'
+		+ '  line-height:1.55;'
+		+ '}'
+
+		+ '.shpun-card-main{'
+		+ '  display:grid;'
+		+ '  grid-template-columns:minmax(0,1fr) 220px;'
+		+ '  gap:16px;'
+		+ '  align-items:stretch;'
+		+ '}'
+
+		+ '.shpun-col-main{'
+		+ '  min-width:0;'
+		+ '  min-height:100%;'
+		+ '  display:flex;'
+		+ '  flex-direction:column;'
+		+ '  gap:14px;'
+		+ '}'
+
+		+ '.shpun-fields-grid{'
+		+ '  display:grid;'
+		+ '  grid-template-columns:repeat(3, minmax(0,1fr));'
+		+ '  gap:12px;'
+		+ '}'
+
+		+ '.shpun-field{'
+		+ '  min-width:0;'
+		+ '  padding:13px 14px;'
+		+ '  border-radius:16px;'
+		+ '  background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));'
+		+ '  border:1px solid rgba(120,140,180,.14);'
+		+ '  box-shadow:inset 0 1px 0 rgba(255,255,255,.025);'
+		+ '}'
+
+		+ '.shpun-field-label{'
+		+ '  margin-bottom:5px;'
+		+ '  font-size:11px;'
+		+ '  font-weight:700;'
+		+ '  letter-spacing:.03em;'
+		+ '  color:#90a3c3;'
+		+ '}'
+
+		+ '.shpun-field-value{'
+		+ '  font-size:14px;'
+		+ '  font-weight:800;'
+		+ '  line-height:1.4;'
+		+ '  color:#ffffff;'
+		+ '  word-break:break-word;'
+		+ '}'
+
+		+ '.shpun-code{'
+		+ '  font-family:monospace;'
+		+ '  font-size:18px;'
+		+ '  font-weight:800;'
+		+ '  letter-spacing:.06em;'
+		+ '  color:#ffffff;'
+		+ '}'
+
+		+ '.shpun-code-copy{'
+		+ '  display:inline-block;'
+		+ '  cursor:pointer;'
+		+ '  border-bottom:1px dashed rgba(165,180,252,.55);'
+		+ '}'
+
+		+ '.shpun-code-copy:hover{'
+		+ '  color:#c4b5fd;'
+		+ '  border-bottom-color:#a78bfa;'
+		+ '}'
+
+		+ '.shpun-fw-badge{'
+		+ '  display:inline-block;'
+		+ '  margin-left:8px;'
+		+ '  padding:2px 8px;'
+		+ '  border-radius:999px;'
+		+ '  font-size:10px;'
+		+ '  font-weight:800;'
+		+ '  color:#bfdbfe;'
+		+ '  background:rgba(96,165,250,.16);'
+		+ '  border:1px solid rgba(96,165,250,.22);'
+		+ '  box-shadow:0 0 0 0 rgba(96,165,250,.35);'
+		+ '  animation:shpun-fw-pulse 1.8s ease-in-out infinite;'
+		+ '}'
+
+		+ '@keyframes shpun-fw-pulse{'
+		+ '  0%{box-shadow:0 0 0 0 rgba(96,165,250,.35);}'
+		+ '  70%{box-shadow:0 0 0 8px rgba(96,165,250,0);}'
+		+ '  100%{box-shadow:0 0 0 0 rgba(96,165,250,0);}'
+		+ '}'
+
+		+ '.shpun-actions{'
+		+ '  margin-top:auto;'
+		+ '  display:grid;'
+		+ '  grid-template-columns:repeat(4, minmax(0,1fr));'
+		+ '  gap:10px;'
+		+ '  align-items:stretch;'
+		+ '}'
+
+		+ '.shpun-col-side{'
+		+ '  display:flex;'
+		+ '  flex-direction:column;'
+		+ '  min-height:100%;'
+		+ '}'
+
+		+ '.shpun-side-card{'
+		+ '  width:100%;'
+		+ '  height:100%;'
+		+ '  padding:12px 12px 12px;'
+		+ '  border-radius:18px;'
+		+ '  background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));'
+		+ '  border:1px solid rgba(120,140,180,.14);'
 		+ '  display:flex;'
 		+ '  flex-direction:column;'
 		+ '  align-items:center;'
-		+ '  gap:10px;'
-		+ '  margin-top:14px;'
-		+ '  margin-right:18px;'
-		+ '  margin-left:auto;'
-		+ '  width:250px;'
+		+ '  justify-content:flex-start;'
+		+ '  gap:8px;'
 		+ '}'
-		+ '.shpun-field{min-width:130px;margin-bottom:6px;}'
-		+ '.shpun-field-label{font-size:11px;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px;}'
-		+ '.shpun-field-value{font-size:13px;font-weight:500;line-height:1.35;}'
-		+ '.shpun-code{font-family:monospace;font-size:16px;font-weight:700;letter-spacing:.12em;}'
-		+ '.shpun-code-copy{cursor:pointer;border-bottom:1px dashed rgba(148,163,184,.7);}'
-		+ '.shpun-code-copy:hover{color:#bae6fd;border-bottom-color:#38bdf8;}'
-		+ '.shpun-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;align-items:center;}'
-		+ '.shpun-actions-left{display:flex;flex-wrap:wrap;gap:6px;flex:1 1 auto;}'
-		+ '.shpun-actions-right{'
+
+		+ '.shpun-side-title{'
+		+ '  font-size:13px;'
+		+ '  font-weight:800;'
+		+ '  color:#ffffff;'
+		+ '  text-align:center;'
+		+ '  line-height:1.3;'
+		+ '}'
+
+		+ '.shpun-side-url{'
+		+ '  font-size:12px;'
+		+ '  font-weight:700;'
+		+ '  color:#c7d2fe;'
+		+ '  text-align:center;'
+		+ '  word-break:break-word;'
+		+ '  line-height:1.35;'
+		+ '}'
+
+		+ '.shpun-qr-link{'
+		+ '  display:inline-flex;'
+		+ '  margin-top:2px;'
+		+ '}'
+
+		+ '.shpun-qr{'
+		+ '  width:104px;'
+		+ '  height:auto;'
+		+ '  display:block;'
+		+ '  padding:6px;'
+		+ '  border-radius:14px;'
+		+ '  background:#ffffff;'
+		+ '  border:1px solid rgba(120,140,180,.18);'
+		+ '  box-shadow:0 8px 20px rgba(0,0,0,.18);'
+		+ '}'
+
+		+ '.shpun-qr-caption{'
+		+ '  font-size:11px;'
+		+ '  line-height:1.45;'
+		+ '  color:#9fb0c8;'
+		+ '  text-align:center;'
+		+ '  min-height:32px;'
 		+ '  display:flex;'
+		+ '  align-items:center;'
 		+ '  justify-content:center;'
-		+ '  flex:0 0 auto;'
-		+ '  margin-left:auto;'
-		+ '  margin-right:18px;'
-		+ '  width:250px;'
 		+ '}'
-		+ '.shpun-btn{border-radius:999px;border:1px solid rgba(148,163,184,.6);background:rgba(15,23,42,.8);color:#e5e7eb;padding:4px 10px;font-size:11px;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:4px;}'
-		+ '.shpun-btn:hover{background:rgba(31,41,55,.95);}'
-		+ '.shpun-hint-box{margin-top:6px;padding:6px 8px;border-radius:8px;border:1px solid rgba(148,163,184,.45);background:rgba(15,23,42,.85);font-size:11px;color:#9ca3af;}'
-		+ '.shpun-qr{border:1px solid rgba(148,163,184,.6);border-radius:8px;padding:4px;background:#0b1120;max-width:140px;height:auto;display:block;}'
-		+ '.shpun-qr-caption{font-size:11px;color:#9ca3af;text-align:center;}'
-		+ '.shpun-fw-badge{display:inline-block;margin-left:4px;padding:1px 6px;border-radius:999px;font-size:10px;background:rgba(56,189,248,.15);color:#7dd3fc;box-shadow:0 0 0 0 rgba(56,189,248,.5);animation:shpun-fw-pulse 1.6s ease-in-out infinite;}'
-		+ '@keyframes shpun-fw-pulse{0%{box-shadow:0 0 0 0 rgba(56,189,248,.5);}70%{box-shadow:0 0 0 6px rgba(56,189,248,0);}100%{box-shadow:0 0 0 0 rgba(56,189,248,0);}}';
+
+		+ '.shpun-side-flex-spacer{'
+		+ '  flex:1 1 auto;'
+		+ '  width:100%;'
+		+ '}'
+
+		+ '.shpun-side-actions{'
+		+ '  width:100%;'
+		+ '  display:flex;'
+		+ '  flex-direction:column;'
+		+ '  gap:8px;'
+		+ '  margin-top:auto;'
+		+ '  padding-top:0;'
+		+ '}'
+
+		+ '.shpun-btn{'
+		+ '  min-height:42px;'
+		+ '  width:100%;'
+		+ '  padding:8px 12px;'
+		+ '  border-radius:999px;'
+		+ '  border:1px solid rgba(120,140,180,.24);'
+		+ '  background:rgba(14,23,38,.78);'
+		+ '  color:#e6edf8;'
+		+ '  font-size:12px;'
+		+ '  font-weight:800;'
+		+ '  line-height:1.25;'
+		+ '  text-decoration:none;'
+		+ '  display:inline-flex;'
+		+ '  align-items:center;'
+		+ '  justify-content:center;'
+		+ '  gap:6px;'
+		+ '  cursor:pointer;'
+		+ '  transition:all .16s ease;'
+		+ '  text-align:center;'
+		+ '  white-space:normal;'
+		+ '  word-break:break-word;'
+		+ '  overflow-wrap:anywhere;'
+		+ '}'
+
+		+ '.shpun-actions .shpun-btn{'
+		+ '  min-height:42px;'
+		+ '}'
+
+		+ '.shpun-side-actions .shpun-btn{'
+		+ '  min-height:42px;'
+		+ '  padding-top:8px;'
+		+ '  padding-bottom:8px;'
+		+ '}'
+
+		+ '.shpun-btn:hover{'
+		+ '  transform:translateY(-1px);'
+		+ '  background:rgba(25,35,54,.96);'
+		+ '  border-color:rgba(140,160,200,.34);'
+		+ '}'
+
+		+ '.shpun-btn--ghost{background:rgba(255,255,255,.03);}'
+		+ '.shpun-btn--primary{background:linear-gradient(135deg, rgba(79,70,229,.90), rgba(99,102,241,.82));border-color:rgba(140,130,255,.28);color:#ffffff;box-shadow:0 8px 18px rgba(76,70,180,.18);}'
+		+ '.shpun-btn--primary:hover{background:linear-gradient(135deg, rgba(88,80,238,.96), rgba(110,114,248,.88));}'
+		+ '.shpun-btn--danger{background:rgba(101,24,34,.42);border-color:rgba(248,113,113,.30);color:#fecaca;}'
+		+ '.shpun-btn--danger:hover{background:rgba(122,29,42,.50);}'
+
+		+ '@media (max-width: 980px){'
+		+ '  .shpun-card-main{grid-template-columns:1fr;}'
+		+ '  .shpun-fields-grid{grid-template-columns:repeat(2, minmax(0,1fr));}'
+		+ '  .shpun-actions{grid-template-columns:repeat(2, minmax(0,1fr));}'
+		+ '  .shpun-side-flex-spacer{display:none;}'
+		+ '  .shpun-side-actions{margin-top:4px;}'
+		+ '}'
+
+		+ '@media (max-width: 640px){'
+		+ '  .shpun-widget-card{padding:14px;border-radius:18px;}'
+		+ '  .shpun-widget-inner{gap:14px;}'
+		+ '  .shpun-widget-header{flex-direction:column;align-items:flex-start;}'
+		+ '  .shpun-title{font-size:18px;}'
+		+ '  .shpun-subtitle{font-size:12px;}'
+		+ '  .shpun-fields-grid{grid-template-columns:1fr;}'
+		+ '  .shpun-actions{grid-template-columns:1fr;}'
+		+ '  .shpun-btn{font-size:12px;}'
+		+ '}';
 
 	var style = document.createElement('style');
 	style.id = 'shpun-widget-style';
@@ -130,7 +407,7 @@ function injectStyles() {
 }
 
 /* ============================================================
- *  Сравнение версий
+ *  Helpers
  * ========================================================== */
 
 function normalizeVersionPart(v) {
@@ -156,10 +433,6 @@ function compareVersions(a, b) {
 	return 0;
 }
 
-/* ============================================================
- *  Бейдж статуса
- * ========================================================== */
-
 function buildStatusBadge(state) {
 	var hasCode = !!(state.code && state.code.trim().length > 0);
 	var hasSub  = !!state.has_sub;
@@ -169,28 +442,28 @@ function buildStatusBadge(state) {
 	var cls, text;
 
 	if (err) {
-		cls  = 'shpun-badge shpun-badge--err';
-		text = 'Ошибка: ' + err;
+		cls = 'shpun-badge shpun-badge--err';
+		text = 'Ошибка подключения';
 	}
 	else if (!hasCode) {
-		cls  = 'shpun-badge shpun-badge--off';
-		text = 'Код роутера ещё не создан';
+		cls = 'shpun-badge shpun-badge--off';
+		text = 'Подготовка';
 	}
 	else if (hasCode && !hasSub) {
-		cls  = 'shpun-badge shpun-badge--warn';
-		text = 'Ожидает привязки в Shpun SDN System';
+		cls = 'shpun-badge shpun-badge--warn';
+		text = 'Ожидает привязки';
 	}
 	else if (hasCode && hasSub && !ready) {
-		cls  = 'shpun-badge shpun-badge--warn';
-		text = 'Подписка найдена, подключаемся…';
+		cls = 'shpun-badge shpun-badge--warn';
+		text = 'Подключаемся';
 	}
 	else if (hasCode && hasSub && ready) {
-		cls  = 'shpun-badge shpun-badge--ok';
+		cls = 'shpun-badge shpun-badge--ok';
 		text = 'VPN подключен';
 	}
 	else {
-		cls  = 'shpun-badge shpun-badge--off';
-		text = 'Ожидает кода';
+		cls = 'shpun-badge shpun-badge--off';
+		text = 'Ожидание';
 	}
 
 	return E('span', { 'class': cls }, [
@@ -198,10 +471,6 @@ function buildStatusBadge(state) {
 		text
 	]);
 }
-
-/* ============================================================
- *  Спрятать стандартный заголовок LuCI
- * ========================================================== */
 
 function hideLuCIHeader(rootNode) {
 	if (!rootNode)
@@ -214,10 +483,6 @@ function hideLuCIHeader(rootNode) {
 		prev = prev.previousSibling;
 	}
 }
-
-/* ============================================================
- *  Ререндер
- * ========================================================== */
 
 function rerenderView(view, state) {
 	state = state || {};
@@ -234,7 +499,7 @@ function rerenderView(view, state) {
 }
 
 /* ============================================================
- *  Основной view
+ *  View
  * ========================================================== */
 
 return view.extend({
@@ -250,20 +515,18 @@ return view.extend({
 		this._state = state;
 
 		var code = (state.code || '').trim();
+		var hasSub = !!state.has_sub;
+		var vpnReady = !!state.vpn_ready;
+		var err = (state.vpn_error || '').trim();
 
 		var fwCurrentRaw = (state.fw_current || '').trim();
 		var fwCurrentDisplay = fwCurrentRaw || '—';
-
 		var fwLatest = (state.fw_latest || '').trim();
 		var hasNewFw = !!(fwLatest && fwCurrentRaw && compareVersions(fwCurrentRaw, fwLatest) < 0);
 
-		var hasSub   = !!state.has_sub;
-		var vpnReady = !!state.vpn_ready;
-		var err      = (state.vpn_error || '').trim();
-
-		var deepLink = 'https://t.me/shpunvpn_bot';
-		var qrUrl    = 'https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=' +
-			encodeURIComponent(deepLink);
+		var appLink = 'https://app.sdnonline.online';
+		var botLink = 'https://t.me/shpunvpn_bot';
+		var qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=' + encodeURIComponent(appLink);
 
 		var codeNode = E('span', {
 			'class': code ? 'shpun-code shpun-code-copy' : 'shpun-code',
@@ -282,108 +545,133 @@ return view.extend({
 		}
 
 		var updateBtnLabel = hasNewFw
-			? ('Установить обновление ' + fwLatest)
-			: 'Проверить обновление прошивки';
+			? ('Установить ' + fwLatest)
+			: 'Проверить обновление';
 
 		var hintText =
 			!code
-				? 'Дождитесь генерации кода роутера. Затем откройте бота Shpun SDN System и закажите услугу для роутеров.'
+				? 'Роутер готовится к подключению. После генерации кода откройте ShpunApp и оформите услугу для роутера.'
 				: !hasSub
-					? 'Откройте бота Shpun SDN System, закажите услугу для роутеров, затем откройте мини-приложение и привяжите этот роутер по коду. После этого роутер сам получит конфигурацию и подключится к системе.'
+					? 'Откройте ShpunApp, закажите или активируйте услугу для роутера и выполните привязку по этому коду. После этого роутер автоматически получит конфигурацию.'
 					: !vpnReady
 						? (err
-							? 'Подписка найдена, но подключиться не удалось: ' + err
-							: 'Подписка найдена. Ожидаем подключение VPN, это может занять до минуты.')
-						: 'Трафик роутера направляется через Shpun SDN System. Если вы изменили подключение в биллинге, используйте кнопку «Обновить подключение».';
+							? 'Привязка найдена, но подключение завершилось ошибкой: ' + err
+							: 'Привязка найдена. Роутер получает актуальную конфигурацию и поднимает VPN. Обычно это занимает до минуты.')
+						: 'Роутер подключен к Shpun SDN System. Для смены сервера, обновления подключения, управления услугой и привязкой используйте ShpunApp.';
 
-		var widget = E('div', { 'class': 'shpun-widget-card' }, [
+		return E('div', { 'class': 'shpun-widget-card' }, [
+			E('div', { 'class': 'shpun-widget-inner' }, [
 
-			E('div', { 'class': 'shpun-widget-header' }, [
-				E('div', {}, [
-					E('div', { 'class': 'shpun-title' }, 'Shpun Router / SDN System'),
-					E('div', { 'class': 'shpun-subtitle' }, [
-						code
-							? 'Статус подключения роутера к Shpun SDN System'
-							: 'Подготовка роутера к подключению Shpun SDN System'
-					])
-				]),
-				buildStatusBadge(state)
-			]),
-
-			E('div', { 'class': 'shpun-hint-box' }, hintText),
-
-			E('div', { 'class': 'shpun-card-main' }, [
-				E('div', { 'class': 'shpun-col-main' }, [
-					E('div', { 'class': 'shpun-field' }, [
-						E('div', { 'class': 'shpun-field-label' }, 'КОД РОУТЕРА'),
-						E('div', { 'class': 'shpun-field-value' }, [ codeNode ])
+				E('div', { 'class': 'shpun-widget-header' }, [
+					E('div', { 'class': 'shpun-title-wrap' }, [
+						E('div', { 'class': 'shpun-kicker' }, [
+							E('span', { 'class': 'shpun-kicker-dot' }),
+							'Shpun Router'
+						]),
+						E('div', { 'class': 'shpun-title' }, 'SDN System'),
+						E('div', { 'class': 'shpun-subtitle' },
+							code
+								? 'Статус роутера, подключение и быстрые действия по конфигурации'
+								: 'Подготовка роутера к подключению через ShpunApp'
+						)
 					]),
-					E('div', { 'class': 'shpun-field' }, [
-						E('div', { 'class': 'shpun-field-label' }, 'VPN / ПОДПИСКА'),
-						E('div', { 'class': 'shpun-field-value' }, [
-							!code
-								? 'ожидает генерации кода'
-								: !hasSub
-									? 'ожидает привязки'
-									: vpnReady
-										? 'подключен'
-										: (err ? 'ошибка' : 'подключение…')
+					buildStatusBadge(state)
+				]),
+
+				E('div', { 'class': 'shpun-hint-box' }, hintText),
+
+				E('div', { 'class': 'shpun-card-main' }, [
+					E('div', { 'class': 'shpun-col-main' }, [
+						E('div', { 'class': 'shpun-fields-grid' }, [
+							E('div', { 'class': 'shpun-field' }, [
+								E('div', { 'class': 'shpun-field-label' }, 'Код роутера'),
+								E('div', { 'class': 'shpun-field-value' }, [ codeNode ])
+							]),
+							E('div', { 'class': 'shpun-field' }, [
+								E('div', { 'class': 'shpun-field-label' }, 'Статус услуги'),
+								E('div', { 'class': 'shpun-field-value' }, [
+									!code
+										? 'Ожидает генерации кода'
+										: !hasSub
+											? 'Ожидает привязки'
+											: vpnReady
+												? 'Подключен'
+												: (err ? 'Ошибка подключения' : 'Подключение…')
+								])
+							]),
+							E('div', { 'class': 'shpun-field' }, [
+								E('div', { 'class': 'shpun-field-label' }, 'Прошивка'),
+								E('div', { 'class': 'shpun-field-value' }, [ fwValue ])
+							])
+						]),
+
+						E('div', { 'class': 'shpun-actions' }, [
+							E('button', {
+								'class': 'shpun-btn shpun-btn--ghost',
+								'click': ui.createHandlerFn(this, 'handleRefresh')
+							}, 'Обновить статус'),
+
+							E('button', {
+								'class': 'shpun-btn shpun-btn--ghost',
+								'click': ui.createHandlerFn(this, 'handleUpdateFirmware')
+							}, updateBtnLabel),
+
+							E('button', {
+								'class': 'shpun-btn shpun-btn--primary',
+								'click': ui.createHandlerFn(this, 'handleRefreshConnection')
+							}, 'Обновить подключение'),
+
+							E('button', {
+								'class': 'shpun-btn shpun-btn--danger',
+								'click': ui.createHandlerFn(this, 'handleResetVpn')
+							}, 'Сбросить конфиг')
 						])
 					]),
-					E('div', { 'class': 'shpun-field' }, [
-						E('div', { 'class': 'shpun-field-label' }, 'ПРОШИВКА'),
-						E('div', { 'class': 'shpun-field-value' }, [ fwValue ])
+
+					E('div', { 'class': 'shpun-col-side' }, [
+						E('div', { 'class': 'shpun-side-card' }, [
+							E('div', { 'class': 'shpun-side-title' }, 'Управление через ShpunApp'),
+							E('div', { 'class': 'shpun-side-url' }, 'app.sdnonline.online'),
+
+							E('a', {
+								'class': 'shpun-qr-link',
+								'href': appLink,
+								'target': '_blank',
+								'rel': 'noreferrer'
+							}, [
+								E('img', {
+									'class': 'shpun-qr',
+									'src': qrUrl,
+									'alt': 'QR-код для открытия ShpunApp'
+								})
+							]),
+
+							E('div', { 'class': 'shpun-qr-caption' },
+								'Сканируйте QR-код, чтобы открыть ShpunApp на телефоне'
+							),
+
+							E('div', { 'class': 'shpun-side-flex-spacer' }),
+
+							E('div', { 'class': 'shpun-side-actions' }, [
+								E('a', {
+									'class': 'shpun-btn shpun-btn--primary',
+									'href': appLink,
+									'target': '_blank',
+									'rel': 'noreferrer'
+								}, 'Открыть ShpunApp'),
+
+								E('a', {
+									'class': 'shpun-btn shpun-btn--ghost',
+									'href': botLink,
+									'target': '_blank',
+									'rel': 'noreferrer'
+								}, 'Бот — резервный вариант')
+							])
+						])
 					])
-				]),
-
-				E('div', { 'class': 'shpun-col-side' }, [
-					E('a', {
-						'href': deepLink,
-						'target': '_blank',
-						'rel': 'noreferrer'
-					}, [
-						E('img', {
-							'class': 'shpun-qr',
-							'src': qrUrl,
-							'alt': 'QR-код для добавления роутера в Shpun SDN System'
-						})
-					]),
-					E('div', { 'class': 'shpun-qr-caption' },
-						'Наведите камеру телефона, чтобы открыть бота')
-				])
-			]),
-
-			E('div', { 'class': 'shpun-actions' }, [
-				E('div', { 'class': 'shpun-actions-left' }, [
-					E('button', {
-						'class': 'shpun-btn',
-						'click': ui.createHandlerFn(this, 'handleRefresh')
-					}, 'Обновить статус'),
-					E('button', {
-						'class': 'shpun-btn',
-						'click': ui.createHandlerFn(this, 'handleUpdateFirmware')
-					}, updateBtnLabel),
-					E('button', {
-						'class': 'shpun-btn',
-						'click': ui.createHandlerFn(this, 'handleRefreshConnection')
-					}, 'Обновить подключение'),
-					E('button', {
-						'class': 'shpun-btn',
-						'click': ui.createHandlerFn(this, 'handleResetVpn')
-					}, 'Сбросить конфиг')
-				]),
-				E('div', { 'class': 'shpun-actions-right' }, [
-					E('a', {
-						'class': 'shpun-btn',
-						'href': deepLink,
-						'target': '_blank',
-						'rel': 'noreferrer'
-					}, 'Открыть бота')
 				])
 			])
 		]);
-
-		return widget;
 	},
 
 	handleCopyCode: function(ev, code) {
@@ -395,9 +683,11 @@ return view.extend({
 			return;
 
 		var text = String(code).trim();
+
 		var notifyOk = function() {
 			ui.addNotification(null, E('p', {}, 'Код роутера скопирован в буфер обмена.'), 'info');
 		};
+
 		var notifyErr = function(err) {
 			ui.addNotification(null, E('p', {}, 'Не удалось скопировать код: ' + (err || 'ошибка доступа к буферу')), 'error');
 		};
@@ -412,6 +702,7 @@ return view.extend({
 				input.value = text;
 				document.body.appendChild(input);
 				input.select();
+
 				try {
 					document.execCommand('copy');
 					notifyOk();
@@ -419,6 +710,7 @@ return view.extend({
 				catch (e) {
 					notifyErr(e);
 				}
+
 				document.body.removeChild(input);
 			}
 		}
@@ -464,7 +756,7 @@ return view.extend({
 					E('strong', {}, fwLatest),
 					'.'
 				]),
-				E('p', {}, 'Установить обновление сейчас? В процессе VPN-соединение будет перезапущено.'),
+				E('p', {}, 'Установить обновление сейчас? Во время процесса VPN-соединение будет перезапущено.'),
 				E('div', { 'style': 'margin-top:10px; text-align:right' }, [
 					E('button', {
 						'class': 'btn',
@@ -504,7 +796,7 @@ return view.extend({
 
 		ui.addNotification(
 			null,
-			E('p', {}, 'Проверка обновлений запущена… Роутер связывается с сервером Shpun SDN System.'),
+			E('p', {}, 'Проверка обновлений запущена. Роутер связывается с сервером Shpun SDN System.'),
 			'info'
 		);
 
@@ -520,13 +812,12 @@ return view.extend({
 
 			var fwCurRaw = (st2.fw_current || '').trim();
 			var fwLat = (st2.fw_latest || '').trim();
-			var fwCurDisplay = fwCurRaw || '—';
 			var hasNewNow = !!(fwLat && fwCurRaw && compareVersions(fwCurRaw, fwLat) < 0);
 
 			if (!hasNewNow) {
 				ui.addNotification(
 					null,
-					E('p', {}, 'Новая версия прошивки не найдена. Установлена актуальная версия: ' + fwCurDisplay + '.'),
+					E('p', {}, 'Новая версия прошивки не найдена. Установлена актуальная версия: ' + (fwCurRaw || '—') + '.'),
 					'info'
 				);
 			}
@@ -557,8 +848,8 @@ return view.extend({
 		}
 
 		ui.showModal('Обновить подключение', [
-			E('p', {}, 'Роутер заново получит актуальную подписку из биллинга по текущему коду и пересоберёт подключение.'),
-			E('p', {}, 'Используйте это действие после смены сервера или обновления ссылки подключения в биллинге.'),
+			E('p', {}, 'Роутер заново получит актуальную конфигурацию услуги и пересоберёт подключение.'),
+			E('p', {}, 'Используйте это после смены сервера, обновления услуги или изменений в ShpunApp.'),
 			E('div', { 'style': 'margin-top:10px; text-align:right' }, [
 				E('button', {
 					'class': 'btn',
@@ -572,7 +863,7 @@ return view.extend({
 
 						ui.addNotification(
 							null,
-							E('p', {}, 'Обновление подключения запущено. Роутер перечитывает подписку и пересобирает туннель.'),
+							E('p', {}, 'Обновление подключения запущено. Роутер перечитывает конфигурацию и пересобирает туннель.'),
 							'info'
 						);
 
@@ -615,9 +906,8 @@ return view.extend({
 
 		ui.showModal('Сброс конфигурации', [
 			E('p', {}, [
-				'Вы действительно хотите полностью сбросить конфигурацию Shpun Router ',
-				'и вернуть устройство в состояние после установки пакета? ',
-				'Будет сгенерирован новый код роутера, текущая привязка в боте и конфигурация VPN будут потеряны.'
+				'Вы действительно хотите полностью сбросить конфигурацию Shpun Router и вернуть устройство в состояние после установки пакета? ',
+				'Будет сгенерирован новый код роутера, текущая привязка и конфигурация VPN будут потеряны.'
 			]),
 			E('div', { 'style': 'margin-top:10px; text-align:right' }, [
 				E('button', {
@@ -632,6 +922,7 @@ return view.extend({
 
 						return callShpunResetVpn().then(function(res) {
 							res = res || {};
+
 							if (res.ok) {
 								ui.addNotification(
 									null,
