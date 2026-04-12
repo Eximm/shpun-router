@@ -5,6 +5,6 @@
   "depends": {},
   "contents": {
     "type": "view",
-    "path": "status/include/shpunvpn"
+    "path": "status/include/01_shpunvpn"
   }
 }

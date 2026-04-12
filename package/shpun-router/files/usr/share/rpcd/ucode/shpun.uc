@@ -22,6 +22,14 @@ const FW_CUR_OLD   = DIR + "/router_version";
 
 const LASTCHK   = DIR + "/last_sub_check";
 
+/* routing */
+const ROUTES_DIR      = DIR + "/routes";
+const ROUTES_MODE     = ROUTES_DIR + "/mode";
+const ROUTES_VER      = ROUTES_DIR + "/ru.version";
+const ROUTES_LASTCHK  = ROUTES_DIR + "/last_check";
+const ROUTES_CIDRS    = ROUTES_DIR + "/ru.cidrs";
+const ROUTING_SETTER  = DIR + "/set-routing-mode.sh";
+
 /* безопасное чтение файла (без trim) */
 function readfile(path) {
 	try {
@@ -35,6 +43,12 @@ function readfile(path) {
 	catch (e) {
 		return "";
 	}
+}
+
+/* безопасное чтение файла с trim */
+function readtrim(path) {
+	let v = readfile(path);
+	return v ? v.replace(/[\r\n]+$/g, "") : "";
 }
 
 /* проверка существования файла */
@@ -56,11 +70,11 @@ function read_fw_current() {
 	let v = "";
 
 	if (exists(FW_CUR_NEW))
-		v = readfile(FW_CUR_NEW);
+		v = readtrim(FW_CUR_NEW);
 	else if (exists(FW_CUR_MAIN))
-		v = readfile(FW_CUR_MAIN);
+		v = readtrim(FW_CUR_MAIN);
 	else if (exists(FW_CUR_OLD))
-		v = readfile(FW_CUR_OLD);
+		v = readtrim(FW_CUR_OLD);
 
 	return v || "";
 }
@@ -70,11 +84,32 @@ function read_fw_latest() {
 	let v = "";
 
 	if (exists(FW_LAST_NEW))
-		v = readfile(FW_LAST_NEW);
+		v = readtrim(FW_LAST_NEW);
 	else if (exists(FW_LAST_MAIN))
-		v = readfile(FW_LAST_MAIN);
+		v = readtrim(FW_LAST_MAIN);
 
 	return v || "";
+}
+
+function count_lines(path) {
+	try {
+		let data = readfile(path);
+		if (!data)
+			return 0;
+
+		let lines = data.split(/\n/);
+		let n = 0;
+
+		for (let i = 0; i < lines.length; i++) {
+			if (lines[i] != "")
+				n++;
+		}
+
+		return n;
+	}
+	catch (e) {
+		return 0;
+	}
 }
 
 return {
@@ -105,9 +140,6 @@ return {
 					let res = {
 						code: code,
 						has_sub: (sub != ""),
-						/* subscription_url сейчас виджету особо не нужен,
-						 * но вернём содержимое для совместимости
-						 */
 						subscription_url: sub,
 						vpn_ready: exists(READY),
 						vpn_error: verr
@@ -127,7 +159,62 @@ return {
 			}
 		},
 
-		/* --- OTA_CHECK: форсируем проверку версии, не ломая привязку --- */
+		/* --- ROUTING_GET --- */
+		routing_get: {
+			call: function(req) {
+				try {
+					let mode = readtrim(ROUTES_MODE) || "full";
+					let ver  = readtrim(ROUTES_VER) || "0";
+					let ts   = readtrim(ROUTES_LASTCHK) || "0";
+					let cnt  = count_lines(ROUTES_CIDRS);
+
+					return {
+						ok: 1,
+						mode: mode,
+						routes_version: ver,
+						last_check: ts,
+						routes_count: cnt,
+						has_routes: exists(ROUTES_CIDRS) && cnt > 0
+					};
+				}
+				catch (e) {
+					return { ok: 0, error: String(e) };
+				}
+			}
+		},
+
+		/* --- ROUTING_SET --- */
+		routing_set: {
+			call: function(req) {
+				try {
+					let mode = "";
+
+					if (req && req.mode)
+						mode = req.mode;
+
+					if (mode != "full" && mode != "split_ru")
+						return { ok: 0, error: "invalid mode" };
+
+					if (!exists(ROUTING_SETTER))
+						return { ok: 0, error: "set-routing-mode.sh not found" };
+
+					let cmd = ROUTING_SETTER + " " + mode + " >/dev/null 2>&1";
+					let p = popen(cmd);
+					if (p) p.close();
+
+					return {
+						ok: 1,
+						mode: mode,
+						msg: "routing mode applied"
+					};
+				}
+				catch (e) {
+					return { ok: 0, error: String(e) };
+				}
+			}
+		},
+
+		/* --- OTA_CHECK --- */
 		ota_check: {
 			call: function(req) {
 				try {
@@ -156,7 +243,7 @@ return {
 			}
 		},
 
-		/* --- OTA_INSTALL: установить новую версию, если она есть --- */
+		/* --- OTA_INSTALL --- */
 		ota_install: {
 			call: function(req) {
 				try {
@@ -174,7 +261,7 @@ return {
 			}
 		},
 
-		/* --- REFRESH_CONNECTION: обновить текущую подписку через router_config по текущему коду --- */
+		/* --- REFRESH_CONNECTION --- */
 		refresh_connection: {
 			call: function(req) {
 				try {
@@ -273,7 +360,7 @@ return {
 			}
 		},
 
-		/* --- RESET_VPN: полный сброс к начальному состоянию без отката версии ПО --- */
+		/* --- RESET_VPN --- */
 		reset_vpn: {
 			call: function(req) {
 				try {

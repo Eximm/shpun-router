@@ -19,13 +19,11 @@ if [ "$(uci -q get network.vpn.ifname)" = "tun0" ] && \
 fi
 
 # В новой Xray-схеме мы не создаём tun0 и network.vpn — работаем через
-# прозрачный dokodemo-door + iptables/nft REDIRECT.
+# прозрачный dokodemo-door + nft/iptables REDIRECT.
 
 # ==========================
-# 3. Отключить IPv6 на LAN/WAN + DHCPv6/RA (минимум лишней нагрузки)
+# 3. Отключить IPv6 на LAN/WAN + DHCPv6/RA
 # ==========================
-
-# LAN/WAN: выключить IPv6
 if uci -q get network.lan >/dev/null 2>&1; then
     uci set network.lan.ipv6='0'
 fi
@@ -33,14 +31,12 @@ if uci -q get network.wan >/dev/null 2>&1; then
     uci set network.wan.ipv6='0'
 fi
 
-# DHCP/RA: LAN
 if uci -q get dhcp.lan >/dev/null 2>&1; then
     uci set dhcp.lan.dhcpv6='disabled'
     uci set dhcp.lan.ra='disabled'
     uci set dhcp.lan.ndp='disabled'
 fi
 
-# DHCP/RA: WAN
 if uci -q get dhcp.wan >/dev/null 2>&1; then
     uci set dhcp.wan.dhcpv6='disabled'
     uci set dhcp.wan.ra='disabled'
@@ -51,22 +47,18 @@ uci commit dhcp
 uci commit network
 
 # ==========================
-# 4. Добавить вызов shpun-firewall-xray в /etc/firewall.user
+# 4. Инициализация routing state
 # ==========================
-if ! grep -q "shpun-firewall-xray" /etc/firewall.user 2>/dev/null; then
-    cat >> /etc/firewall.user << 'EOF'
-
-# --- shpun-firewall-xray ---
-[ -x /etc/shpun/firewall-xray.sh ] && /etc/shpun/firewall-xray.sh start
-# --- end shpun-firewall-xray ---
-EOF
-fi
+mkdir -p /etc/shpun/routes 2>/dev/null || true
+[ -f /etc/shpun/routes/mode ] || echo "full" > /etc/shpun/routes/mode
+[ -f /etc/shpun/routes/ru.version ] || echo "0" > /etc/shpun/routes/ru.version
+[ -f /etc/shpun/routes/last_check ] || echo "0" > /etc/shpun/routes/last_check
+[ -f /etc/shpun/routes/ru.sha256 ] || : > /etc/shpun/routes/ru.sha256
+[ -f /etc/shpun/routes/ru.cidrs ] || : > /etc/shpun/routes/ru.cidrs
 
 # ==========================
-# 5. Отложенные рестарты (rpcd, network, firewall, dnsmasq)
-#    чтобы не рвать LuCI при установке пакета
+# 5. Отложенные рестарты
 # ==========================
-
 (
     sleep 5
     /etc/init.d/rpcd restart >/dev/null 2>&1 || true

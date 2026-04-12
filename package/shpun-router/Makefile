@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=shpun-router
-PKG_VERSION:=1.0.4
+PKG_VERSION:=1.0.5
 PKG_RELEASE:=1
 
 PKG_MAINTAINER:=Shpun VPN
@@ -22,10 +22,11 @@ define Package/$(PKG_NAME)/description
 Shpun Router Integration:
  - automatic router code generation
  - integration with Shpun VPN billing
- - Shadowsocks/VLESS auto-detection (future expand)
  - automatic engine fetch (multi-arch)
  - VPN status widget (LuCI Dashboard)
  - OTA firmware update (from widget)
+ - route feed update for split routing
+ - routing mode switch: full / split_ru
 endef
 
 define Build/Compile
@@ -39,6 +40,7 @@ endef
 
 define Package/$(PKG_NAME)/install
 	$(INSTALL_DIR) $(1)/etc/shpun
+	$(INSTALL_DIR) $(1)/etc/shpun/routes
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_DIR) $(1)/usr/share/rpcd/ucode
 	$(INSTALL_DIR) $(1)/usr/share/rpcd/acl.d
@@ -47,24 +49,25 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_DIR) $(1)/etc/uci-defaults
 
 	# --- core scripts ---
-	$(INSTALL_BIN) ./files/etc/shpun/agent.sh         $(1)/etc/shpun/agent.sh
-	$(INSTALL_BIN) ./files/etc/shpun/build-config.sh  $(1)/etc/shpun/build-config.sh
-	$(INSTALL_BIN) ./files/etc/shpun/gen_code.sh      $(1)/etc/shpun/gen_code.sh
-	$(INSTALL_BIN) ./files/etc/shpun/firewall-xray.sh $(1)/etc/shpun/firewall-xray.sh
-	$(INSTALL_BIN) ./files/etc/shpun/router_updater   $(1)/etc/shpun/router_updater
+	$(INSTALL_BIN) ./files/etc/shpun/agent.sh                $(1)/etc/shpun/agent.sh
+	$(INSTALL_BIN) ./files/etc/shpun/build-config.sh         $(1)/etc/shpun/build-config.sh
+	$(INSTALL_BIN) ./files/etc/shpun/gen_code.sh             $(1)/etc/shpun/gen_code.sh
+	$(INSTALL_BIN) ./files/etc/shpun/firewall-xray.sh        $(1)/etc/shpun/firewall-xray.sh
+	$(INSTALL_BIN) ./files/etc/shpun/router_updater          $(1)/etc/shpun/router_updater
+	$(INSTALL_BIN) ./files/etc/shpun/set-routing-mode.sh     $(1)/etc/shpun/set-routing-mode.sh
 
 	# default config
-	$(INSTALL_CONF) ./files/etc/shpun/agent.conf      $(1)/etc/shpun/agent.conf
+	$(INSTALL_CONF) ./files/etc/shpun/agent.conf             $(1)/etc/shpun/agent.conf
 
 	# --- init scripts ---
-	$(INSTALL_BIN) ./files/etc/init.d/shpun-agent     $(1)/etc/init.d/shpun-agent
-	$(INSTALL_BIN) ./files/etc/init.d/shpun-vpn       $(1)/etc/init.d/shpun-vpn
+	$(INSTALL_BIN) ./files/etc/init.d/shpun-agent            $(1)/etc/init.d/shpun-agent
+	$(INSTALL_BIN) ./files/etc/init.d/shpun-vpn              $(1)/etc/init.d/shpun-vpn
 
 	# --- rpcd ucode backend ---
-	$(INSTALL_DATA) ./files/usr/share/rpcd/ucode/shpun.uc  $(1)/usr/share/rpcd/ucode/shpun.uc
+	$(INSTALL_DATA) ./files/usr/share/rpcd/ucode/shpun.uc    $(1)/usr/share/rpcd/ucode/shpun.uc
 
 	# --- ACL ---
-	$(INSTALL_DATA) ./files/usr/share/rpcd/acl.d/shpun.json $(1)/usr/share/rpcd/acl.d/shpun.json
+	$(INSTALL_DATA) ./files/usr/share/rpcd/acl.d/shpun.json  $(1)/usr/share/rpcd/acl.d/shpun.json
 
 	# --- Status widget descriptor (JSON) ---
 	$(INSTALL_DATA) ./files/usr/share/luci/status/include/01_shpunvpn.json \
@@ -75,15 +78,13 @@ define Package/$(PKG_NAME)/install
 		$(1)/www/luci-static/resources/view/status/include/01_shpunvpn.js
 
 	# --- uci-defaults ---
-	$(INSTALL_BIN) ./files/etc/uci-defaults/99_shpun-router $(1)/etc/uci-defaults/99_shpun-router
+	$(INSTALL_BIN) ./files/etc/uci-defaults/99_shpun-router  $(1)/etc/uci-defaults/99_shpun-router
 
 	# --- firmware version files ---
 	# Основной источник истины по версии — fw_current.
 	# Они ДОЛЖНЫ перезаписываться при обновлении пакета, поэтому
 	# мы не объявляем их как conffiles.
 	echo "$(PKG_VERSION)" > $(1)/etc/shpun/fw_current
-
-	# Для совместимости со старыми версиями backend-а (если вдруг где-то используется):
 	echo "$(PKG_VERSION)" > $(1)/etc/shpun/router_software_version
 	echo "$(PKG_VERSION)" > $(1)/etc/shpun/router_version
 endef
@@ -98,16 +99,16 @@ define Package/$(PKG_NAME)/postinst
 [ -n "$$IPKG_INSTROOT" ] || {
 
 	mkdir -p /etc/shpun
+	mkdir -p /etc/shpun/routes
 
 	# enable services
 	/etc/init.d/shpun-agent enable 2>/dev/null || true
 	/etc/init.d/shpun-vpn enable 2>/dev/null || true
 
 	/etc/init.d/shpun-agent restart 2>/dev/null || true
-
 	/etc/init.d/rpcd restart 2>/dev/null || true
 
-	# clear API cache
+	# clear LuCI caches
 	rm -f /tmp/luci-indexcache /tmp/luci-modulecache/* 2>/dev/null || true
 
 	/etc/init.d/uhttpd reload 2>/dev/null || \
@@ -123,8 +124,6 @@ endef
 
 define Package/$(PKG_NAME)/conffiles
 /etc/shpun/agent.conf
-/etc/shpun/firewall-xray.sh
-/etc/shpun/build-config.sh
 endef
 
 #######################################

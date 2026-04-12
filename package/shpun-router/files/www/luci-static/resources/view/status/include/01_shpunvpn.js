@@ -14,6 +14,18 @@ var callShpunState = rpc.declare({
 	expect: { '': {} }
 });
 
+var callShpunRoutingGet = rpc.declare({
+	object: 'shpun',
+	method: 'routing_get',
+	expect: { '': {} }
+});
+
+var callShpunRoutingSet = rpc.declare({
+	object: 'shpun',
+	method: 'routing_set',
+	expect: { '': {} }
+});
+
 var callShpunOtaCheck = rpc.declare({
 	object: 'shpun',
 	method: 'ota_check',
@@ -209,6 +221,47 @@ function injectStyles() {
 		+ '  word-break:break-word;'
 		+ '}'
 
+		+ '.shpun-routing-box{'
+		+ '  padding:13px 14px;'
+		+ '  border-radius:16px;'
+		+ '  background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));'
+		+ '  border:1px solid rgba(120,140,180,.14);'
+		+ '  box-shadow:inset 0 1px 0 rgba(255,255,255,.025);'
+		+ '}'
+
+		+ '.shpun-routing-head{'
+		+ '  display:flex;'
+		+ '  justify-content:space-between;'
+		+ '  align-items:flex-start;'
+		+ '  gap:12px;'
+		+ '  margin-bottom:10px;'
+		+ '}'
+
+		+ '.shpun-routing-title{'
+		+ '  font-size:13px;'
+		+ '  font-weight:800;'
+		+ '  color:#ffffff;'
+		+ '}'
+
+		+ '.shpun-routing-sub{'
+		+ '  font-size:11px;'
+		+ '  line-height:1.45;'
+		+ '  color:#9fb0c8;'
+		+ '}'
+
+		+ '.shpun-routing-meta{'
+		+ '  font-size:11px;'
+		+ '  line-height:1.45;'
+		+ '  color:#b8c3d9;'
+		+ '  text-align:right;'
+		+ '}'
+
+		+ '.shpun-routing-actions{'
+		+ '  display:grid;'
+		+ '  grid-template-columns:repeat(2, minmax(0,1fr));'
+		+ '  gap:10px;'
+		+ '}'
+
 		+ '.shpun-code{'
 		+ '  font-family:monospace;'
 		+ '  font-size:18px;'
@@ -379,6 +432,7 @@ function injectStyles() {
 		+ '.shpun-btn--primary:hover{background:linear-gradient(135deg, rgba(88,80,238,.96), rgba(110,114,248,.88));}'
 		+ '.shpun-btn--danger{background:rgba(101,24,34,.42);border-color:rgba(248,113,113,.30);color:#fecaca;}'
 		+ '.shpun-btn--danger:hover{background:rgba(122,29,42,.50);}'
+		+ '.shpun-btn.is-active{background:linear-gradient(135deg, rgba(79,70,229,.90), rgba(99,102,241,.82));border-color:rgba(140,130,255,.28);color:#ffffff;box-shadow:0 8px 18px rgba(76,70,180,.18);}'
 
 		+ '@media (max-width: 980px){'
 		+ '  .shpun-card-main{grid-template-columns:1fr;}'
@@ -395,6 +449,7 @@ function injectStyles() {
 		+ '  .shpun-title{font-size:18px;}'
 		+ '  .shpun-subtitle{font-size:12px;}'
 		+ '  .shpun-fields-grid{grid-template-columns:1fr;}'
+		+ '  .shpun-routing-actions{grid-template-columns:1fr;}'
 		+ '  .shpun-actions{grid-template-columns:1fr;}'
 		+ '  .shpun-btn{font-size:12px;}'
 		+ '}';
@@ -498,6 +553,15 @@ function rerenderView(view, state) {
 	}
 }
 
+function getRoutingModeLabel(mode) {
+	mode = String(mode || 'full').trim();
+
+	if (mode === 'split_ru')
+		return 'РФ напрямую, остальное через VPN';
+
+	return 'Весь трафик через VPN';
+}
+
 /* ============================================================
  *  View
  * ========================================================== */
@@ -505,8 +569,14 @@ function rerenderView(view, state) {
 return view.extend({
 	load: function() {
 		injectStyles();
-		return callShpunState().then(function(data) {
-			return data || {};
+
+		return Promise.all([
+			callShpunState(),
+			callShpunRoutingGet()
+		]).then(function(res) {
+			var st = res[0] || {};
+			st.routing = res[1] || {};
+			return st;
 		});
 	},
 
@@ -518,6 +588,12 @@ return view.extend({
 		var hasSub = !!state.has_sub;
 		var vpnReady = !!state.vpn_ready;
 		var err = (state.vpn_error || '').trim();
+
+		var routing = state.routing || {};
+		var routingMode = String(routing.mode || 'full').trim();
+		var routingLabel = getRoutingModeLabel(routingMode);
+		var routesVersion = String(routing.routes_version || '0').trim();
+		var routesCount = routing.routes_count || 0;
 
 		var fwCurrentRaw = (state.fw_current || '').trim();
 		var fwCurrentDisplay = fwCurrentRaw || '—';
@@ -602,6 +678,37 @@ return view.extend({
 							E('div', { 'class': 'shpun-field' }, [
 								E('div', { 'class': 'shpun-field-label' }, 'Прошивка'),
 								E('div', { 'class': 'shpun-field-value' }, [ fwValue ])
+							])
+						]),
+
+						E('div', { 'class': 'shpun-routing-box' }, [
+							E('div', { 'class': 'shpun-routing-head' }, [
+								E('div', {}, [
+									E('div', { 'class': 'shpun-routing-title' }, 'Маршрутизация'),
+									E('div', { 'class': 'shpun-routing-sub' },
+										'Выберите, направлять ли весь трафик в туннель или пускать российские адреса напрямую.'
+									)
+								]),
+								E('div', { 'class': 'shpun-routing-meta' }, [
+									E('div', {}, 'Режим: ' + routingLabel),
+									E('div', {}, 'Маршруты: v' + routesVersion + ' · ' + routesCount + ' CIDR')
+								])
+							]),
+
+							E('div', { 'class': 'shpun-routing-actions' }, [
+								E('button', {
+									'class': 'shpun-btn ' + (routingMode === 'full'
+										? 'shpun-btn--primary is-active'
+										: 'shpun-btn--ghost'),
+									'click': ui.createHandlerFn(this, 'handleSetRoutingMode', 'full')
+								}, 'Весь трафик через VPN'),
+
+								E('button', {
+									'class': 'shpun-btn ' + (routingMode === 'split_ru'
+										? 'shpun-btn--primary is-active'
+										: 'shpun-btn--ghost'),
+									'click': ui.createHandlerFn(this, 'handleSetRoutingMode', 'split_ru')
+								}, 'РФ напрямую, остальное через VPN')
 							])
 						]),
 
@@ -725,13 +832,71 @@ return view.extend({
 
 		var view = this;
 
-		return callShpunState().then(function(st) {
-			rerenderView(view, st || {});
+		return Promise.all([
+			callShpunState(),
+			callShpunRoutingGet()
+		]).then(function(data) {
+			var st = data[0] || {};
+			st.routing = data[1] || {};
+			rerenderView(view, st);
 		}).catch(function(err) {
 			ui.addNotification(null, E('p', {}, [
 				'Не удалось обновить статус Shpun Router: ',
 				String(err)
 			]), 'error');
+		});
+	},
+
+	handleSetRoutingMode: function(ev, mode) {
+		if (ev)
+			ev.preventDefault();
+
+		var view = this;
+		var targetMode = String(mode || '').trim();
+
+		if (targetMode !== 'full' && targetMode !== 'split_ru')
+			return;
+
+		ui.addNotification(
+			null,
+			E('p', {}, 'Применяем режим маршрутизации…'),
+			'info'
+		);
+
+		return callShpunRoutingSet({ mode: targetMode }).then(function(res) {
+			res = res || {};
+
+			if (!res.ok) {
+				ui.addNotification(
+					null,
+					E('p', {}, 'Не удалось применить режим маршрутизации: ' +
+						(res.error ? String(res.error) : 'неизвестная ошибка')),
+					'error'
+				);
+				return;
+			}
+
+			return Promise.all([
+				callShpunState(),
+				callShpunRoutingGet()
+			]).then(function(data) {
+				var st = data[0] || {};
+				st.routing = data[1] || {};
+
+				rerenderView(view, st);
+
+				ui.addNotification(
+					null,
+					E('p', {}, 'Режим маршрутизации обновлён.'),
+					'info'
+				);
+			});
+		}).catch(function(err) {
+			ui.addNotification(
+				null,
+				E('p', {}, 'Ошибка при смене режима маршрутизации: ' + String(err)),
+				'error'
+			);
 		});
 	},
 
@@ -775,8 +940,13 @@ return view.extend({
 
 							callShpunOtaInstall().then(function() {
 								window.setTimeout(function() {
-									callShpunState().then(function(st2) {
-										rerenderView(view, st2 || {});
+									Promise.all([
+										callShpunState(),
+										callShpunRoutingGet()
+									]).then(function(data) {
+										var st2 = data[0] || {};
+										st2.routing = data[1] || {};
+										rerenderView(view, st2);
 									});
 								}, 20000);
 							}).catch(function(err) {
@@ -805,9 +975,13 @@ return view.extend({
 				window.setTimeout(resolve, 15000);
 			});
 		}).then(function() {
-			return callShpunState();
-		}).then(function(st2) {
-			st2 = st2 || {};
+			return Promise.all([
+				callShpunState(),
+				callShpunRoutingGet()
+			]);
+		}).then(function(data) {
+			var st2 = data[0] || {};
+			st2.routing = data[1] || {};
 			rerenderView(view, st2);
 
 			var fwCurRaw = (st2.fw_current || '').trim();
@@ -881,8 +1055,13 @@ return view.extend({
 							}
 
 							window.setTimeout(function() {
-								callShpunState().then(function(st2) {
-									rerenderView(view, st2 || {});
+								Promise.all([
+									callShpunState(),
+									callShpunRoutingGet()
+								]).then(function(data) {
+									var st2 = data[0] || {};
+									st2.routing = data[1] || {};
+									rerenderView(view, st2);
 								});
 							}, 15000);
 						}).catch(function(err) {
@@ -931,8 +1110,13 @@ return view.extend({
 								);
 
 								window.setTimeout(function() {
-									callShpunState().then(function(st2) {
-										rerenderView(view, st2 || {});
+									Promise.all([
+										callShpunState(),
+										callShpunRoutingGet()
+									]).then(function(data) {
+										var st2 = data[0] || {};
+										st2.routing = data[1] || {};
+										rerenderView(view, st2);
 									});
 								}, 5000);
 							}
@@ -971,8 +1155,13 @@ return view.extend({
 			if (!view.container || !view.container.parentNode)
 				return;
 
-			return callShpunState().then(function(st) {
-				rerenderView(view, st || {});
+			return Promise.all([
+				callShpunState(),
+				callShpunRoutingGet()
+			]).then(function(data) {
+				var st = data[0] || {};
+				st.routing = data[1] || {};
+				rerenderView(view, st);
 			});
 		}, 10);
 	},

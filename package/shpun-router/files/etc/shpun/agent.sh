@@ -22,6 +22,17 @@ MIN_UPTIME_DEFAULT=120
 NET_FAIL_TIMEOUT_DEFAULT=60
 MAIN_LOOP_SLEEP_DEFAULT=30
 
+# Routes defaults
+ROUTES_DIR="$STATE_DIR/routes"
+ROUTES_CIDRS_FILE="$ROUTES_DIR/ru.cidrs"
+ROUTES_VER_FILE="$ROUTES_DIR/ru.version"
+ROUTES_SHA_FILE="$ROUTES_DIR/ru.sha256"
+ROUTES_LAST_CHECK_FILE="$ROUTES_DIR/last_check"
+ROUTES_MODE_FILE="$ROUTES_DIR/mode"
+
+ROUTES_URL_BASE_DEFAULT="https://spb.shpyn.online/files/routes"
+ROUTES_CHECK_INTERVAL_DEFAULT=43200   # 12 часов
+
 HTTP_BIN=""
 
 log() {
@@ -34,6 +45,16 @@ log() {
 
 ensure_state_dir() {
 	[ -d "$STATE_DIR" ] || mkdir -p "$STATE_DIR" 2>/dev/null || true
+}
+
+ensure_routes_dir() {
+	[ -d "$ROUTES_DIR" ] || mkdir -p "$ROUTES_DIR" 2>/dev/null || true
+
+	[ -f "$ROUTES_MODE_FILE" ] || echo "full" > "$ROUTES_MODE_FILE"
+	[ -f "$ROUTES_VER_FILE" ] || echo "0" > "$ROUTES_VER_FILE"
+	[ -f "$ROUTES_LAST_CHECK_FILE" ] || echo "0" > "$ROUTES_LAST_CHECK_FILE"
+	[ -f "$ROUTES_SHA_FILE" ] || : > "$ROUTES_SHA_FILE"
+	[ -f "$ROUTES_CIDRS_FILE" ] || : > "$ROUTES_CIDRS_FILE"
 }
 
 #######################################
@@ -177,14 +198,17 @@ build_engine_url() {
 load_conf() {
 	[ -f "$CONF" ] && . "$CONF"
 
-	[ -z "$API_URL" ]            && API_URL="$API_URL_DEFAULT"
-	[ -z "$ENGINE_BIN" ]         && ENGINE_BIN="/tmp/xray"
-	[ -z "$ENGINE_CONFIG" ]      && ENGINE_CONFIG="/etc/shpun/xray.json"
-	[ -z "$SUB_CHECK_INTERVAL" ] && SUB_CHECK_INTERVAL="$SUB_CHECK_INTERVAL_DEFAULT"
+	[ -z "$API_URL" ]               && API_URL="$API_URL_DEFAULT"
+	[ -z "$ENGINE_BIN" ]            && ENGINE_BIN="/tmp/xray"
+	[ -z "$ENGINE_CONFIG" ]         && ENGINE_CONFIG="/etc/shpun/xray.json"
+	[ -z "$SUB_CHECK_INTERVAL" ]    && SUB_CHECK_INTERVAL="$SUB_CHECK_INTERVAL_DEFAULT"
 
-	[ -z "$MIN_UPTIME" ]       && MIN_UPTIME="$MIN_UPTIME_DEFAULT"
-	[ -z "$NET_FAIL_TIMEOUT" ] && NET_FAIL_TIMEOUT="$NET_FAIL_TIMEOUT_DEFAULT"
-	[ -z "$MAIN_LOOP_SLEEP" ]  && MAIN_LOOP_SLEEP="$MAIN_LOOP_SLEEP_DEFAULT"
+	[ -z "$MIN_UPTIME" ]            && MIN_UPTIME="$MIN_UPTIME_DEFAULT"
+	[ -z "$NET_FAIL_TIMEOUT" ]      && NET_FAIL_TIMEOUT="$NET_FAIL_TIMEOUT_DEFAULT"
+	[ -z "$MAIN_LOOP_SLEEP" ]       && MAIN_LOOP_SLEEP="$MAIN_LOOP_SLEEP_DEFAULT"
+
+	[ -z "$ROUTES_URL_BASE" ]       && ROUTES_URL_BASE="$ROUTES_URL_BASE_DEFAULT"
+	[ -z "$ROUTES_CHECK_INTERVAL" ] && ROUTES_CHECK_INTERVAL="$ROUTES_CHECK_INTERVAL_DEFAULT"
 
 	if [ -z "$PING_HOST" ]; then
 		if [ -n "$DNS_ADDR1" ]; then
@@ -228,6 +252,150 @@ get_code() {
 	fi
 
 	return 0
+}
+
+#######################################
+# Routes update / sync
+#######################################
+
+calc_sha256_file() {
+	local file="$1"
+
+	if command -v sha256sum >/dev/null 2>&1; then
+		sha256sum "$file" 2>/dev/null | awk '{print $1}'
+		return 0
+	fi
+
+	if command -v openssl >/dev/null 2>&1; then
+		openssl dgst -sha256 "$file" 2>/dev/null | awk '{print $NF}'
+		return 0
+	fi
+
+	return 1
+}
+
+apply_routes_rules() {
+	if [ -x /etc/shpun/firewall-xray.sh ]; then
+		log "routes: applying firewall rules"
+		/etc/shpun/firewall-xray.sh restart 2>/dev/null || {
+			log "routes: firewall-xray.sh restart failed"
+			return 1
+		}
+	fi
+	return 0
+}
+
+fetch_routes_once() {
+	local remote_ver local_ver remote_sha local_sha
+	local tmp_cidrs tmp_sha
+
+	ensure_routes_dir
+	detect_http_client
+
+	if [ -z "$HTTP_BIN" ]; then
+		log "routes: no HTTP client (curl/wget/uclient-fetch)"
+		return 1
+	fi
+
+	remote_ver="$(http_get_stdout "$ROUTES_URL_BASE/ru.version" 2>/dev/null | tr -d '\r\n ' || true)"
+	local_ver="$(cat "$ROUTES_VER_FILE" 2>/dev/null | tr -d '\r\n ' || echo "0")"
+
+	if [ -z "$remote_ver" ]; then
+		log "routes: empty remote version"
+		return 1
+	fi
+
+	if [ "$remote_ver" = "$local_ver" ] && [ -s "$ROUTES_CIDRS_FILE" ]; then
+		log "routes: already up-to-date (v=$local_ver)"
+		return 0
+	fi
+
+	log "routes: updating local=$local_ver remote=$remote_ver"
+
+	tmp_cidrs="${ROUTES_CIDRS_FILE}.tmp"
+	tmp_sha="${ROUTES_SHA_FILE}.tmp"
+
+	rm -f "$tmp_cidrs" "$tmp_sha"
+
+	if ! http_get_to_file "$ROUTES_URL_BASE/ru.cidrs" "$tmp_cidrs" 2>/dev/null; then
+		log "routes: failed to download ru.cidrs"
+		rm -f "$tmp_cidrs" "$tmp_sha"
+		return 1
+	fi
+
+	if [ ! -s "$tmp_cidrs" ]; then
+		log "routes: downloaded ru.cidrs is empty"
+		rm -f "$tmp_cidrs" "$tmp_sha"
+		return 1
+	fi
+
+	if ! http_get_to_file "$ROUTES_URL_BASE/ru.sha256" "$tmp_sha" 2>/dev/null; then
+		log "routes: failed to download ru.sha256"
+		rm -f "$tmp_cidrs" "$tmp_sha"
+		return 1
+	fi
+
+	remote_sha="$(tr -d '\r\n ' < "$tmp_sha" 2>/dev/null)"
+	if [ -z "$remote_sha" ]; then
+		log "routes: empty remote sha256"
+		rm -f "$tmp_cidrs" "$tmp_sha"
+		return 1
+	fi
+
+	local_sha="$(calc_sha256_file "$tmp_cidrs" 2>/dev/null || true)"
+	if [ -z "$local_sha" ]; then
+		log "routes: failed to calculate local sha256"
+		rm -f "$tmp_cidrs" "$tmp_sha"
+		return 1
+	fi
+
+	if [ "$local_sha" != "$remote_sha" ]; then
+		log "routes: sha256 mismatch local=$local_sha remote=$remote_sha"
+		rm -f "$tmp_cidrs" "$tmp_sha"
+		return 1
+	fi
+
+	mv "$tmp_cidrs" "$ROUTES_CIDRS_FILE"
+	echo "$remote_sha" > "$ROUTES_SHA_FILE"
+	echo "$remote_ver" > "$ROUTES_VER_FILE"
+
+	rm -f "$tmp_sha"
+
+	log "routes: updated to version $remote_ver"
+
+	apply_routes_rules
+	return 0
+}
+
+check_routes_update() {
+	local now_ts last_ts
+
+	ensure_routes_dir
+
+	now_ts="$(date +%s)"
+	last_ts="$(cat "$ROUTES_LAST_CHECK_FILE" 2>/dev/null | tr -d '\r\n ' || echo 0)"
+
+	case "$last_ts" in
+		''|*[!0-9]*)
+			last_ts=0
+			;;
+	esac
+
+	if [ "$((now_ts - last_ts))" -lt "$ROUTES_CHECK_INTERVAL" ]; then
+		return 0
+	fi
+
+	fetch_routes_once
+	echo "$now_ts" > "$ROUTES_LAST_CHECK_FILE"
+}
+
+ensure_routes_ready() {
+	ensure_routes_dir
+
+	if [ ! -s "$ROUTES_CIDRS_FILE" ]; then
+		log "routes: local route file missing, fetching initial copy"
+		fetch_routes_once
+	fi
 }
 
 #######################################
@@ -418,6 +586,8 @@ ensure_vpn_from_subscription() {
 		log "ensure_vpn_from_subscription: proceed without confirmed default route"
 	fi
 
+	ensure_routes_ready
+
 	if ! engine_download; then
 		log "engine_download failed in ensure_vpn_from_subscription"
 		echo "engine_download_failed" >"$VERROR_FILE"
@@ -478,6 +648,7 @@ poll_subscription_loop() {
 		log "router code: $CODE (clean: $CLEAN_CODE)"
 
 		if fetch_subscription_once; then
+			ensure_routes_ready
 			ensure_vpn_from_subscription
 			return 0
 		fi
@@ -584,12 +755,13 @@ vpn_sanity_check() {
 main_loop() {
 	load_conf
 	ensure_state_dir
+	ensure_routes_dir
 
 	if ! ensure_router_code; then
 		log "initial ensure_router_code failed (router_code empty), will retry in loop"
 	fi
 
-	log "shpun-agent started (API_URL=$API_URL, ENGINE_BIN=$ENGINE_BIN, ENGINE_URL=$ENGINE_URL, MIN_UPTIME=$MIN_UPTIME, NET_FAIL_TIMEOUT=$NET_FAIL_TIMEOUT, PING_HOST=$PING_HOST)"
+	log "shpun-agent started (API_URL=$API_URL, ENGINE_BIN=$ENGINE_BIN, ENGINE_URL=$ENGINE_URL, ROUTES_URL_BASE=$ROUTES_URL_BASE, MIN_UPTIME=$MIN_UPTIME, NET_FAIL_TIMEOUT=$NET_FAIL_TIMEOUT, PING_HOST=$PING_HOST)"
 
 	NET_FAIL_SECONDS=0
 
@@ -642,6 +814,7 @@ main_loop() {
 			fi
 
 			check_subscription_alive
+			check_routes_update
 		fi
 
 		sleep "$MAIN_LOOP_SLEEP"
