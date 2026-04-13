@@ -27,10 +27,10 @@ const ROUTES_DIR      = DIR + "/routes";
 const ROUTES_MODE     = ROUTES_DIR + "/mode";
 const ROUTES_VER      = ROUTES_DIR + "/ru.version";
 const ROUTES_LASTCHK  = ROUTES_DIR + "/last_check";
-const ROUTES_CIDRS    = ROUTES_DIR + "/ru.cidrs";
+const ROUTES_CIDRS    = DIR + "/routes/ru.cidrs";
 const ROUTING_SETTER  = DIR + "/set-routing-mode.sh";
 
-/* безопасное чтение файла (без trim) */
+/* безопасное чтение файла (без trim — важно!) */
 function readfile(path) {
 	try {
 		let f = open(path, "r");
@@ -45,10 +45,26 @@ function readfile(path) {
 	}
 }
 
-/* безопасное чтение файла с trim */
-function readtrim(path) {
-	let v = readfile(path);
-	return v ? v.replace(/[\r\n]+$/g, "") : "";
+/* чтение вывода команды */
+function readcmd(cmd) {
+	try {
+		let p = popen(cmd);
+		if (!p)
+			return "";
+		let d = p.read("all");
+		p.close();
+		return d ? d : "";
+	}
+	catch (e) {
+		return "";
+	}
+}
+
+/* приведение к строке */
+function norm(v) {
+	if (v == null)
+		return "";
+	return '' + v;
 }
 
 /* проверка существования файла */
@@ -65,51 +81,30 @@ function exists(path) {
 	}
 }
 
-/* прочитать текущую версию прошивки (новые и старые файлы) */
+/* текущая версия прошивки */
 function read_fw_current() {
 	let v = "";
 
 	if (exists(FW_CUR_NEW))
-		v = readtrim(FW_CUR_NEW);
+		v = readfile(FW_CUR_NEW);
 	else if (exists(FW_CUR_MAIN))
-		v = readtrim(FW_CUR_MAIN);
+		v = readfile(FW_CUR_MAIN);
 	else if (exists(FW_CUR_OLD))
-		v = readtrim(FW_CUR_OLD);
+		v = readfile(FW_CUR_OLD);
 
 	return v || "";
 }
 
-/* прочитать последнюю известную версию прошивки */
+/* последняя версия прошивки */
 function read_fw_latest() {
 	let v = "";
 
 	if (exists(FW_LAST_NEW))
-		v = readtrim(FW_LAST_NEW);
+		v = readfile(FW_LAST_NEW);
 	else if (exists(FW_LAST_MAIN))
-		v = readtrim(FW_LAST_MAIN);
+		v = readfile(FW_LAST_MAIN);
 
 	return v || "";
-}
-
-function count_lines(path) {
-	try {
-		let data = readfile(path);
-		if (!data)
-			return 0;
-
-		let lines = data.split(/\n/);
-		let n = 0;
-
-		for (let i = 0; i < lines.length; i++) {
-			if (lines[i] != "")
-				n++;
-		}
-
-		return n;
-	}
-	catch (e) {
-		return 0;
-	}
 }
 
 return {
@@ -130,19 +125,15 @@ return {
 					let sub_raw  = readfile(SUB);
 					let err_raw  = readfile(VERROR);
 
-					let code = code_raw || "";
-					let sub  = sub_raw  || "";
-					let verr = err_raw  || "";
-
 					let fw_cur  = read_fw_current();
 					let fw_last = read_fw_latest();
 
 					let res = {
-						code: code,
-						has_sub: (sub != ""),
-						subscription_url: sub,
+						code: code_raw || "",
+						has_sub: (sub_raw != ""),
+						subscription_url: sub_raw || "",
 						vpn_ready: exists(READY),
-						vpn_error: verr
+						vpn_error: err_raw || ""
 					};
 
 					if (fw_cur != "")
@@ -163,16 +154,22 @@ return {
 		routing_get: {
 			call: function(req) {
 				try {
-					let mode = readtrim(ROUTES_MODE) || "full";
-					let ver  = readtrim(ROUTES_VER) || "0";
-					let ts   = readtrim(ROUTES_LASTCHK) || "0";
-					let cnt  = count_lines(ROUTES_CIDRS);
+					let mode = readfile(ROUTES_MODE) || "";
+					let ver  = readfile(ROUTES_VER) || "";
+					let ts   = readfile(ROUTES_LASTCHK) || "";
+					let cnt  = 0;
+
+					if (exists(ROUTES_CIDRS)) {
+						let out = readcmd("wc -l < " + ROUTES_CIDRS + " 2>/dev/null");
+						if (out != "")
+							cnt = +out;
+					}
 
 					return {
 						ok: 1,
-						mode: mode,
-						routes_version: ver,
-						last_check: ts,
+						mode: mode != "" ? mode : "full",
+						routes_version: ver != "" ? ver : "0",
+						last_check: ts != "" ? ts : "0",
 						routes_count: cnt,
 						has_routes: exists(ROUTES_CIDRS) && cnt > 0
 					};
@@ -185,21 +182,23 @@ return {
 
 		/* --- ROUTING_SET --- */
 		routing_set: {
+			args: {
+				mode: "example"
+			},
 			call: function(req) {
 				try {
 					let mode = "";
 
-					if (req && req.mode)
-						mode = req.mode;
+					if (req && req.args && req.args.mode)
+						mode = norm(req.args.mode);
 
 					if (mode != "full" && mode != "split_ru")
-						return { ok: 0, error: "invalid mode" };
+						return { ok: 0, error: "invalid mode", got: mode };
 
 					if (!exists(ROUTING_SETTER))
 						return { ok: 0, error: "set-routing-mode.sh not found" };
 
-					let cmd = ROUTING_SETTER + " " + mode + " >/dev/null 2>&1";
-					let p = popen(cmd);
+					let p = popen(ROUTING_SETTER + " " + mode + " >/dev/null 2>&1");
 					if (p) p.close();
 
 					return {
