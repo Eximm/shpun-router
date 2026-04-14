@@ -16,7 +16,7 @@ mkdir -p /etc/shpun/routes 2>/dev/null || true
 echo "$MODE" > "$MODE_FILE"
 
 if [ -x /etc/shpun/firewall-xray.sh ]; then
-	/etc/shpun/firewall-xray.sh restart || exit 1
+	/etc/shpun/firewall-xray.sh apply-mode || exit 1
 fi
 
 echo "ok"

@@ -198,12 +198,30 @@ return {
 					if (!exists(ROUTING_SETTER))
 						return { ok: 0, error: "set-routing-mode.sh not found" };
 
-					let p = popen(ROUTING_SETTER + " " + mode + " >/dev/null 2>&1");
-					if (p) p.close();
+					let p = popen(ROUTING_SETTER + " " + mode + " 2>/dev/null");
+					let out = "";
+					if (p) {
+						out = p.read("all") || "";
+						p.close();
+					}
+
+					let applied = readfile(ROUTES_MODE) || "";
+					applied = norm(applied).replace(/[\r\n]+/g, "");
+
+					if (applied != mode) {
+						return {
+							ok: 0,
+							error: "routing mode was not applied",
+							requested: mode,
+							applied: applied,
+							output: out || ""
+						};
+					}
 
 					return {
 						ok: 1,
 						mode: mode,
+						applied_mode: applied,
 						msg: "routing mode applied"
 					};
 				}

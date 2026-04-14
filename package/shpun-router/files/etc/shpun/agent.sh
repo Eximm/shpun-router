@@ -276,9 +276,9 @@ calc_sha256_file() {
 
 apply_routes_rules() {
 	if [ -x /etc/shpun/firewall-xray.sh ]; then
-		log "routes: applying firewall rules"
-		/etc/shpun/firewall-xray.sh restart 2>/dev/null || {
-			log "routes: firewall-xray.sh restart failed"
+		log "routes: rebuilding nft route set via firewall-xray.sh init"
+		/etc/shpun/firewall-xray.sh init 2>/dev/null || {
+			log "routes: firewall-xray.sh init failed"
 			return 1
 		}
 	fi
@@ -458,8 +458,15 @@ restart_vpn() {
 
 	if [ -x /etc/shpun/firewall-xray.sh ]; then
 		log "applying firewall redirect rules via firewall-xray.sh"
-		if ! /etc/shpun/firewall-xray.sh start 2>/dev/null; then
-			log "firewall-xray.sh start failed (ignored)"
+
+		if nft list table inet shpun >/dev/null 2>&1; then
+			if ! /etc/shpun/firewall-xray.sh apply-mode 2>/dev/null; then
+				log "firewall-xray.sh apply-mode failed (ignored)"
+			fi
+		else
+			if ! /etc/shpun/firewall-xray.sh init 2>/dev/null; then
+				log "firewall-xray.sh init failed (ignored)"
+			fi
 		fi
 	else
 		log "firewall-xray.sh not found or not executable, skipping firewall rules"
@@ -734,20 +741,48 @@ check_subscription_alive() {
 #######################################
 
 vpn_sanity_check() {
-	if [ -s "$VPN_READY_FILE" ]; then
-		if [ ! -x "$ENGINE_BIN" ] || [ ! -s "$ENGINE_CONFIG" ]; then
-			log "vpn_sanity_check: vpn_ready set but engine or config missing, clearing vpn_ready"
-			rm -f "$VPN_READY_FILE"
-			return
-		fi
+	local fail_count=0
+	local fail_file="/etc/shpun/vpn_sanity_fail_count"
+	local fail_limit=3
 
-		if ! pgrep -f "$ENGINE_BIN" >/dev/null 2>&1; then
-			log "vpn_sanity_check: vpn_ready set but engine not running, clearing vpn_ready"
-			rm -f "$VPN_READY_FILE"
-		fi
+	if [ ! -s "/etc/shpun/vpn_ready" ]; then
+		rm -f "$fail_file"
+		return
 	fi
-}
 
+	if [ ! -x "/tmp/xray" ] || [ ! -s "/etc/shpun/xray.json" ]; then
+		logger -t shpun-agent "vpn_sanity_check: engine or config missing → reset vpn_ready"
+		rm -f "/etc/shpun/vpn_ready"
+		rm -f "$fail_file"
+		return
+	fi
+
+	if pgrep -f "/tmp/xray" >/dev/null 2>&1; then
+		rm -f "$fail_file"
+		return
+	fi
+
+	if [ -f "$fail_file" ]; then
+		fail_count="$(cat "$fail_file" 2>/dev/null || echo 0)"
+	fi
+
+	case "$fail_count" in
+		''|*[!0-9]*) fail_count=0 ;;
+	esac
+
+	fail_count=$((fail_count + 1))
+	echo "$fail_count" > "$fail_file"
+
+	logger -t shpun-agent "vpn_sanity_check: xray not found ($fail_count/$fail_limit)"
+
+	if [ "$fail_count" -lt "$fail_limit" ]; then
+		return
+	fi
+
+	logger -t shpun-agent "vpn_sanity_check: FAIL LIMIT reached → reset vpn_ready"
+	rm -f "/etc/shpun/vpn_ready"
+	rm -f "$fail_file"
+}
 #######################################
 # Main loop
 #######################################

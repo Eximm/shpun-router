@@ -23,6 +23,7 @@ var callShpunRoutingGet = rpc.declare({
 var callShpunRoutingSet = rpc.declare({
 	object: 'shpun',
 	method: 'routing_set',
+	params: [ 'mode' ],
 	expect: { '': {} }
 });
 
@@ -583,6 +584,7 @@ return view.extend({
 	render: function(state) {
 		state = state || {};
 		this._state = state;
+		var view = this;
 
 		var code = (state.code || '').trim();
 		var hasSub = !!state.has_sub;
@@ -700,14 +702,18 @@ return view.extend({
 									'class': 'shpun-btn ' + (routingMode === 'full'
 										? 'shpun-btn--primary is-active'
 										: 'shpun-btn--ghost'),
-									'click': ui.createHandlerFn(this, 'handleSetRoutingMode', 'full')
+									'click': function(ev) {
+										return view.handleSetRoutingMode(ev, 'full');
+									}
 								}, 'Весь трафик через VPN'),
 
 								E('button', {
 									'class': 'shpun-btn ' + (routingMode === 'split_ru'
 										? 'shpun-btn--primary is-active'
 										: 'shpun-btn--ghost'),
-									'click': ui.createHandlerFn(this, 'handleSetRoutingMode', 'split_ru')
+									'click': function(ev) {
+										return view.handleSetRoutingMode(ev, 'split_ru');
+									}
 								}, 'РФ напрямую, остальное через VPN')
 							])
 						]),
@@ -848,8 +854,10 @@ return view.extend({
 	},
 
 	handleSetRoutingMode: function(ev, mode) {
-		if (ev)
+		if (ev) {
 			ev.preventDefault();
+			ev.stopPropagation();
+		}
 
 		var view = this;
 		var targetMode = String(mode || '').trim();
@@ -863,19 +871,13 @@ return view.extend({
 			'info'
 		);
 
-		return callShpunRoutingSet({ mode: targetMode }).then(function(res) {
-			res = res || {};
+		var wait = function(ms) {
+			return new Promise(function(resolve) {
+				window.setTimeout(resolve, ms);
+			});
+		};
 
-			if (!res.ok) {
-				ui.addNotification(
-					null,
-					E('p', {}, 'Не удалось применить режим маршрутизации: ' +
-						(res.error ? String(res.error) : 'неизвестная ошибка')),
-					'error'
-				);
-				return;
-			}
-
+		var refreshAndCheck = function() {
 			return Promise.all([
 				callShpunState(),
 				callShpunRoutingGet()
@@ -885,19 +887,49 @@ return view.extend({
 
 				rerenderView(view, st);
 
+				var actualMode = String((st.routing && st.routing.mode) || '').trim();
+
+				if (actualMode === targetMode) {
+					ui.addNotification(
+						null,
+						E('p', {}, 'Режим маршрутизации обновлён.'),
+						'info'
+					);
+					return true;
+				}
+
 				ui.addNotification(
 					null,
-					E('p', {}, 'Режим маршрутизации обновлён.'),
-					'info'
+					E('p', {}, 'Не удалось применить режим маршрутизации. Текущий режим: ' + (actualMode || 'неизвестно')),
+					'error'
 				);
+				return false;
+			}).catch(function(err) {
+				ui.addNotification(
+					null,
+					E('p', {}, 'Ошибка при обновлении состояния: ' + String(err)),
+					'error'
+				);
+				return false;
 			});
-		}).catch(function(err) {
-			ui.addNotification(
-				null,
-				E('p', {}, 'Ошибка при смене режима маршрутизации: ' + String(err)),
-				'error'
-			);
-		});
+		};
+
+		return Promise.resolve()
+			.then(function() {
+				// ВАЖНО: вызываем как раньше (рабочий вариант)
+				return callShpunRoutingSet(targetMode);
+			})
+			.catch(function() {
+				return null;
+			})
+			.then(function() {
+				// даём системе примениться
+				return wait(1500);
+			})
+			.then(function() {
+				// проверяем реальное состояние
+				return refreshAndCheck();
+			});
 	},
 
 	handleUpdateFirmware: function(ev) {
