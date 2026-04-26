@@ -5,7 +5,6 @@ SUB_FILE="/etc/shpun/subscription.json"
 OUT_CFG="/etc/shpun/xray.json"
 CONF="/etc/shpun/agent.conf"
 
-# Подхватываем опции (в т.ч. REDIR_PORT)
 [ -f "$CONF" ] && . "$CONF"
 
 [ -f "$SUB_FILE" ] || {
@@ -112,7 +111,6 @@ b64_url_decode() {
 # 1. Определяем тип профиля (ROUTER_PROTO)
 # ==========================
 
-# Источник истины для роутера — первый линк links[0]
 LINK="$(jsonfilter -i "$SUB_FILE" -e '@.subscription.links[0]' 2>/dev/null)"
 
 [ -n "$LINK" ] || {
@@ -120,33 +118,26 @@ LINK="$(jsonfilter -i "$SUB_FILE" -e '@.subscription.links[0]' 2>/dev/null)"
     exit 1
 }
 
-# убираем кавычки, если jsonfilter вернул с ними
 LINK="${LINK%\"}"
 LINK="${LINK#\"}"
 
-# Явный тип из JSON читаем только для диагностики
 JSON_PROTO="$(jsonfilter -i "$SUB_FILE" -e '@.router_profile.proto' 2>/dev/null)"
 
-# Реальный протокол определяем по схеме links[0]
 case "$LINK" in
-    ss://*)
-        ROUTER_PROTO="ss"
-        ;;
-    vless://*)
-        ROUTER_PROTO="vless"
-        ;;
-    *)
-        ROUTER_PROTO="unknown"
-        ;;
+    ss://*)    ROUTER_PROTO="ss" ;;
+    vless://*) ROUTER_PROTO="vless" ;;
+    *)         ROUTER_PROTO="unknown" ;;
 esac
 
 if [ -n "$JSON_PROTO" ] && [ "$JSON_PROTO" != "$ROUTER_PROTO" ]; then
     logger -t shpun-build "router_profile.proto mismatch: json='$JSON_PROTO', link_scheme='$ROUTER_PROTO' — using link_scheme"
 fi
 
-logger -t shpun-build "router profile proto=$ROUTER_PROTO, link_scheme=$(printf '%s' "$LINK" | cut -d: -f1)"
+logger -t shpun-build "router profile proto=$ROUTER_PROTO"
 
 REDIR_PORT="${REDIR_PORT:-12345}"
+TPROXY_PORT="${TPROXY_PORT:-12346}"
+TPROXY_MARK="${TPROXY_MARK:-233}"
 
 # ==========================
 # 2. Ветвление по типу профиля
@@ -155,17 +146,11 @@ REDIR_PORT="${REDIR_PORT:-12345}"
 case "$ROUTER_PROTO" in
     ss)
         # -------- Shadowsocks-профиль --------
-        # Поддерживаем оба формата:
-        # 1) ss://BASE64(method:password)@host:port#NAME
-        # 2) ss://BASE64(method:password@host:port)#NAME
-
         LINK_NO_PROTO="${LINK#ss://}"
-
         METHOD=""
         PASSWORD=""
         SERVER=""
         PORT=""
-
         BASE_PART="${LINK_NO_PROTO%%[\?#]*}"
 
         if echo "$BASE_PART" | grep -q '@'; then
@@ -185,7 +170,6 @@ case "$ROUTER_PROTO" in
                 logger -t shpun-build "Failed to base64-decode ss link payload (old style)"
                 exit 1
             }
-
             USERINFO_HOSTPORT="$DECODED_LINK"
             CRED="${USERINFO_HOSTPORT%%@*}"
             HOSTPORT="${USERINFO_HOSTPORT#*@}"
@@ -197,7 +181,7 @@ case "$ROUTER_PROTO" in
         PORT="${HOSTPORT##*:}"
 
         if [ -z "$METHOD" ] || [ -z "$PASSWORD" ] || [ -z "$SERVER" ] || [ -z "$PORT" ]; then
-            logger -t shpun-build "Invalid SS link: method='$METHOD' password_len=${#PASSWORD} server='$SERVER' port='$PORT'"
+            logger -t shpun-build "Invalid SS link: method='$METHOD' server='$SERVER' port='$PORT'"
             exit 1
         fi
 
@@ -241,6 +225,24 @@ case "$ROUTER_PROTO" in
         "enabled": true,
         "destOverride": ["http", "tls"]
       }
+    },
+    {
+      "tag": "tproxy-in",
+      "listen": "0.0.0.0",
+      "port": $TPROXY_PORT,
+      "protocol": "dokodemo-door",
+      "settings": {
+        "network": "udp",
+        "followRedirect": true
+      },
+      "streamSettings": {
+        "sockopt": {
+          "tproxy": "tproxy"
+        }
+      },
+      "sniffing": {
+        "enabled": false
+      }
     }
   ],
 
@@ -255,7 +257,7 @@ case "$ROUTER_PROTO" in
             "port": $PORT,
             "method": "$METHOD",
             "password": "$PASSWORD",
-            "udp": false
+            "udp": true
           }
         ]
       }
@@ -287,31 +289,31 @@ case "$ROUTER_PROTO" in
         "type": "field",
         "network": "tcp",
         "outboundTag": "proxy"
+      },
+      {
+        "type": "field",
+        "network": "udp",
+        "outboundTag": "proxy"
       }
     ]
   }
 }
 EOF
 
-        logger -t shpun-build "xray config built (Shadowsocks, SOCKS+REDIR, server=$SERVER:$PORT, method=$METHOD, redir_port=$REDIR_PORT)"
+        logger -t shpun-build "xray config built (Shadowsocks, TCP+UDP, server=$SERVER:$PORT, method=$METHOD, redir=$REDIR_PORT, tproxy=$TPROXY_PORT)"
         exit 0
         ;;
 
     vless)
         # -------- VLESS / Reality --------
-
         LINK_NO_PROTO="${LINK#vless://}"
-
-        # Отрезаем fragment (#NAME), если есть
         LINK_NO_FRAGMENT="${LINK_NO_PROTO%%#*}"
-
         USER_HOST="${LINK_NO_FRAGMENT%%\?*}"
         PARAMS=""
         [ "$LINK_NO_FRAGMENT" != "$USER_HOST" ] && PARAMS="${LINK_NO_FRAGMENT#*\?}"
 
         UUID="${USER_HOST%%@*}"
         HOSTPORT="${USER_HOST#*@}"
-
         SERVER="${HOSTPORT%%:*}"
         PORT="${HOSTPORT##*:}"
 
@@ -337,10 +339,10 @@ EOF
         ENCRYPTION="$(url_decode "$(get_param encryption)")"
         HEADER_TYPE="$(url_decode "$(get_param headerType)")"
 
-        [ -z "$TYPE" ] && TYPE="tcp"
-        [ -z "$FP" ] && FP="chrome"
+        [ -z "$TYPE" ]       && TYPE="tcp"
+        [ -z "$FP" ]         && FP="chrome"
         [ -z "$ENCRYPTION" ] && ENCRYPTION="none"
-        [ -z "$SNI" ] && SNI="$HOST"
+        [ -z "$SNI" ]        && SNI="$HOST"
 
         if [ -z "$UUID" ] || [ -z "$SERVER" ] || [ -z "$PORT" ]; then
             logger -t shpun-build "Invalid VLESS link (uuid/server/port missing)"
@@ -373,11 +375,10 @@ EOF
         fi
 
         if [ "$SECURITY" = "reality" ]; then
-            if [ -z "$PBK" ]; then
+            [ -z "$PBK" ] && {
                 logger -t shpun-build "VLESS reality link missing pbk"
                 exit 1
-            fi
-
+            }
             STREAM_SETTINGS=$(cat <<EOF
       "streamSettings": {
         "network": "$TYPE",
@@ -451,6 +452,24 @@ EOF
         "enabled": true,
         "destOverride": ["http", "tls"]
       }
+    },
+    {
+      "tag": "tproxy-in",
+      "listen": "0.0.0.0",
+      "port": $TPROXY_PORT,
+      "protocol": "dokodemo-door",
+      "settings": {
+        "network": "udp",
+        "followRedirect": true
+      },
+      "streamSettings": {
+        "sockopt": {
+          "tproxy": "tproxy"
+        }
+      },
+      "sniffing": {
+        "enabled": false
+      }
     }
   ],
 
@@ -501,13 +520,18 @@ $STREAM_SETTINGS
         "type": "field",
         "network": "tcp",
         "outboundTag": "proxy"
+      },
+      {
+        "type": "field",
+        "network": "udp",
+        "outboundTag": "proxy"
       }
     ]
   }
 }
 EOF
 
-        logger -t shpun-build "xray config built (VLESS, server=$SERVER:$PORT, security=${SECURITY:-none}, network=$TYPE, sni=${SNI:-none}, redir_port=$REDIR_PORT)"
+        logger -t shpun-build "xray config built (VLESS, TCP+UDP, server=$SERVER:$PORT, security=${SECURITY:-none}, redir=$REDIR_PORT, tproxy=$TPROXY_PORT)"
         exit 0
         ;;
 

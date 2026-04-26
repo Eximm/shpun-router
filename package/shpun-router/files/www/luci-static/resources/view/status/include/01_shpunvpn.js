@@ -51,6 +51,19 @@ var callShpunResetVpn = rpc.declare({
 	expect: { '': {} }
 });
 
+var callShpunCustomRoutesGet = rpc.declare({
+	object: 'shpun',
+	method: 'custom_routes_get',
+	expect: { '': {} }
+});
+
+var callShpunCustomRoutesSet = rpc.declare({
+	object: 'shpun',
+	method: 'custom_routes_set',
+	params: [ 'vpn', 'direct' ],
+	expect: { '': {} }
+});
+
 /* ============================================================
  *  Styles
  * ========================================================== */
@@ -435,6 +448,160 @@ function injectStyles() {
 		+ '.shpun-btn--danger:hover{background:rgba(122,29,42,.50);}'
 		+ '.shpun-btn.is-active{background:linear-gradient(135deg, rgba(79,70,229,.90), rgba(99,102,241,.82));border-color:rgba(140,130,255,.28);color:#ffffff;box-shadow:0 8px 18px rgba(76,70,180,.18);}'
 
+		/* ── Кастомные маршруты ── */
+		+ '.shpun-custom-box{'
+		+ '  padding:13px 14px;'
+		+ '  border-radius:16px;'
+		+ '  background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));'
+		+ '  border:1px solid rgba(120,140,180,.14);'
+		+ '  box-shadow:inset 0 1px 0 rgba(255,255,255,.025);'
+		+ '}'
+
+		+ '.shpun-custom-head{'
+		+ '  display:flex;'
+		+ '  justify-content:space-between;'
+		+ '  align-items:flex-start;'
+		+ '  gap:12px;'
+		+ '  margin-bottom:12px;'
+		+ '}'
+
+		+ '.shpun-custom-title{'
+		+ '  font-size:13px;'
+		+ '  font-weight:800;'
+		+ '  color:#ffffff;'
+		+ '}'
+
+		+ '.shpun-custom-sub{'
+		+ '  font-size:11px;'
+		+ '  line-height:1.45;'
+		+ '  color:#9fb0c8;'
+		+ '  margin-top:2px;'
+		+ '}'
+
+		+ '.shpun-custom-cols{'
+		+ '  display:grid;'
+		+ '  grid-template-columns:repeat(2, minmax(0,1fr));'
+		+ '  gap:12px;'
+		+ '  margin-bottom:10px;'
+		+ '}'
+
+		+ '.shpun-custom-col-label{'
+		+ '  font-size:11px;'
+		+ '  font-weight:700;'
+		+ '  letter-spacing:.03em;'
+		+ '  margin-bottom:6px;'
+		+ '}'
+
+		+ '.shpun-custom-col-label--vpn{ color:#a5b4fc; }'
+		+ '.shpun-custom-col-label--direct{ color:#6ee7b7; }'
+
+		+ '.shpun-custom-list{'
+		+ '  min-height:72px;'
+		+ '  max-height:160px;'
+		+ '  overflow-y:auto;'
+		+ '  margin-bottom:6px;'
+		+ '  display:flex;'
+		+ '  flex-direction:column;'
+		+ '  gap:4px;'
+		+ '}'
+
+		+ '.shpun-custom-empty{'
+		+ '  font-size:11px;'
+		+ '  color:#4a5568;'
+		+ '  font-style:italic;'
+		+ '  padding:4px 0;'
+		+ '}'
+
+		+ '.shpun-custom-tag{'
+		+ '  display:flex;'
+		+ '  align-items:center;'
+		+ '  gap:6px;'
+		+ '  padding:4px 8px;'
+		+ '  border-radius:8px;'
+		+ '  font-size:12px;'
+		+ '  font-family:monospace;'
+		+ '  font-weight:600;'
+		+ '}'
+
+		+ '.shpun-custom-tag--vpn{'
+		+ '  background:rgba(99,102,241,.14);'
+		+ '  color:#c7d2fe;'
+		+ '  border:1px solid rgba(99,102,241,.22);'
+		+ '}'
+
+		+ '.shpun-custom-tag--direct{'
+		+ '  background:rgba(16,185,129,.12);'
+		+ '  color:#a7f3d0;'
+		+ '  border:1px solid rgba(16,185,129,.20);'
+		+ '}'
+
+		+ '.shpun-custom-tag-del{'
+		+ '  margin-left:auto;'
+		+ '  cursor:pointer;'
+		+ '  opacity:.5;'
+		+ '  font-size:14px;'
+		+ '  line-height:1;'
+		+ '  flex:0 0 auto;'
+		+ '  background:none;'
+		+ '  border:none;'
+		+ '  color:inherit;'
+		+ '  padding:0 2px;'
+		+ '}'
+
+		+ '.shpun-custom-tag-del:hover{ opacity:1; }'
+
+		+ '.shpun-custom-input-row{'
+		+ '  display:flex;'
+		+ '  gap:6px;'
+		+ '  align-items:center;'
+		+ '}'
+
+		+ '.shpun-custom-input{'
+		+ '  flex:1 1 auto;'
+		+ '  min-width:0;'
+		+ '  padding:7px 10px;'
+		+ '  border-radius:10px;'
+		+ '  border:1px solid rgba(120,140,180,.22);'
+		+ '  background:rgba(8,16,32,.60);'
+		+ '  color:#e2e8f0;'
+		+ '  font-size:12px;'
+		+ '  font-family:monospace;'
+		+ '  outline:none;'
+		+ '}'
+
+		+ '.shpun-custom-input:focus{'
+		+ '  border-color:rgba(140,130,255,.40);'
+		+ '  background:rgba(12,22,44,.80);'
+		+ '}'
+
+		+ '.shpun-custom-input::placeholder{ color:#4a5568; }'
+
+		+ '.shpun-custom-add-btn{'
+		+ '  flex:0 0 auto;'
+		+ '  padding:7px 14px;'
+		+ '  border-radius:10px;'
+		+ '  border:1px solid rgba(120,140,180,.22);'
+		+ '  background:rgba(14,23,38,.78);'
+		+ '  color:#e6edf8;'
+		+ '  font-size:12px;'
+		+ '  font-weight:700;'
+		+ '  cursor:pointer;'
+		+ '  white-space:nowrap;'
+		+ '  transition:all .14s ease;'
+		+ '}'
+
+		+ '.shpun-custom-add-btn:hover{'
+		+ '  background:rgba(25,35,54,.96);'
+		+ '  border-color:rgba(140,160,200,.34);'
+		+ '}'
+
+		+ '.shpun-custom-footer{'
+		+ '  display:flex;'
+		+ '  justify-content:flex-end;'
+		+ '  gap:8px;'
+		+ '  margin-top:4px;'
+		+ '}'
+
 		+ '@media (max-width: 980px){'
 		+ '  .shpun-card-main{grid-template-columns:1fr;}'
 		+ '  .shpun-fields-grid{grid-template-columns:repeat(2, minmax(0,1fr));}'
@@ -452,6 +619,7 @@ function injectStyles() {
 		+ '  .shpun-fields-grid{grid-template-columns:1fr;}'
 		+ '  .shpun-routing-actions{grid-template-columns:1fr;}'
 		+ '  .shpun-actions{grid-template-columns:1fr;}'
+		+ '  .shpun-custom-cols{grid-template-columns:1fr;}'
 		+ '  .shpun-btn{font-size:12px;}'
 		+ '}';
 
@@ -475,17 +643,12 @@ function compareVersions(a, b) {
 	var pa = String(a || '').trim().split('.');
 	var pb = String(b || '').trim().split('.');
 	var len = Math.max(pa.length, pb.length, 3);
-
 	for (var i = 0; i < len; i++) {
 		var av = normalizeVersionPart(pa[i]);
 		var bv = normalizeVersionPart(pb[i]);
-
-		if (av < bv)
-			return -1;
-		if (av > bv)
-			return 1;
+		if (av < bv) return -1;
+		if (av > bv) return 1;
 	}
-
 	return 0;
 }
 
@@ -494,30 +657,24 @@ function buildStatusBadge(state) {
 	var hasSub  = !!state.has_sub;
 	var ready   = !!state.vpn_ready;
 	var err     = (state.vpn_error || '').trim();
-
 	var cls, text;
 
 	if (err) {
 		cls = 'shpun-badge shpun-badge--err';
 		text = 'Ошибка подключения';
-	}
-	else if (!hasCode) {
+	} else if (!hasCode) {
 		cls = 'shpun-badge shpun-badge--off';
 		text = 'Подготовка';
-	}
-	else if (hasCode && !hasSub) {
+	} else if (hasCode && !hasSub) {
 		cls = 'shpun-badge shpun-badge--warn';
 		text = 'Ожидает привязки';
-	}
-	else if (hasCode && hasSub && !ready) {
+	} else if (hasCode && hasSub && !ready) {
 		cls = 'shpun-badge shpun-badge--warn';
 		text = 'Подключаемся';
-	}
-	else if (hasCode && hasSub && ready) {
+	} else if (hasCode && hasSub && ready) {
 		cls = 'shpun-badge shpun-badge--ok';
 		text = 'VPN подключен';
-	}
-	else {
+	} else {
 		cls = 'shpun-badge shpun-badge--off';
 		text = 'Ожидание';
 	}
@@ -529,13 +686,10 @@ function buildStatusBadge(state) {
 }
 
 function hideLuCIHeader(rootNode) {
-	if (!rootNode)
-		return;
-
+	if (!rootNode) return;
 	var prev = rootNode.previousSibling;
 	while (prev) {
-		if (prev.style !== undefined)
-			prev.style.display = 'none';
+		if (prev.style !== undefined) prev.style.display = 'none';
 		prev = prev.previousSibling;
 	}
 }
@@ -543,10 +697,8 @@ function hideLuCIHeader(rootNode) {
 function rerenderView(view, state) {
 	state = state || {};
 	view._state = state;
-
 	var root = view.render(state);
 	var container = view.container;
-
 	if (container && container.parentNode) {
 		container.parentNode.replaceChild(root, container);
 		view.container = root;
@@ -555,12 +707,199 @@ function rerenderView(view, state) {
 }
 
 function getRoutingModeLabel(mode) {
-	mode = String(mode || 'full').trim();
+	return String(mode || 'full').trim() === 'split_ru'
+		? 'РФ напрямую, остальное через VPN'
+		: 'Весь трафик через VPN';
+}
 
-	if (mode === 'split_ru')
-		return 'РФ напрямую, остальное через VPN';
+/* Валидация IP/CIDR на клиенте */
+function validateIpCidr(entry) {
+	entry = entry.trim();
+	if (!entry) return false;
 
-	return 'Весь трафик через VPN';
+	var ip, prefix;
+	var slashIdx = entry.indexOf('/');
+
+	if (slashIdx >= 0) {
+		ip = entry.slice(0, slashIdx);
+		prefix = parseInt(entry.slice(slashIdx + 1), 10);
+		if (isNaN(prefix) || prefix < 0 || prefix > 32) return false;
+	} else {
+		ip = entry;
+		prefix = 32;
+	}
+
+	var parts = ip.split('.');
+	if (parts.length !== 4) return false;
+
+	for (var i = 0; i < 4; i++) {
+		var octet = parseInt(parts[i], 10);
+		if (isNaN(octet) || octet < 0 || octet > 255) return false;
+		if (String(octet) !== parts[i]) return false;
+	}
+
+	return true;
+}
+
+/* ============================================================
+ *  Custom routes UI builder
+ * ========================================================== */
+
+function buildCustomRoutesSection(view) {
+	var custom = view._customRoutes || { vpn: [], direct: [] };
+	var vpnList    = custom.vpn    ? custom.vpn.slice()    : [];
+	var directList = custom.direct ? custom.direct.slice() : [];
+
+	/* --- Рендер тегов одного списка --- */
+	function renderTags(list, cls, onDelete) {
+		if (!list.length)
+			return [ E('div', { 'class': 'shpun-custom-empty' }, 'Пусто') ];
+
+		return list.map(function(entry, idx) {
+			return E('div', { 'class': 'shpun-custom-tag shpun-custom-tag--' + cls }, [
+				E('span', {}, entry),
+				E('button', {
+					'class': 'shpun-custom-tag-del',
+					'title': 'Удалить',
+					'click': function(ev) {
+						ev.preventDefault();
+						onDelete(idx);
+					}
+				}, '×')
+			]);
+		});
+	}
+
+	/* --- Колонка --- */
+	function buildCol(cls, label, list, placeholder, onDelete, inputId) {
+		var listWrap = E('div', { 'class': 'shpun-custom-list', 'id': 'shpun-list-' + cls });
+		var tags = renderTags(list, cls, onDelete);
+		tags.forEach(function(t) { listWrap.appendChild(t); });
+
+		var input = E('input', {
+			'class': 'shpun-custom-input',
+			'id': inputId,
+			'type': 'text',
+			'placeholder': placeholder,
+			'autocomplete': 'off',
+			'spellcheck': 'false'
+		});
+
+		var addBtn = E('button', {
+			'class': 'shpun-custom-add-btn',
+			'click': function(ev) {
+				ev.preventDefault();
+				var val = input.value.trim();
+				if (!val) return;
+
+				if (!validateIpCidr(val)) {
+					ui.addNotification(null, E('p', {}, [
+						'Неверный формат: ',
+						E('code', {}, val),
+						'. Допустимы только IPv4-адреса и CIDR (например: 1.2.3.4 или 10.0.0.0/8)'
+					]), 'error');
+					return;
+				}
+
+				// Проверяем дубликаты в обоих списках
+				if (vpnList.indexOf(val) >= 0 || directList.indexOf(val) >= 0) {
+					ui.addNotification(null, E('p', {}, 'Адрес ' + val + ' уже добавлен.'), 'warning');
+					return;
+				}
+
+				list.push(val);
+				input.value = '';
+				rebuildSection();
+			}
+		}, 'Добавить');
+
+		// Enter в поле ввода
+		input.addEventListener('keydown', function(ev) {
+			if (ev.key === 'Enter') {
+				ev.preventDefault();
+				addBtn.click();
+			}
+		});
+
+		return E('div', {}, [
+			E('div', { 'class': 'shpun-custom-col-label shpun-custom-col-label--' + cls }, label),
+			listWrap,
+			E('div', { 'class': 'shpun-custom-input-row' }, [ input, addBtn ])
+		]);
+	}
+
+	var sectionWrap = E('div', { 'id': 'shpun-custom-section' });
+
+	function rebuildSection() {
+		var newSection = buildCustomRoutesSection(view);
+		var old = document.getElementById('shpun-custom-section');
+		if (old && old.parentNode)
+			old.parentNode.replaceChild(newSection, old);
+	}
+
+	var vpnCol = buildCol(
+		'vpn',
+		'Принудительно через VPN',
+		vpnList,
+		'1.2.3.4 или 10.0.0.0/8',
+		function(idx) { vpnList.splice(idx, 1); rebuildSection(); },
+		'shpun-input-vpn'
+	);
+
+	var directCol = buildCol(
+		'direct',
+		'Принудительно напрямую',
+		directList,
+		'1.2.3.4 или 10.0.0.0/8',
+		function(idx) { directList.splice(idx, 1); rebuildSection(); },
+		'shpun-input-direct'
+	);
+
+	var saveBtn = E('button', {
+		'class': 'shpun-btn shpun-btn--primary',
+		'style': 'min-width:140px; min-height:36px; padding:7px 18px; font-size:12px; border-radius:10px;',
+		'click': function(ev) {
+			ev.preventDefault();
+
+			// Берём актуальные списки из view
+			var cr = view._customRoutes || { vpn: [], direct: [] };
+
+			callShpunCustomRoutesSet(cr.vpn, cr.direct).then(function(res) {
+				res = res || {};
+				if (res.ok) {
+					var msg = 'Маршруты сохранены: ' + res.vpn_count + ' через VPN, ' + res.direct_count + ' напрямую.';
+					if (res.warning) msg += ' Предупреждение: ' + res.warning;
+					ui.addNotification(null, E('p', {}, msg), 'info');
+				} else {
+					var errText = 'Не удалось сохранить маршруты: ' + (res.error || 'неизвестная ошибка');
+					if (res.errors && res.errors.length)
+						errText += '. Невалидные записи: ' + res.errors.join(', ');
+					ui.addNotification(null, E('p', {}, errText), 'error');
+				}
+			}).catch(function(err) {
+				ui.addNotification(null, E('p', {}, 'Ошибка при сохранении маршрутов: ' + String(err)), 'error');
+			});
+
+			// Сохраняем в view для следующего рендера
+			view._customRoutes = { vpn: vpnList.slice(), direct: directList.slice() };
+		}
+	}, 'Сохранить маршруты');
+
+	var section = E('div', { 'class': 'shpun-custom-box' }, [
+		E('div', { 'class': 'shpun-custom-head' }, [
+			E('div', {}, [
+				E('div', { 'class': 'shpun-custom-title' }, 'Дополнительные маршруты'),
+				E('div', { 'class': 'shpun-custom-sub' },
+					'Укажите IP-адреса или подсети (CIDR). Работает поверх основного режима и split_ru.'
+				)
+			])
+		]),
+		E('div', { 'class': 'shpun-custom-cols' }, [ vpnCol, directCol ]),
+		E('div', { 'class': 'shpun-custom-footer' }, [ saveBtn ])
+	]);
+
+	sectionWrap.appendChild(section);
+	return sectionWrap;
 }
 
 /* ============================================================
@@ -573,10 +912,12 @@ return view.extend({
 
 		return Promise.all([
 			callShpunState(),
-			callShpunRoutingGet()
+			callShpunRoutingGet(),
+			callShpunCustomRoutesGet()
 		]).then(function(res) {
 			var st = res[0] || {};
 			st.routing = res[1] || {};
+			st.customRoutes = res[2] || { vpn: [], direct: [] };
 			return st;
 		});
 	},
@@ -586,25 +927,31 @@ return view.extend({
 		this._state = state;
 		var view = this;
 
-		var code = (state.code || '').trim();
-		var hasSub = !!state.has_sub;
-		var vpnReady = !!state.vpn_ready;
-		var err = (state.vpn_error || '').trim();
+		// Сохраняем кастомные маршруты в view (чтобы не затирать при poll)
+		if (state.customRoutes)
+			this._customRoutes = state.customRoutes;
+		if (!this._customRoutes)
+			this._customRoutes = { vpn: [], direct: [] };
 
-		var routing = state.routing || {};
-		var routingMode = String(routing.mode || 'full').trim();
+		var code     = (state.code || '').trim();
+		var hasSub   = !!state.has_sub;
+		var vpnReady = !!state.vpn_ready;
+		var err      = (state.vpn_error || '').trim();
+
+		var routing      = state.routing || {};
+		var routingMode  = String(routing.mode || 'full').trim();
 		var routingLabel = getRoutingModeLabel(routingMode);
 		var routesVersion = String(routing.routes_version || '0').trim();
-		var routesCount = routing.routes_count || 0;
+		var routesCount  = routing.routes_count || 0;
 
-		var fwCurrentRaw = (state.fw_current || '').trim();
+		var fwCurrentRaw     = (state.fw_current || '').trim();
 		var fwCurrentDisplay = fwCurrentRaw || '—';
-		var fwLatest = (state.fw_latest || '').trim();
+		var fwLatest         = (state.fw_latest || '').trim();
 		var hasNewFw = !!(fwLatest && fwCurrentRaw && compareVersions(fwCurrentRaw, fwLatest) < 0);
 
 		var appLink = 'https://app.sdnonline.online';
 		var botLink = 'https://t.me/shpunvpn_bot';
-		var qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=' + encodeURIComponent(appLink);
+		var qrUrl   = 'https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=' + encodeURIComponent(appLink);
 
 		var codeNode = E('span', {
 			'class': code ? 'shpun-code shpun-code-copy' : 'shpun-code',
@@ -617,25 +964,22 @@ return view.extend({
 				fwCurrentDisplay,
 				E('span', { 'class': 'shpun-fw-badge' }, 'доступна ' + fwLatest)
 			]);
-		}
-		else {
+		} else {
 			fwValue = fwCurrentDisplay;
 		}
 
-		var updateBtnLabel = hasNewFw
-			? ('Установить ' + fwLatest)
-			: 'Проверить обновление';
+		var updateBtnLabel = hasNewFw ? ('Установить ' + fwLatest) : 'Проверить обновление';
 
 		var hintText =
 			!code
 				? 'Роутер готовится к подключению. После генерации кода откройте ShpunApp и оформите услугу для роутера.'
 				: !hasSub
-					? 'Откройте ShpunApp, закажите или активируйте услугу для роутера и выполните привязку по этому коду. После этого роутер автоматически получит конфигурацию.'
+					? 'Откройте ShpunApp, закажите или активируйте услугу для роутера и выполните привязку по этому коду.'
 					: !vpnReady
 						? (err
 							? 'Привязка найдена, но подключение завершилось ошибкой: ' + err
-							: 'Привязка найдена. Роутер получает актуальную конфигурацию и поднимает VPN. Обычно это занимает до минуты.')
-						: 'Роутер подключен к Shpun SDN System. Для смены сервера, обновления подключения, управления услугой и привязкой используйте ShpunApp.';
+							: 'Привязка найдена. Роутер получает конфигурацию и поднимает VPN. Обычно до минуты.')
+						: 'Роутер подключен к Shpun SDN System. Для смены сервера и управления услугой используйте ShpunApp.';
 
 		return E('div', { 'class': 'shpun-widget-card' }, [
 			E('div', { 'class': 'shpun-widget-inner' }, [
@@ -696,7 +1040,6 @@ return view.extend({
 									E('div', {}, 'Маршруты: v' + routesVersion + ' · ' + routesCount + ' CIDR')
 								])
 							]),
-
 							E('div', { 'class': 'shpun-routing-actions' }, [
 								E('button', {
 									'class': 'shpun-btn ' + (routingMode === 'full'
@@ -706,7 +1049,6 @@ return view.extend({
 										return view.handleSetRoutingMode(ev, 'full');
 									}
 								}, 'Весь трафик через VPN'),
-
 								E('button', {
 									'class': 'shpun-btn ' + (routingMode === 'split_ru'
 										? 'shpun-btn--primary is-active'
@@ -718,22 +1060,22 @@ return view.extend({
 							])
 						]),
 
+						// ── Кастомные маршруты ──
+						buildCustomRoutesSection(view),
+
 						E('div', { 'class': 'shpun-actions' }, [
 							E('button', {
 								'class': 'shpun-btn shpun-btn--ghost',
 								'click': ui.createHandlerFn(this, 'handleRefresh')
 							}, 'Обновить статус'),
-
 							E('button', {
 								'class': 'shpun-btn shpun-btn--ghost',
 								'click': ui.createHandlerFn(this, 'handleUpdateFirmware')
 							}, updateBtnLabel),
-
 							E('button', {
 								'class': 'shpun-btn shpun-btn--primary',
 								'click': ui.createHandlerFn(this, 'handleRefreshConnection')
 							}, 'Обновить подключение'),
-
 							E('button', {
 								'class': 'shpun-btn shpun-btn--danger',
 								'click': ui.createHandlerFn(this, 'handleResetVpn')
@@ -745,7 +1087,6 @@ return view.extend({
 						E('div', { 'class': 'shpun-side-card' }, [
 							E('div', { 'class': 'shpun-side-title' }, 'Управление через ShpunApp'),
 							E('div', { 'class': 'shpun-side-url' }, 'app.sdnonline.online'),
-
 							E('a', {
 								'class': 'shpun-qr-link',
 								'href': appLink,
@@ -758,13 +1099,10 @@ return view.extend({
 									'alt': 'QR-код для открытия ShpunApp'
 								})
 							]),
-
 							E('div', { 'class': 'shpun-qr-caption' },
 								'Сканируйте QR-код, чтобы открыть ShpunApp на телефоне'
 							),
-
 							E('div', { 'class': 'shpun-side-flex-spacer' }),
-
 							E('div', { 'class': 'shpun-side-actions' }, [
 								E('a', {
 									'class': 'shpun-btn shpun-btn--primary',
@@ -772,7 +1110,6 @@ return view.extend({
 									'target': '_blank',
 									'rel': 'noreferrer'
 								}, 'Открыть ShpunApp'),
-
 								E('a', {
 									'class': 'shpun-btn shpun-btn--ghost',
 									'href': botLink,
@@ -788,320 +1125,169 @@ return view.extend({
 	},
 
 	handleCopyCode: function(ev, code) {
-		if (ev) {
-			ev.preventDefault();
-			ev.stopPropagation();
-		}
-		if (!code)
-			return;
-
+		if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+		if (!code) return;
 		var text = String(code).trim();
-
-		var notifyOk = function() {
-			ui.addNotification(null, E('p', {}, 'Код роутера скопирован в буфер обмена.'), 'info');
-		};
-
-		var notifyErr = function(err) {
-			ui.addNotification(null, E('p', {}, 'Не удалось скопировать код: ' + (err || 'ошибка доступа к буферу')), 'error');
-		};
-
+		var notifyOk  = function() { ui.addNotification(null, E('p', {}, 'Код роутера скопирован в буфер обмена.'), 'info'); };
+		var notifyErr = function(e) { ui.addNotification(null, E('p', {}, 'Не удалось скопировать: ' + (e || 'ошибка')), 'error'); };
 		try {
-			if (navigator.clipboard && navigator.clipboard.writeText) {
+			if (navigator.clipboard && navigator.clipboard.writeText)
 				navigator.clipboard.writeText(text).then(notifyOk).catch(notifyErr);
-			}
 			else {
 				var input = document.createElement('input');
-				input.type = 'text';
-				input.value = text;
-				document.body.appendChild(input);
-				input.select();
-
-				try {
-					document.execCommand('copy');
-					notifyOk();
-				}
-				catch (e) {
-					notifyErr(e);
-				}
-
+				input.type = 'text'; input.value = text;
+				document.body.appendChild(input); input.select();
+				try { document.execCommand('copy'); notifyOk(); } catch(e) { notifyErr(e); }
 				document.body.removeChild(input);
 			}
-		}
-		catch (e) {
-			notifyErr(e);
-		}
+		} catch(e) { notifyErr(e); }
 	},
 
 	handleRefresh: function(ev) {
-		if (ev)
-			ev.preventDefault();
-
+		if (ev) ev.preventDefault();
 		var view = this;
-
 		return Promise.all([
 			callShpunState(),
 			callShpunRoutingGet()
+			// Кастомные маршруты не перезапрашиваем при poll — пользователь мог редактировать
 		]).then(function(data) {
 			var st = data[0] || {};
 			st.routing = data[1] || {};
+			// Восстанавливаем кастомные из view
+			st.customRoutes = view._customRoutes;
 			rerenderView(view, st);
 		}).catch(function(err) {
-			ui.addNotification(null, E('p', {}, [
-				'Не удалось обновить статус Shpun Router: ',
-				String(err)
-			]), 'error');
+			ui.addNotification(null, E('p', {}, 'Не удалось обновить статус: ' + String(err)), 'error');
 		});
 	},
 
 	handleSetRoutingMode: function(ev, mode) {
-		if (ev) {
-			ev.preventDefault();
-			ev.stopPropagation();
-		}
-
+		if (ev) { ev.preventDefault(); ev.stopPropagation(); }
 		var view = this;
 		var targetMode = String(mode || '').trim();
+		if (targetMode !== 'full' && targetMode !== 'split_ru') return;
 
-		if (targetMode !== 'full' && targetMode !== 'split_ru')
-			return;
-
-		ui.addNotification(
-			null,
-			E('p', {}, 'Применяем режим маршрутизации…'),
-			'info'
-		);
+		ui.addNotification(null, E('p', {}, 'Применяем режим маршрутизации…'), 'info');
 
 		var wait = function(ms) {
-			return new Promise(function(resolve) {
-				window.setTimeout(resolve, ms);
-			});
-		};
-
-		var refreshAndCheck = function() {
-			return Promise.all([
-				callShpunState(),
-				callShpunRoutingGet()
-			]).then(function(data) {
-				var st = data[0] || {};
-				st.routing = data[1] || {};
-
-				rerenderView(view, st);
-
-				var actualMode = String((st.routing && st.routing.mode) || '').trim();
-
-				if (actualMode === targetMode) {
-					ui.addNotification(
-						null,
-						E('p', {}, 'Режим маршрутизации обновлён.'),
-						'info'
-					);
-					return true;
-				}
-
-				ui.addNotification(
-					null,
-					E('p', {}, 'Не удалось применить режим маршрутизации. Текущий режим: ' + (actualMode || 'неизвестно')),
-					'error'
-				);
-				return false;
-			}).catch(function(err) {
-				ui.addNotification(
-					null,
-					E('p', {}, 'Ошибка при обновлении состояния: ' + String(err)),
-					'error'
-				);
-				return false;
-			});
+			return new Promise(function(resolve) { window.setTimeout(resolve, ms); });
 		};
 
 		return Promise.resolve()
+			.then(function() { return callShpunRoutingSet(targetMode); })
+			.catch(function() { return null; })
+			.then(function() { return wait(1500); })
 			.then(function() {
-				// ВАЖНО: вызываем как раньше (рабочий вариант)
-				return callShpunRoutingSet(targetMode);
-			})
-			.catch(function() {
-				return null;
-			})
-			.then(function() {
-				// даём системе примениться
-				return wait(1500);
-			})
-			.then(function() {
-				// проверяем реальное состояние
-				return refreshAndCheck();
+				return Promise.all([ callShpunState(), callShpunRoutingGet() ])
+					.then(function(data) {
+						var st = data[0] || {};
+						st.routing = data[1] || {};
+						st.customRoutes = view._customRoutes;
+						rerenderView(view, st);
+						var actual = String((st.routing && st.routing.mode) || '').trim();
+						if (actual === targetMode)
+							ui.addNotification(null, E('p', {}, 'Режим маршрутизации обновлён.'), 'info');
+						else
+							ui.addNotification(null, E('p', {}, 'Не удалось применить режим. Текущий: ' + (actual || 'неизвестно')), 'error');
+					});
 			});
 	},
 
 	handleUpdateFirmware: function(ev) {
-		if (ev)
-			ev.preventDefault();
-
+		if (ev) ev.preventDefault();
 		var view = this;
 		var st = view._state || {};
-
 		var fwCurrentRaw = (st.fw_current || '').trim();
-		var fwLatest = (st.fw_latest || '').trim();
+		var fwLatest     = (st.fw_latest  || '').trim();
 		var hasNew = !!(fwLatest && fwCurrentRaw && compareVersions(fwCurrentRaw, fwLatest) < 0);
 		var fwCurrentDisplay = fwCurrentRaw || '—';
 
 		if (hasNew) {
 			ui.showModal('Обновление прошивки', [
-				E('p', {}, [
-					'Доступна новая версия прошивки Shpun Router: ',
-					E('strong', {}, fwCurrentDisplay),
-					' → ',
-					E('strong', {}, fwLatest),
-					'.'
-				]),
-				E('p', {}, 'Установить обновление сейчас? Во время процесса VPN-соединение будет перезапущено.'),
+				E('p', {}, ['Доступна новая версия: ', E('strong', {}, fwCurrentDisplay), ' → ', E('strong', {}, fwLatest), '.']),
+				E('p', {}, 'Установить? Во время процесса VPN-соединение будет перезапущено.'),
 				E('div', { 'style': 'margin-top:10px; text-align:right' }, [
-					E('button', {
-						'class': 'btn',
-						'click': function() { ui.hideModal(); }
-					}, 'Отмена'),
+					E('button', { 'class': 'btn', 'click': function() { ui.hideModal(); } }, 'Отмена'),
 					E('button', {
 						'class': 'btn cbi-button cbi-button-apply',
 						'style': 'margin-left:8px',
 						'click': function() {
 							ui.hideModal();
-							ui.addNotification(
-								null,
-								E('p', {}, 'Установка обновления прошивки запущена. Не отключайте питание роутера.'),
-								'info'
-							);
-
+							ui.addNotification(null, E('p', {}, 'Установка обновления запущена. Не отключайте питание.'), 'info');
 							callShpunOtaInstall().then(function() {
 								window.setTimeout(function() {
-									Promise.all([
-										callShpunState(),
-										callShpunRoutingGet()
-									]).then(function(data) {
+									Promise.all([ callShpunState(), callShpunRoutingGet() ]).then(function(data) {
 										var st2 = data[0] || {};
 										st2.routing = data[1] || {};
+										st2.customRoutes = view._customRoutes;
 										rerenderView(view, st2);
 									});
 								}, 20000);
 							}).catch(function(err) {
-								ui.addNotification(
-									null,
-									E('p', {}, 'Ошибка при запуске установки обновления: ' + String(err)),
-									'error'
-								);
+								ui.addNotification(null, E('p', {}, 'Ошибка запуска обновления: ' + String(err)), 'error');
 							});
 						}
 					}, 'Установить ' + fwLatest)
 				])
 			]);
-
 			return;
 		}
 
-		ui.addNotification(
-			null,
-			E('p', {}, 'Проверка обновлений запущена. Роутер связывается с сервером Shpun SDN System.'),
-			'info'
-		);
-
+		ui.addNotification(null, E('p', {}, 'Проверка обновлений запущена.'), 'info');
 		return callShpunOtaCheck().then(function() {
-			return new Promise(function(resolve) {
-				window.setTimeout(resolve, 15000);
-			});
+			return new Promise(function(r) { window.setTimeout(r, 15000); });
 		}).then(function() {
-			return Promise.all([
-				callShpunState(),
-				callShpunRoutingGet()
-			]);
+			return Promise.all([ callShpunState(), callShpunRoutingGet() ]);
 		}).then(function(data) {
 			var st2 = data[0] || {};
 			st2.routing = data[1] || {};
+			st2.customRoutes = view._customRoutes;
 			rerenderView(view, st2);
-
-			var fwCurRaw = (st2.fw_current || '').trim();
-			var fwLat = (st2.fw_latest || '').trim();
-			var hasNewNow = !!(fwLat && fwCurRaw && compareVersions(fwCurRaw, fwLat) < 0);
-
-			if (!hasNewNow) {
-				ui.addNotification(
-					null,
-					E('p', {}, 'Новая версия прошивки не найдена. Установлена актуальная версия: ' + (fwCurRaw || '—') + '.'),
-					'info'
-				);
-			}
+			var fwCur = (st2.fw_current || '').trim();
+			var fwLat = (st2.fw_latest  || '').trim();
+			if (!(fwLat && fwCur && compareVersions(fwCur, fwLat) < 0))
+				ui.addNotification(null, E('p', {}, 'Установлена актуальная версия: ' + (fwCur || '—') + '.'), 'info');
 		}).catch(function(err) {
-			ui.addNotification(
-				null,
-				E('p', {}, 'Ошибка при проверке обновления прошивки: ' + String(err)),
-				'error'
-			);
+			ui.addNotification(null, E('p', {}, 'Ошибка проверки обновления: ' + String(err)), 'error');
 		});
 	},
 
 	handleRefreshConnection: function(ev) {
-		if (ev)
-			ev.preventDefault();
-
+		if (ev) ev.preventDefault();
 		var view = this;
 		var st = view._state || {};
 		var code = (st.code || '').trim();
-
 		if (!code) {
-			ui.addNotification(
-				null,
-				E('p', {}, 'Сначала дождитесь генерации кода роутера.'),
-				'warning'
-			);
+			ui.addNotification(null, E('p', {}, 'Сначала дождитесь генерации кода роутера.'), 'warning');
 			return;
 		}
-
 		ui.showModal('Обновить подключение', [
-			E('p', {}, 'Роутер заново получит актуальную конфигурацию услуги и пересоберёт подключение.'),
-			E('p', {}, 'Используйте это после смены сервера, обновления услуги или изменений в ShpunApp.'),
+			E('p', {}, 'Роутер заново получит актуальную конфигурацию и пересоберёт подключение.'),
+			E('p', {}, 'Используйте после смены сервера или обновления услуги в ShpunApp.'),
 			E('div', { 'style': 'margin-top:10px; text-align:right' }, [
-				E('button', {
-					'class': 'btn',
-					'click': function() { ui.hideModal(); }
-				}, 'Отмена'),
+				E('button', { 'class': 'btn', 'click': function() { ui.hideModal(); } }, 'Отмена'),
 				E('button', {
 					'class': 'btn cbi-button cbi-button-apply',
 					'style': 'margin-left:8px',
 					'click': function() {
 						ui.hideModal();
-
-						ui.addNotification(
-							null,
-							E('p', {}, 'Обновление подключения запущено. Роутер перечитывает конфигурацию и пересобирает туннель.'),
-							'info'
-						);
-
+						ui.addNotification(null, E('p', {}, 'Обновление подключения запущено.'), 'info');
 						return callShpunRefreshConnection().then(function(res) {
 							res = res || {};
-
 							if (!res.ok) {
-								ui.addNotification(
-									null,
-									E('p', {}, 'Не удалось запустить обновление подключения: ' +
-										(res.error ? String(res.error) : 'неизвестная ошибка')),
-									'error'
-								);
+								ui.addNotification(null, E('p', {}, 'Не удалось запустить: ' + (res.error || 'ошибка')), 'error');
 								return;
 							}
-
 							window.setTimeout(function() {
-								Promise.all([
-									callShpunState(),
-									callShpunRoutingGet()
-								]).then(function(data) {
+								Promise.all([ callShpunState(), callShpunRoutingGet() ]).then(function(data) {
 									var st2 = data[0] || {};
 									st2.routing = data[1] || {};
+									st2.customRoutes = view._customRoutes;
 									rerenderView(view, st2);
 								});
 							}, 15000);
 						}).catch(function(err) {
-							ui.addNotification(
-								null,
-								E('p', {}, 'Ошибка при запуске обновления подключения: ' + String(err)),
-								'error'
-							);
+							ui.addNotification(null, E('p', {}, 'Ошибка: ' + String(err)), 'error');
 						});
 					}
 				}, 'Обновить подключение')
@@ -1110,62 +1296,34 @@ return view.extend({
 	},
 
 	handleResetVpn: function(ev) {
-		if (ev)
-			ev.preventDefault();
-
+		if (ev) ev.preventDefault();
 		var view = this;
-
 		ui.showModal('Сброс конфигурации', [
-			E('p', {}, [
-				'Вы действительно хотите полностью сбросить конфигурацию Shpun Router и вернуть устройство в состояние после установки пакета? ',
-				'Будет сгенерирован новый код роутера, текущая привязка и конфигурация VPN будут потеряны.'
-			]),
+			E('p', {}, 'Полный сброс Shpun Router. Будет сгенерирован новый код, текущая привязка и конфигурация VPN будут потеряны.'),
 			E('div', { 'style': 'margin-top:10px; text-align:right' }, [
-				E('button', {
-					'class': 'btn',
-					'click': function() { ui.hideModal(); }
-				}, 'Отмена'),
+				E('button', { 'class': 'btn', 'click': function() { ui.hideModal(); } }, 'Отмена'),
 				E('button', {
 					'class': 'btn cbi-button cbi-button-negative',
 					'style': 'margin-left:8px',
 					'click': function() {
 						ui.hideModal();
-
 						return callShpunResetVpn().then(function(res) {
 							res = res || {};
-
 							if (res.ok) {
-								ui.addNotification(
-									null,
-									E('p', {}, 'Конфигурация сброшена. Роутер переведён в режим первоначальной настройки и работает без VPN до новой привязки.'),
-									'info'
-								);
-
+								ui.addNotification(null, E('p', {}, 'Конфигурация сброшена. Роутер переведён в режим первоначальной настройки.'), 'info');
 								window.setTimeout(function() {
-									Promise.all([
-										callShpunState(),
-										callShpunRoutingGet()
-									]).then(function(data) {
+									Promise.all([ callShpunState(), callShpunRoutingGet() ]).then(function(data) {
 										var st2 = data[0] || {};
 										st2.routing = data[1] || {};
+										st2.customRoutes = { vpn: [], direct: [] };
 										rerenderView(view, st2);
 									});
 								}, 5000);
-							}
-							else {
-								ui.addNotification(
-									null,
-									E('p', {}, 'Не удалось сбросить конфигурацию: ' +
-										(res.error ? String(res.error) : 'неизвестная ошибка')),
-									'error'
-								);
+							} else {
+								ui.addNotification(null, E('p', {}, 'Не удалось сбросить: ' + (res.error || 'ошибка')), 'error');
 							}
 						}).catch(function(err) {
-							ui.addNotification(
-								null,
-								E('p', {}, 'Ошибка при вызове сброса конфигурации: ' + String(err)),
-								'error'
-							);
+							ui.addNotification(null, E('p', {}, 'Ошибка: ' + String(err)), 'error');
 						});
 					}
 				}, 'Сбросить конфиг')
@@ -1180,19 +1338,18 @@ return view.extend({
 	onmount: function(node) {
 		this.container = node;
 		hideLuCIHeader(node);
-
 		var view = this;
 
 		this._pollId = poll.add(function() {
-			if (!view.container || !view.container.parentNode)
-				return;
-
+			if (!view.container || !view.container.parentNode) return;
 			return Promise.all([
 				callShpunState(),
 				callShpunRoutingGet()
+				// Кастомные маршруты при poll не перезапрашиваем
 			]).then(function(data) {
 				var st = data[0] || {};
 				st.routing = data[1] || {};
+				st.customRoutes = view._customRoutes; // сохраняем локальное состояние
 				rerenderView(view, st);
 			});
 		}, 10);
