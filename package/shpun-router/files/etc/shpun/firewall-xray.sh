@@ -2,6 +2,7 @@
 
 CONF="/etc/shpun/agent.conf"
 LOGTAG="shpun-firewall"
+
 ROUTES_DIR="/etc/shpun/routes"
 MODE_FILE="$ROUTES_DIR/mode"
 CIDRS_FILE="$ROUTES_DIR/ru.cidrs"
@@ -11,7 +12,7 @@ REDIR_PORT_DEFAULT=12345
 TPROXY_PORT_DEFAULT=12346
 TPROXY_MARK_DEFAULT=233
 TPROXY_TABLE_DEFAULT=233
-CHUNK_SIZE_DEFAULT=250
+CHUNK_SIZE_DEFAULT=50
 
 log() {
     logger -t "$LOGTAG" "$*"
@@ -19,6 +20,7 @@ log() {
 
 load_conf() {
     [ -f "$CONF" ] && . "$CONF"
+
     [ -z "$REDIR_PORT" ]   && REDIR_PORT="$REDIR_PORT_DEFAULT"
     [ -z "$TPROXY_PORT" ]  && TPROXY_PORT="$TPROXY_PORT_DEFAULT"
     [ -z "$TPROXY_MARK" ]  && TPROXY_MARK="$TPROXY_MARK_DEFAULT"
@@ -34,21 +36,53 @@ get_mode() {
     fi
 }
 
+get_lan_if() {
+    uci get network.lan.device 2>/dev/null || \
+    uci get network.lan.ifname 2>/dev/null || \
+    echo br-lan
+}
+
+get_lan_ip() {
+    uci get network.lan.ipaddr 2>/dev/null || echo 192.168.1.1
+}
+
 check_tproxy() {
-    if [ -d /sys/module/xt_TPROXY ] || \
-       grep -q "xt_TPROXY" /proc/modules 2>/dev/null || \
-       modprobe xt_TPROXY 2>/dev/null; then
+    command -v nft >/dev/null 2>&1 || return 1
+
+    if lsmod 2>/dev/null | grep -Eq '(^|[[:space:]])nft_tproxy([[:space:]]|$)|(^|[[:space:]])nf_tproxy_ipv4([[:space:]]|$)'; then
         return 0
     fi
-    cat /proc/net/ip_tables_targets 2>/dev/null | grep -qi tproxy && return 0
-    return 1
+
+    modprobe nft_tproxy 2>/dev/null || true
+    modprobe nf_tproxy_ipv4 2>/dev/null || true
+    modprobe nf_tproxy_ipv6 2>/dev/null || true
+
+    if lsmod 2>/dev/null | grep -Eq '(^|[[:space:]])nft_tproxy([[:space:]]|$)|(^|[[:space:]])nf_tproxy_ipv4([[:space:]]|$)'; then
+        return 0
+    fi
+
+    nft delete table inet shpun_tproxy_test >/dev/null 2>&1 || true
+    nft add table inet shpun_tproxy_test >/dev/null 2>&1 || return 1
+
+    nft 'add chain inet shpun_tproxy_test c { type filter hook prerouting priority mangle; policy accept; }' >/dev/null 2>&1 || {
+        nft delete table inet shpun_tproxy_test >/dev/null 2>&1
+        return 1
+    }
+
+    nft 'add rule inet shpun_tproxy_test c meta l4proto udp tproxy to :12346 meta mark set 0xe9' >/dev/null 2>&1
+    rc=$?
+
+    nft delete table inet shpun_tproxy_test >/dev/null 2>&1
+    return "$rc"
 }
 
 tproxy_routes_add() {
     ip rule show | grep -q "fwmark 0x${TPROXY_MARK}" || \
         ip rule add fwmark "0x${TPROXY_MARK}" table "$TPROXY_TABLE" 2>/dev/null
+
     ip route show table "$TPROXY_TABLE" | grep -q "local default" || \
         ip route add local default dev lo table "$TPROXY_TABLE" 2>/dev/null
+
     log "tproxy: ip rule/route added (mark=0x${TPROXY_MARK}, table=${TPROXY_TABLE})"
 }
 
@@ -64,7 +98,7 @@ iptables_start() {
 }
 
 iptables_stop() {
-    LAN_IF="$(uci get network.lan.device 2>/dev/null || uci get network.lan.ifname 2>/dev/null || echo br-lan)"
+    LAN_IF="$(get_lan_if)"
     iptables -t nat -D PREROUTING -i "$LAN_IF" -j SHPUN_XRAY 2>/dev/null
     iptables -t nat -F SHPUN_XRAY 2>/dev/null
     iptables -t nat -X SHPUN_XRAY 2>/dev/null
@@ -73,154 +107,115 @@ iptables_stop() {
     iptables -t mangle -X SHPUN_XRAY_UDP 2>/dev/null
 }
 
-# ──────────────────────────────────────────────
-# nftables: построение правил
-#
-# Порядок правил в prerouting (приоритет сверху вниз):
-#   1. ip daddr $LAN_IP        → return         (сам роутер)
-#   2. ip daddr @custom_direct → return         (юзер: напрямую)
-#   3. ip daddr @custom_vpn    → redirect/tproxy (юзер: принудительно в VPN)
-#   4. ip daddr @ru_dst        → return         (split_ru: РФ напрямую)
-#   5. основное правило        → redirect/tproxy
-# ──────────────────────────────────────────────
-nft_build_rules() {
-    LAN_IF="$1"
-    LAN_IP="$2"
-    MODE="$3"
-    TMP_RULES="$4"
-    CHUNK_SIZE_LOCAL="$5"
-    WITH_TPROXY="$6"
+nft_add_base_objects() {
+    MODE="$1"
 
-    {
-        echo "add table inet shpun"
+    nft add table inet shpun || return 1
 
-        [ "$MODE" = "split_ru" ] && \
-            echo "add set inet shpun ru_dst { type ipv4_addr; flags interval; }"
+    [ "$MODE" = "split_ru" ] && \
+        nft 'add set inet shpun ru_dst { type ipv4_addr; flags interval; }' || true
 
-        # Пустые sets для кастомных маршрутов — всегда создаём
-        echo "add set inet shpun custom_direct { type ipv4_addr; flags interval; }"
-        echo "add set inet shpun custom_vpn { type ipv4_addr; flags interval; }"
+    nft 'add set inet shpun custom_direct { type ipv4_addr; flags interval; }' || return 1
+    nft 'add set inet shpun custom_vpn { type ipv4_addr; flags interval; }' || return 1
 
-        # ── TCP nat prerouting ──
-        echo "add chain inet shpun prerouting { type nat hook prerouting priority dstnat; policy accept; }"
-        echo "add rule inet shpun prerouting iifname \"$LAN_IF\" ip daddr $LAN_IP return"
-        echo "add rule inet shpun prerouting iifname \"$LAN_IF\" ip daddr @custom_direct return"
-        echo "add rule inet shpun prerouting iifname \"$LAN_IF\" meta l4proto tcp ip daddr @custom_vpn redirect to :$REDIR_PORT"
-        [ "$MODE" = "split_ru" ] && \
-            echo "add rule inet shpun prerouting iifname \"$LAN_IF\" ip daddr @ru_dst return"
-        echo "add rule inet shpun prerouting iifname \"$LAN_IF\" meta l4proto tcp tcp dport != $REDIR_PORT redirect to :$REDIR_PORT"
-
-        # ── UDP mangle tproxy ──
-        if [ "$WITH_TPROXY" = "yes" ]; then
-            echo "add chain inet shpun prerouting_mangle { type filter hook prerouting priority mangle; policy accept; }"
-            echo "add rule inet shpun prerouting_mangle iifname \"$LAN_IF\" ip daddr $LAN_IP return"
-            echo "add rule inet shpun prerouting_mangle iifname \"$LAN_IF\" ip daddr @custom_direct return"
-            echo "add rule inet shpun prerouting_mangle iifname \"$LAN_IF\" ip daddr { 224.0.0.0/4, 255.255.255.255 } return"
-            [ "$MODE" = "split_ru" ] && \
-                echo "add rule inet shpun prerouting_mangle iifname \"$LAN_IF\" ip daddr @ru_dst return"
-            echo "add rule inet shpun prerouting_mangle iifname \"$LAN_IF\" meta l4proto udp ip daddr @custom_vpn tproxy to :$TPROXY_PORT meta mark set 0x${TPROXY_MARK}"
-            echo "add rule inet shpun prerouting_mangle iifname \"$LAN_IF\" meta l4proto udp tproxy to :$TPROXY_PORT meta mark set 0x${TPROXY_MARK}"
-        fi
-
-        # ── Наполняем ru_dst ──
-        if [ "$MODE" = "split_ru" ]; then
-            chunk=""
-            count=0
-            while IFS= read -r cidr; do
-                [ -z "$cidr" ] && continue
-                cidr="$(printf '%s' "$cidr" | tr -d '\r')"
-                [ -z "$cidr" ] && continue
-                chunk="${chunk:+$chunk, }$cidr"
-                count=$((count + 1))
-                if [ "$count" -ge "$CHUNK_SIZE_LOCAL" ]; then
-                    echo "add element inet shpun ru_dst { $chunk }"
-                    chunk=""
-                    count=0
-                fi
-            done < "$CIDRS_FILE"
-            [ -n "$chunk" ] && echo "add element inet shpun ru_dst { $chunk }"
-        fi
-
-    } > "$TMP_RULES"
-}
-
-nft_apply_mode() {
-    LAN_IF="$(uci get network.lan.device 2>/dev/null || uci get network.lan.ifname 2>/dev/null || echo br-lan)"
-    LAN_IP="$(uci get network.lan.ipaddr 2>/dev/null || echo 192.168.1.1)"
-    MODE="$(get_mode)"
-
-    nft list table inet shpun >/dev/null 2>&1 || {
-        log "apply-mode: table not found, running init"
-        nft_init; return $?
-    }
-
-    WITH_TPROXY="no"
-    nft list chain inet shpun prerouting_mangle >/dev/null 2>&1 && WITH_TPROXY="yes"
-
-    if [ "$MODE" = "split_ru" ]; then
-        nft list set inet shpun ru_dst >/dev/null 2>&1 || {
-            log "apply-mode: ru_dst not found, running init"
-            nft_init; return $?
-        }
-    fi
-
-    log "apply-mode: mode=$MODE tproxy=$WITH_TPROXY"
-
-    nft flush chain inet shpun prerouting || return 1
-
-    nft add rule inet shpun prerouting iifname "$LAN_IF" ip daddr "$LAN_IP" return
-    nft add rule inet shpun prerouting iifname "$LAN_IF" ip daddr @custom_direct return
-    nft add rule inet shpun prerouting iifname "$LAN_IF" meta l4proto tcp \
-        ip daddr @custom_vpn redirect to :"$REDIR_PORT"
-
-    if [ "$MODE" = "split_ru" ]; then
-        nft flush set inet shpun ru_dst
-        if [ -s "$CIDRS_FILE" ]; then
-            chunk=""; count=0
-            while IFS= read -r cidr; do
-                [ -z "$cidr" ] && continue
-                cidr="$(printf '%s' "$cidr" | tr -d '\r')"
-                [ -z "$cidr" ] && continue
-                chunk="${chunk:+$chunk, }$cidr"
-                count=$((count + 1))
-                if [ "$count" -ge "$CHUNK_SIZE" ]; then
-                    nft add element inet shpun ru_dst "{ $chunk }"
-                    chunk=""; count=0
-                fi
-            done < "$CIDRS_FILE"
-            [ -n "$chunk" ] && nft add element inet shpun ru_dst "{ $chunk }"
-        fi
-        nft add rule inet shpun prerouting iifname "$LAN_IF" ip daddr @ru_dst return
-    fi
-
-    nft add rule inet shpun prerouting iifname "$LAN_IF" meta l4proto tcp \
-        tcp dport != "$REDIR_PORT" redirect to :"$REDIR_PORT"
-
-    if [ "$WITH_TPROXY" = "yes" ]; then
-        nft flush chain inet shpun prerouting_mangle
-        nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" ip daddr "$LAN_IP" return
-        nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" ip daddr @custom_direct return
-        nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" \
-            ip daddr "{ 224.0.0.0/4, 255.255.255.255 }" return
-        [ "$MODE" = "split_ru" ] && \
-            nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" ip daddr @ru_dst return
-        nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" meta l4proto udp \
-            ip daddr @custom_vpn tproxy to :"$TPROXY_PORT" meta mark set "0x${TPROXY_MARK}"
-        nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" meta l4proto udp \
-            tproxy to :"$TPROXY_PORT" meta mark set "0x${TPROXY_MARK}"
-    fi
-
-    [ -x "$CUSTOM_SCRIPT" ] && \
-        "$CUSTOM_SCRIPT" apply 2>/dev/null || true
+    nft 'add chain inet shpun prerouting { type nat hook prerouting priority dstnat; policy accept; }' || return 1
 
     return 0
 }
 
+nft_add_mangle_chain() {
+    nft 'add chain inet shpun prerouting_mangle { type filter hook prerouting priority mangle; policy accept; }'
+}
+
+nft_fill_ru_dst() {
+    [ -s "$CIDRS_FILE" ] || return 0
+
+    chunk=""
+    count=0
+    total=0
+
+    while IFS= read -r cidr; do
+        [ -z "$cidr" ] && continue
+        cidr="$(printf '%s' "$cidr" | tr -d '\r ')"
+        [ -z "$cidr" ] && continue
+        case "$cidr" in
+            \#*) continue ;;
+        esac
+
+        chunk="${chunk:+$chunk, }$cidr"
+        count=$((count + 1))
+        total=$((total + 1))
+
+        if [ "$count" -ge "$CHUNK_SIZE" ]; then
+            nft add element inet shpun ru_dst "{ $chunk }" >/dev/null 2>&1 || {
+                log "ru_dst: failed to add chunk near total=$total"
+                return 1
+            }
+            chunk=""
+            count=0
+        fi
+    done < "$CIDRS_FILE"
+
+    if [ -n "$chunk" ]; then
+        nft add element inet shpun ru_dst "{ $chunk }" >/dev/null 2>&1 || {
+            log "ru_dst: failed to add final chunk near total=$total"
+            return 1
+        }
+    fi
+
+    log "ru_dst: loaded $total CIDR entries"
+    return 0
+}
+
+nft_apply_tcp_rules() {
+    LAN_IF="$1"
+    LAN_IP="$2"
+    MODE="$3"
+
+    nft flush chain inet shpun prerouting || return 1
+
+    nft add rule inet shpun prerouting iifname "$LAN_IF" ip daddr "$LAN_IP" return || return 1
+    nft add rule inet shpun prerouting iifname "$LAN_IF" ip daddr @custom_direct return || return 1
+    nft add rule inet shpun prerouting iifname "$LAN_IF" ip daddr @custom_vpn ip protocol tcp redirect to :"$REDIR_PORT" || return 1
+
+    [ "$MODE" = "split_ru" ] && \
+        nft add rule inet shpun prerouting iifname "$LAN_IF" ip daddr @ru_dst return
+
+    nft add rule inet shpun prerouting iifname "$LAN_IF" ip protocol tcp tcp dport != "$REDIR_PORT" redirect to :"$REDIR_PORT" || return 1
+
+    return 0
+}
+
+nft_apply_udp_rules() {
+    LAN_IF="$1"
+    LAN_IP="$2"
+    MODE="$3"
+
+    nft list chain inet shpun prerouting_mangle >/dev/null 2>&1 || nft_add_mangle_chain || return 1
+    nft flush chain inet shpun prerouting_mangle || return 1
+
+    nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" ip daddr "$LAN_IP" return || return 1
+    nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" ip daddr @custom_direct return || return 1
+    nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" ip daddr 224.0.0.0/4 return || return 1
+    nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" ip daddr 255.255.255.255 return || return 1
+
+    [ "$MODE" = "split_ru" ] && \
+        nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" ip daddr @ru_dst return
+
+    nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" meta l4proto udp ip daddr @custom_vpn tproxy ip to :"$TPROXY_PORT" meta mark set "0x${TPROXY_MARK}" || return 1
+    nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" meta l4proto udp tproxy ip to :"$TPROXY_PORT" meta mark set "0x${TPROXY_MARK}" || return 1
+
+    return 0
+}
+
+nft_apply_custom() {
+    [ -x "$CUSTOM_SCRIPT" ] && "$CUSTOM_SCRIPT" apply 2>/dev/null || true
+}
+
 nft_init() {
-    LAN_IF="$(uci get network.lan.device 2>/dev/null || uci get network.lan.ifname 2>/dev/null || echo br-lan)"
-    LAN_IP="$(uci get network.lan.ipaddr 2>/dev/null || echo 192.168.1.1)"
+    LAN_IF="$(get_lan_if)"
+    LAN_IP="$(get_lan_ip)"
     MODE="$(get_mode)"
-    TMP_RULES="/tmp/shpun_firewall.nft"
 
     [ "$MODE" = "split_ru" ] && [ ! -s "$CIDRS_FILE" ] && {
         log "nft init: split_ru but $CIDRS_FILE missing"
@@ -236,35 +231,99 @@ nft_init() {
         log "nft init: tproxy unavailable — TCP-only"
     fi
 
-    log "nft init: mode=$MODE tproxy=$WITH_TPROXY redirect=$REDIR_PORT lan=$LAN_IF"
+    log "nft init: mode=$MODE tproxy=$WITH_TPROXY redirect=$REDIR_PORT lan=$LAN_IF chunk=$CHUNK_SIZE"
 
     nft delete table inet shpun 2>/dev/null
-    nft_build_rules "$LAN_IF" "$LAN_IP" "$MODE" "$TMP_RULES" "$CHUNK_SIZE" "$WITH_TPROXY"
 
-    if ! nft -f "$TMP_RULES" >/dev/null 2>&1; then
-        log "nft init: failed to apply rules"
-        if [ "$WITH_TPROXY" = "yes" ]; then
-            log "nft init: retry without tproxy"
+    if ! nft_add_base_objects "$MODE"; then
+        log "nft init: failed to create base nft objects"
+        tproxy_routes_del
+        return 1
+    fi
+
+    if [ "$MODE" = "split_ru" ]; then
+        if ! nft_fill_ru_dst; then
+            log "nft init: failed to load ru_dst"
+            nft delete table inet shpun 2>/dev/null
             tproxy_routes_del
-            nft_build_rules "$LAN_IF" "$LAN_IP" "$MODE" "$TMP_RULES" "$CHUNK_SIZE" "no"
-            if ! nft -f "$TMP_RULES" >/dev/null 2>&1; then
-                log "nft init: fallback failed"
-                rm -f "$TMP_RULES"
-                return 1
-            fi
-            log "nft init: TCP-only fallback active"
-        else
-            rm -f "$TMP_RULES"
             return 1
         fi
     fi
 
-    rm -f "$TMP_RULES"
+    if ! nft_apply_tcp_rules "$LAN_IF" "$LAN_IP" "$MODE"; then
+        log "nft init: failed to apply tcp rules"
+        nft delete table inet shpun 2>/dev/null
+        tproxy_routes_del
+        return 1
+    fi
 
-    # Наполняем custom sets
-    [ -x "$CUSTOM_SCRIPT" ] && \
-        "$CUSTOM_SCRIPT" apply 2>/dev/null || true
+    if [ "$WITH_TPROXY" = "yes" ]; then
+        if ! nft_apply_udp_rules "$LAN_IF" "$LAN_IP" "$MODE"; then
+            log "nft init: failed to apply tproxy rules, falling back to TCP-only"
+            nft delete chain inet shpun prerouting_mangle 2>/dev/null
+            tproxy_routes_del
+            WITH_TPROXY="no"
+        fi
+    fi
 
+    nft_apply_custom
+
+    log "nft init: complete mode=$MODE tproxy=$WITH_TPROXY"
+    return 0
+}
+
+nft_apply_mode() {
+    LAN_IF="$(get_lan_if)"
+    LAN_IP="$(get_lan_ip)"
+    MODE="$(get_mode)"
+
+    nft list table inet shpun >/dev/null 2>&1 || {
+        log "apply-mode: table not found, running init"
+        nft_init
+        return $?
+    }
+
+    if [ "$MODE" = "split_ru" ]; then
+        nft list set inet shpun ru_dst >/dev/null 2>&1 || {
+            log "apply-mode: ru_dst not found, running init"
+            nft_init
+            return $?
+        }
+
+        nft flush set inet shpun ru_dst || {
+            log "apply-mode: failed to flush ru_dst, running init"
+            nft_init
+            return $?
+        }
+
+        if ! nft_fill_ru_dst; then
+            log "apply-mode: failed to reload ru_dst"
+            return 1
+        fi
+    fi
+
+    WITH_TPROXY="no"
+    if nft list chain inet shpun prerouting_mangle >/dev/null 2>&1; then
+        WITH_TPROXY="yes"
+        tproxy_routes_add
+    elif check_tproxy; then
+        WITH_TPROXY="yes"
+        tproxy_routes_add
+    fi
+
+    log "apply-mode: mode=$MODE tproxy=$WITH_TPROXY"
+
+    nft_apply_tcp_rules "$LAN_IF" "$LAN_IP" "$MODE" || return 1
+
+    if [ "$WITH_TPROXY" = "yes" ]; then
+        nft_apply_udp_rules "$LAN_IF" "$LAN_IP" "$MODE" || {
+            log "apply-mode: failed to apply tproxy rules, TCP-only active"
+            nft delete chain inet shpun prerouting_mangle 2>/dev/null
+            tproxy_routes_del
+        }
+    fi
+
+    nft_apply_custom
     return 0
 }
 
@@ -279,7 +338,8 @@ case "$1" in
         load_conf
         command -v nft >/dev/null 2>&1 && { nft_apply_mode && exit 0; }
         command -v iptables >/dev/null 2>&1 && { iptables_start && exit 0; }
-        log "no nft/iptables found"; exit 1
+        log "no nft/iptables found"
+        exit 1
         ;;
     init)
         load_conf
@@ -298,7 +358,8 @@ case "$1" in
         exit 0
         ;;
     restart)
-        "$0" apply-mode; exit $?
+        "$0" apply-mode
+        exit $?
         ;;
     *)
         echo "Usage: $0 [start|init|apply-mode|stop|restart]" >&2

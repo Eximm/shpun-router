@@ -136,6 +136,60 @@ http_get_stdout() {
 }
 
 #######################################
+# Optional TPROXY modules for UDP
+#######################################
+
+has_tproxy() {
+	command -v nft >/dev/null 2>&1 || return 1
+
+	nft 'add table inet shpun_tproxy_test' >/dev/null 2>&1 || return 1
+
+	nft 'add chain inet shpun_tproxy_test c { type filter hook prerouting priority mangle; policy accept; }' >/dev/null 2>&1 || {
+		nft delete table inet shpun_tproxy_test >/dev/null 2>&1
+		return 1
+	}
+
+	nft 'add rule inet shpun_tproxy_test c meta l4proto udp tproxy to :12346 meta mark set 0xe9' >/dev/null 2>&1
+	rc=$?
+
+	nft delete table inet shpun_tproxy_test >/dev/null 2>&1
+
+	return "$rc"
+}
+
+ensure_tproxy_modules() {
+	has_tproxy && {
+		log "tproxy: available"
+		return 0
+	}
+
+	command -v opkg >/dev/null 2>&1 || {
+		log "tproxy: opkg not found, UDP will stay disabled"
+		return 1
+	}
+
+	log "tproxy: missing, trying to install kmod-nft-tproxy"
+
+	if ! opkg update >/dev/null 2>&1; then
+		log "tproxy: opkg update failed, UDP will stay disabled"
+		return 1
+	fi
+
+	if ! opkg install kmod-nft-tproxy >/dev/null 2>&1; then
+		log "tproxy: failed to install kmod-nft-tproxy, UDP will stay disabled"
+		return 1
+	fi
+
+	if has_tproxy; then
+		log "tproxy: installed successfully"
+		return 0
+	fi
+
+	log "tproxy: package installed, but nft tproxy rule is still unavailable"
+	return 1
+}
+
+#######################################
 # Arch detection / config
 #######################################
 
@@ -477,8 +531,8 @@ restart_vpn() {
 
 wait_vpn_started() {
 	local i=0
-	while [ "$i" -lt 10 ]; do
-		if pgrep -f "$ENGINE_BIN" >/dev/null 2>&1; then
+	while [ "$i" -lt 20 ]; do
+		if pgrep -f "xray.*run.*-config.*xray.json" >/dev/null 2>&1; then
 			return 0
 		fi
 		sleep 1
@@ -608,6 +662,8 @@ ensure_vpn_from_subscription() {
 		rm -f "$VPN_READY_FILE"
 		return 1
 	fi
+
+	ensure_tproxy_modules || true
 
 	log "building xray config from subscription.json"
 	if ! /etc/shpun/build-config.sh; then

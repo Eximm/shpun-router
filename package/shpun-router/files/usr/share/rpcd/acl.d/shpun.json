@@ -7,7 +7,8 @@
           "state",
           "ping",
           "routing_get",
-          "ota_check"
+          "ota_check",
+          "custom_routes_get"
         ]
       }
     },
@@ -17,7 +18,8 @@
           "routing_set",
           "ota_install",
           "refresh_connection",
-          "reset_vpn"
+          "reset_vpn",
+          "custom_routes_set"
         ]
       }
     }
