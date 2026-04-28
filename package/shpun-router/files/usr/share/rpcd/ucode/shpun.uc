@@ -77,28 +77,31 @@ function read_fw_latest() {
 
 // Валидация одной записи: только IPv4 и CIDR
 function validate_ip_cidr(entry) {
-	entry = trim(entry);
+	entry = trim(norm(entry));
 	if (!entry || length(entry) == 0) return false;
 
-	let ip, prefix;
+	let ip = entry;
+	let prefix = 32;
 	let slash = index(entry, "/");
 
-	if (slash > 0) {
-		ip     = substr(entry, 1, slash - 1);
-		prefix = int(substr(entry, slash + 1));
+	if (slash >= 0) {
+		ip = substr(entry, 0, slash);
+
+		let pstr = substr(entry, slash + 1);
+		if (!pstr || length(pstr) == 0) return false;
+
+		prefix = int(pstr);
+		if (pstr != '' + prefix) return false;
 		if (prefix < 0 || prefix > 32) return false;
-	} else {
-		ip     = entry;
-		prefix = 32;
 	}
 
-	// Проверяем четыре октета
-	let parts = split(ip, "\\.");
+	let parts = split(ip, ".");
 	if (length(parts) != 4) return false;
 
 	for (let i = 0; i < 4; i++) {
+		if (parts[i] == null || parts[i] == "") return false;
+
 		let octet = int(parts[i]);
-		// Дополнительная проверка: строка должна быть числовой
 		if (parts[i] != '' + octet) return false;
 		if (octet < 0 || octet > 255) return false;
 	}
@@ -278,7 +281,7 @@ return {
 
 					// Пишем файл
 					let data = { vpn: vpn_ok, direct: direct_ok };
-					let json_str = sprintf("%s", to_json(data));
+					let json_str = sprintf("%.J", data);
 
 					let f = open(CUSTOM_FILE, "w");
 					if (!f)
@@ -291,9 +294,8 @@ return {
 					let apply_err = "";
 
 					if (exists(CUSTOM_SCRIPT)) {
-						let p = popen(CUSTOM_SCRIPT + " apply 2>&1");
-						let out = "";
-						if (p) { out = p.read("all") || ""; p.close(); }
+						let p = popen(CUSTOM_SCRIPT + " apply >/dev/null 2>&1 &");
+						if (p) p.close();
 						applied = true;
 					} else {
 						apply_err = "apply-custom-routes.sh not found — routes saved but not applied to firewall";

@@ -9,59 +9,31 @@
  * ========================================================== */
 
 var callShpunState = rpc.declare({
-	object: 'shpun',
-	method: 'state',
-	expect: { '': {} }
+	object: 'shpun', method: 'state', expect: { '': {} }
 });
-
 var callShpunRoutingGet = rpc.declare({
-	object: 'shpun',
-	method: 'routing_get',
-	expect: { '': {} }
+	object: 'shpun', method: 'routing_get', expect: { '': {} }
 });
-
 var callShpunRoutingSet = rpc.declare({
-	object: 'shpun',
-	method: 'routing_set',
-	params: [ 'mode' ],
-	expect: { '': {} }
+	object: 'shpun', method: 'routing_set', params: ['mode'], expect: { '': {} }
 });
-
 var callShpunOtaCheck = rpc.declare({
-	object: 'shpun',
-	method: 'ota_check',
-	expect: { '': {} }
+	object: 'shpun', method: 'ota_check', expect: { '': {} }
 });
-
 var callShpunOtaInstall = rpc.declare({
-	object: 'shpun',
-	method: 'ota_install',
-	expect: { '': {} }
+	object: 'shpun', method: 'ota_install', expect: { '': {} }
 });
-
 var callShpunRefreshConnection = rpc.declare({
-	object: 'shpun',
-	method: 'refresh_connection',
-	expect: { '': {} }
+	object: 'shpun', method: 'refresh_connection', expect: { '': {} }
 });
-
 var callShpunResetVpn = rpc.declare({
-	object: 'shpun',
-	method: 'reset_vpn',
-	expect: { '': {} }
+	object: 'shpun', method: 'reset_vpn', expect: { '': {} }
 });
-
 var callShpunCustomRoutesGet = rpc.declare({
-	object: 'shpun',
-	method: 'custom_routes_get',
-	expect: { '': {} }
+	object: 'shpun', method: 'custom_routes_get', expect: { '': {} }
 });
-
 var callShpunCustomRoutesSet = rpc.declare({
-	object: 'shpun',
-	method: 'custom_routes_set',
-	params: [ 'vpn', 'direct' ],
-	expect: { '': {} }
+	object: 'shpun', method: 'custom_routes_set', params: ['vpn', 'direct'], expect: { '': {} }
 });
 
 /* ============================================================
@@ -69,107 +41,19 @@ var callShpunCustomRoutesSet = rpc.declare({
  * ========================================================== */
 
 function injectStyles() {
-	if (document.getElementById('shpun-widget-style'))
-		return;
-
+	if (document.getElementById('shpun-widget-style')) return;
 	var css = ''
-		+ '.shpun-widget-card{'
-		+ '  position:relative;'
-		+ '  margin:0 0 16px;'
-		+ '  padding:20px;'
-		+ '  border-radius:24px;'
-		+ '  overflow:hidden;'
-		+ '  color:#eef2ff;'
-		+ '  background:linear-gradient(135deg, rgba(6,18,36,.98) 0%, rgba(8,24,50,.98) 42%, rgba(20,19,58,.98) 100%);'
-		+ '  border:1px solid rgba(110,130,185,.18);'
-		+ '  box-shadow:0 18px 44px rgba(0,0,0,.28);'
-		+ '}'
-
-		+ '.shpun-widget-card:before{'
-		+ '  content:"";'
-		+ '  position:absolute;'
-		+ '  inset:0;'
-		+ '  pointer-events:none;'
-		+ '  background:'
-		+ '    radial-gradient(circle at 0% 0%, rgba(95,140,255,.15), transparent 30%),'
-		+ '    radial-gradient(circle at 100% 0%, rgba(139,92,246,.14), transparent 28%),'
-		+ '    radial-gradient(circle at 50% 100%, rgba(59,130,246,.08), transparent 35%);'
-		+ '}'
-
-		+ '.shpun-widget-inner{'
-		+ '  position:relative;'
-		+ '  z-index:1;'
-		+ '  display:flex;'
-		+ '  flex-direction:column;'
-		+ '  gap:16px;'
-		+ '}'
-
-		+ '.shpun-widget-header{'
-		+ '  display:flex;'
-		+ '  justify-content:space-between;'
-		+ '  align-items:flex-start;'
-		+ '  gap:16px;'
-		+ '}'
-
-		+ '.shpun-title-wrap{'
-		+ '  display:flex;'
-		+ '  flex-direction:column;'
-		+ '  gap:5px;'
-		+ '  min-width:0;'
-		+ '}'
-
-		+ '.shpun-kicker{'
-		+ '  display:flex;'
-		+ '  align-items:center;'
-		+ '  gap:8px;'
-		+ '  font-size:12px;'
-		+ '  font-weight:700;'
-		+ '  color:#9fb5ff;'
-		+ '}'
-
-		+ '.shpun-kicker-dot{'
-		+ '  width:8px;'
-		+ '  height:8px;'
-		+ '  border-radius:999px;'
-		+ '  background:#6ea8ff;'
-		+ '  box-shadow:0 0 10px rgba(110,168,255,.65);'
-		+ '}'
-
-		+ '.shpun-title{'
-		+ '  font-size:22px;'
-		+ '  line-height:1.08;'
-		+ '  font-weight:800;'
-		+ '  letter-spacing:-.025em;'
-		+ '  color:#ffffff;'
-		+ '}'
-
-		+ '.shpun-subtitle{'
-		+ '  font-size:13px;'
-		+ '  line-height:1.45;'
-		+ '  color:#c2ccde;'
-		+ '  max-width:680px;'
-		+ '}'
-
-		+ '.shpun-badge{'
-		+ '  display:inline-flex;'
-		+ '  align-items:center;'
-		+ '  padding:7px 12px;'
-		+ '  border-radius:999px;'
-		+ '  font-size:12px;'
-		+ '  font-weight:800;'
-		+ '  white-space:nowrap;'
-		+ '  border:1px solid transparent;'
-		+ '  align-self:flex-start;'
-		+ '}'
-
-		+ '.shpun-badge-dot{'
-		+ '  width:8px;'
-		+ '  height:8px;'
-		+ '  margin-right:8px;'
-		+ '  border-radius:999px;'
-		+ '  flex:0 0 auto;'
-		+ '}'
-
+		+ '.shpun-widget-card{position:relative;margin:0 0 16px;padding:20px;border-radius:24px;overflow:hidden;color:#eef2ff;background:linear-gradient(135deg,rgba(6,18,36,.98) 0%,rgba(8,24,50,.98) 42%,rgba(20,19,58,.98) 100%);border:1px solid rgba(110,130,185,.18);box-shadow:0 18px 44px rgba(0,0,0,.28);}'
+		+ '.shpun-widget-card:before{content:"";position:absolute;inset:0;pointer-events:none;background:radial-gradient(circle at 0% 0%,rgba(95,140,255,.15),transparent 30%),radial-gradient(circle at 100% 0%,rgba(139,92,246,.14),transparent 28%),radial-gradient(circle at 50% 100%,rgba(59,130,246,.08),transparent 35%);}'
+		+ '.shpun-widget-inner{position:relative;z-index:1;display:flex;flex-direction:column;gap:16px;}'
+		+ '.shpun-widget-header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;}'
+		+ '.shpun-title-wrap{display:flex;flex-direction:column;gap:5px;min-width:0;}'
+		+ '.shpun-kicker{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;color:#9fb5ff;}'
+		+ '.shpun-kicker-dot{width:8px;height:8px;border-radius:999px;background:#6ea8ff;box-shadow:0 0 10px rgba(110,168,255,.65);}'
+		+ '.shpun-title{font-size:22px;line-height:1.08;font-weight:800;letter-spacing:-.025em;color:#fff;}'
+		+ '.shpun-subtitle{font-size:13px;line-height:1.45;color:#c2ccde;max-width:680px;}'
+		+ '.shpun-badge{display:inline-flex;align-items:center;padding:7px 12px;border-radius:999px;font-size:12px;font-weight:800;white-space:nowrap;border:1px solid transparent;align-self:flex-start;}'
+		+ '.shpun-badge-dot{width:8px;height:8px;margin-right:8px;border-radius:999px;flex:0 0 auto;}'
 		+ '.shpun-badge--off{background:rgba(148,163,184,.11);color:#e5e7eb;border-color:rgba(148,163,184,.20);}'
 		+ '.shpun-badge--off .shpun-badge-dot{background:#94a3b8;}'
 		+ '.shpun-badge--warn{background:rgba(250,204,21,.12);color:#fde68a;border-color:rgba(250,204,21,.22);}'
@@ -178,456 +62,75 @@ function injectStyles() {
 		+ '.shpun-badge--ok .shpun-badge-dot{background:#22c55e;}'
 		+ '.shpun-badge--err{background:rgba(248,113,113,.14);color:#fecaca;border-color:rgba(248,113,113,.24);}'
 		+ '.shpun-badge--err .shpun-badge-dot{background:#f87171;}'
-
-		+ '.shpun-hint-box{'
-		+ '  padding:13px 15px;'
-		+ '  border-radius:16px;'
-		+ '  border:1px solid rgba(120,140,180,.16);'
-		+ '  background:rgba(10,17,32,.40);'
-		+ '  color:#cad4e4;'
-		+ '  font-size:13px;'
-		+ '  line-height:1.55;'
-		+ '}'
-
-		+ '.shpun-card-main{'
-		+ '  display:grid;'
-		+ '  grid-template-columns:minmax(0,1fr) 220px;'
-		+ '  gap:16px;'
-		+ '  align-items:stretch;'
-		+ '}'
-
-		+ '.shpun-col-main{'
-		+ '  min-width:0;'
-		+ '  min-height:100%;'
-		+ '  display:flex;'
-		+ '  flex-direction:column;'
-		+ '  gap:14px;'
-		+ '}'
-
-		+ '.shpun-fields-grid{'
-		+ '  display:grid;'
-		+ '  grid-template-columns:repeat(3, minmax(0,1fr));'
-		+ '  gap:12px;'
-		+ '}'
-
-		+ '.shpun-field{'
-		+ '  min-width:0;'
-		+ '  padding:13px 14px;'
-		+ '  border-radius:16px;'
-		+ '  background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));'
-		+ '  border:1px solid rgba(120,140,180,.14);'
-		+ '  box-shadow:inset 0 1px 0 rgba(255,255,255,.025);'
-		+ '}'
-
-		+ '.shpun-field-label{'
-		+ '  margin-bottom:5px;'
-		+ '  font-size:11px;'
-		+ '  font-weight:700;'
-		+ '  letter-spacing:.03em;'
-		+ '  color:#90a3c3;'
-		+ '}'
-
-		+ '.shpun-field-value{'
-		+ '  font-size:14px;'
-		+ '  font-weight:800;'
-		+ '  line-height:1.4;'
-		+ '  color:#ffffff;'
-		+ '  word-break:break-word;'
-		+ '}'
-
-		+ '.shpun-routing-box{'
-		+ '  padding:13px 14px;'
-		+ '  border-radius:16px;'
-		+ '  background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));'
-		+ '  border:1px solid rgba(120,140,180,.14);'
-		+ '  box-shadow:inset 0 1px 0 rgba(255,255,255,.025);'
-		+ '}'
-
-		+ '.shpun-routing-head{'
-		+ '  display:flex;'
-		+ '  justify-content:space-between;'
-		+ '  align-items:flex-start;'
-		+ '  gap:12px;'
-		+ '  margin-bottom:10px;'
-		+ '}'
-
-		+ '.shpun-routing-title{'
-		+ '  font-size:13px;'
-		+ '  font-weight:800;'
-		+ '  color:#ffffff;'
-		+ '}'
-
-		+ '.shpun-routing-sub{'
-		+ '  font-size:11px;'
-		+ '  line-height:1.45;'
-		+ '  color:#9fb0c8;'
-		+ '}'
-
-		+ '.shpun-routing-meta{'
-		+ '  font-size:11px;'
-		+ '  line-height:1.45;'
-		+ '  color:#b8c3d9;'
-		+ '  text-align:right;'
-		+ '}'
-
-		+ '.shpun-routing-actions{'
-		+ '  display:grid;'
-		+ '  grid-template-columns:repeat(2, minmax(0,1fr));'
-		+ '  gap:10px;'
-		+ '}'
-
-		+ '.shpun-code{'
-		+ '  font-family:monospace;'
-		+ '  font-size:18px;'
-		+ '  font-weight:800;'
-		+ '  letter-spacing:.06em;'
-		+ '  color:#ffffff;'
-		+ '}'
-
-		+ '.shpun-code-copy{'
-		+ '  display:inline-block;'
-		+ '  cursor:pointer;'
-		+ '  border-bottom:1px dashed rgba(165,180,252,.55);'
-		+ '}'
-
-		+ '.shpun-code-copy:hover{'
-		+ '  color:#c4b5fd;'
-		+ '  border-bottom-color:#a78bfa;'
-		+ '}'
-
-		+ '.shpun-fw-badge{'
-		+ '  display:inline-block;'
-		+ '  margin-left:8px;'
-		+ '  padding:2px 8px;'
-		+ '  border-radius:999px;'
-		+ '  font-size:10px;'
-		+ '  font-weight:800;'
-		+ '  color:#bfdbfe;'
-		+ '  background:rgba(96,165,250,.16);'
-		+ '  border:1px solid rgba(96,165,250,.22);'
-		+ '  box-shadow:0 0 0 0 rgba(96,165,250,.35);'
-		+ '  animation:shpun-fw-pulse 1.8s ease-in-out infinite;'
-		+ '}'
-
-		+ '@keyframes shpun-fw-pulse{'
-		+ '  0%{box-shadow:0 0 0 0 rgba(96,165,250,.35);}'
-		+ '  70%{box-shadow:0 0 0 8px rgba(96,165,250,0);}'
-		+ '  100%{box-shadow:0 0 0 0 rgba(96,165,250,0);}'
-		+ '}'
-
-		+ '.shpun-actions{'
-		+ '  margin-top:auto;'
-		+ '  display:grid;'
-		+ '  grid-template-columns:repeat(4, minmax(0,1fr));'
-		+ '  gap:10px;'
-		+ '  align-items:stretch;'
-		+ '}'
-
-		+ '.shpun-col-side{'
-		+ '  display:flex;'
-		+ '  flex-direction:column;'
-		+ '  min-height:100%;'
-		+ '}'
-
-		+ '.shpun-side-card{'
-		+ '  width:100%;'
-		+ '  height:100%;'
-		+ '  padding:12px 12px 12px;'
-		+ '  border-radius:18px;'
-		+ '  background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));'
-		+ '  border:1px solid rgba(120,140,180,.14);'
-		+ '  display:flex;'
-		+ '  flex-direction:column;'
-		+ '  align-items:center;'
-		+ '  justify-content:flex-start;'
-		+ '  gap:8px;'
-		+ '}'
-
-		+ '.shpun-side-title{'
-		+ '  font-size:13px;'
-		+ '  font-weight:800;'
-		+ '  color:#ffffff;'
-		+ '  text-align:center;'
-		+ '  line-height:1.3;'
-		+ '}'
-
-		+ '.shpun-side-url{'
-		+ '  font-size:12px;'
-		+ '  font-weight:700;'
-		+ '  color:#c7d2fe;'
-		+ '  text-align:center;'
-		+ '  word-break:break-word;'
-		+ '  line-height:1.35;'
-		+ '}'
-
-		+ '.shpun-qr-link{'
-		+ '  display:inline-flex;'
-		+ '  margin-top:2px;'
-		+ '}'
-
-		+ '.shpun-qr{'
-		+ '  width:104px;'
-		+ '  height:auto;'
-		+ '  display:block;'
-		+ '  padding:6px;'
-		+ '  border-radius:14px;'
-		+ '  background:#ffffff;'
-		+ '  border:1px solid rgba(120,140,180,.18);'
-		+ '  box-shadow:0 8px 20px rgba(0,0,0,.18);'
-		+ '}'
-
-		+ '.shpun-qr-caption{'
-		+ '  font-size:11px;'
-		+ '  line-height:1.45;'
-		+ '  color:#9fb0c8;'
-		+ '  text-align:center;'
-		+ '  min-height:32px;'
-		+ '  display:flex;'
-		+ '  align-items:center;'
-		+ '  justify-content:center;'
-		+ '}'
-
-		+ '.shpun-side-flex-spacer{'
-		+ '  flex:1 1 auto;'
-		+ '  width:100%;'
-		+ '}'
-
-		+ '.shpun-side-actions{'
-		+ '  width:100%;'
-		+ '  display:flex;'
-		+ '  flex-direction:column;'
-		+ '  gap:8px;'
-		+ '  margin-top:auto;'
-		+ '  padding-top:0;'
-		+ '}'
-
-		+ '.shpun-btn{'
-		+ '  min-height:42px;'
-		+ '  width:100%;'
-		+ '  padding:8px 12px;'
-		+ '  border-radius:999px;'
-		+ '  border:1px solid rgba(120,140,180,.24);'
-		+ '  background:rgba(14,23,38,.78);'
-		+ '  color:#e6edf8;'
-		+ '  font-size:12px;'
-		+ '  font-weight:800;'
-		+ '  line-height:1.25;'
-		+ '  text-decoration:none;'
-		+ '  display:inline-flex;'
-		+ '  align-items:center;'
-		+ '  justify-content:center;'
-		+ '  gap:6px;'
-		+ '  cursor:pointer;'
-		+ '  transition:all .16s ease;'
-		+ '  text-align:center;'
-		+ '  white-space:normal;'
-		+ '  word-break:break-word;'
-		+ '  overflow-wrap:anywhere;'
-		+ '}'
-
-		+ '.shpun-actions .shpun-btn{'
-		+ '  min-height:42px;'
-		+ '}'
-
-		+ '.shpun-side-actions .shpun-btn{'
-		+ '  min-height:42px;'
-		+ '  padding-top:8px;'
-		+ '  padding-bottom:8px;'
-		+ '}'
-
-		+ '.shpun-btn:hover{'
-		+ '  transform:translateY(-1px);'
-		+ '  background:rgba(25,35,54,.96);'
-		+ '  border-color:rgba(140,160,200,.34);'
-		+ '}'
-
+		+ '.shpun-hint-box{padding:13px 15px;border-radius:16px;border:1px solid rgba(120,140,180,.16);background:rgba(10,17,32,.40);color:#cad4e4;font-size:13px;line-height:1.55;}'
+		+ '.shpun-card-main{display:grid;grid-template-columns:minmax(0,1fr) 220px;gap:16px;align-items:stretch;}'
+		+ '.shpun-col-main{min-width:0;min-height:100%;display:flex;flex-direction:column;gap:14px;}'
+		+ '.shpun-fields-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;}'
+		+ '.shpun-field{min-width:0;padding:13px 14px;border-radius:16px;background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.02));border:1px solid rgba(120,140,180,.14);box-shadow:inset 0 1px 0 rgba(255,255,255,.025);}'
+		+ '.shpun-field-label{margin-bottom:5px;font-size:11px;font-weight:700;letter-spacing:.03em;color:#90a3c3;}'
+		+ '.shpun-field-value{font-size:14px;font-weight:800;line-height:1.4;color:#fff;word-break:break-word;}'
+		+ '.shpun-routing-box{padding:13px 14px;border-radius:16px;background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.02));border:1px solid rgba(120,140,180,.14);box-shadow:inset 0 1px 0 rgba(255,255,255,.025);}'
+		+ '.shpun-routing-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:10px;}'
+		+ '.shpun-routing-title{font-size:13px;font-weight:800;color:#fff;}'
+		+ '.shpun-routing-sub{font-size:11px;line-height:1.45;color:#9fb0c8;}'
+		+ '.shpun-routing-meta{font-size:11px;line-height:1.45;color:#b8c3d9;text-align:right;}'
+		+ '.shpun-routing-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}'
+		+ '.shpun-code{font-family:monospace;font-size:18px;font-weight:800;letter-spacing:.06em;color:#fff;}'
+		+ '.shpun-code-copy{display:inline-block;cursor:pointer;border-bottom:1px dashed rgba(165,180,252,.55);}'
+		+ '.shpun-code-copy:hover{color:#c4b5fd;border-bottom-color:#a78bfa;}'
+		+ '.shpun-fw-badge{display:inline-block;margin-left:8px;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:800;color:#bfdbfe;background:rgba(96,165,250,.16);border:1px solid rgba(96,165,250,.22);animation:shpun-fw-pulse 1.8s ease-in-out infinite;}'
+		+ '@keyframes shpun-fw-pulse{0%{box-shadow:0 0 0 0 rgba(96,165,250,.35);}70%{box-shadow:0 0 0 8px rgba(96,165,250,0);}100%{box-shadow:0 0 0 0 rgba(96,165,250,0);}}'
+		+ '.shpun-actions{margin-top:auto;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;align-items:stretch;}'
+		+ '.shpun-col-side{display:flex;flex-direction:column;min-height:100%;}'
+		+ '.shpun-side-card{width:100%;height:100%;padding:12px;border-radius:18px;background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.02));border:1px solid rgba(120,140,180,.14);display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:8px;}'
+		+ '.shpun-side-title{font-size:13px;font-weight:800;color:#fff;text-align:center;line-height:1.3;}'
+		+ '.shpun-side-url{font-size:12px;font-weight:700;color:#c7d2fe;text-align:center;word-break:break-word;line-height:1.35;}'
+		+ '.shpun-qr-link{display:inline-flex;margin-top:2px;}'
+		+ '.shpun-qr{width:104px;height:auto;display:block;padding:6px;border-radius:14px;background:#fff;border:1px solid rgba(120,140,180,.18);box-shadow:0 8px 20px rgba(0,0,0,.18);}'
+		+ '.shpun-qr-caption{font-size:11px;line-height:1.45;color:#9fb0c8;text-align:center;min-height:32px;display:flex;align-items:center;justify-content:center;}'
+		+ '.shpun-side-flex-spacer{flex:1 1 auto;width:100%;}'
+		+ '.shpun-side-actions{width:100%;display:flex;flex-direction:column;gap:8px;margin-top:auto;}'
+		+ '.shpun-btn{min-height:42px;width:100%;padding:8px 12px;border-radius:999px;border:1px solid rgba(120,140,180,.24);background:rgba(14,23,38,.78);color:#e6edf8;font-size:12px;font-weight:800;line-height:1.25;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;transition:all .16s ease;text-align:center;white-space:normal;word-break:break-word;overflow-wrap:anywhere;}'
+		+ '.shpun-btn:hover{transform:translateY(-1px);background:rgba(25,35,54,.96);border-color:rgba(140,160,200,.34);}'
 		+ '.shpun-btn--ghost{background:rgba(255,255,255,.03);}'
-		+ '.shpun-btn--primary{background:linear-gradient(135deg, rgba(79,70,229,.90), rgba(99,102,241,.82));border-color:rgba(140,130,255,.28);color:#ffffff;box-shadow:0 8px 18px rgba(76,70,180,.18);}'
-		+ '.shpun-btn--primary:hover{background:linear-gradient(135deg, rgba(88,80,238,.96), rgba(110,114,248,.88));}'
+		+ '.shpun-btn--primary{background:linear-gradient(135deg,rgba(79,70,229,.90),rgba(99,102,241,.82));border-color:rgba(140,130,255,.28);color:#fff;box-shadow:0 8px 18px rgba(76,70,180,.18);}'
+		+ '.shpun-btn--primary:hover{background:linear-gradient(135deg,rgba(88,80,238,.96),rgba(110,114,248,.88));}'
 		+ '.shpun-btn--danger{background:rgba(101,24,34,.42);border-color:rgba(248,113,113,.30);color:#fecaca;}'
 		+ '.shpun-btn--danger:hover{background:rgba(122,29,42,.50);}'
-		+ '.shpun-btn.is-active{background:linear-gradient(135deg, rgba(79,70,229,.90), rgba(99,102,241,.82));border-color:rgba(140,130,255,.28);color:#ffffff;box-shadow:0 8px 18px rgba(76,70,180,.18);}'
+		+ '.shpun-btn.is-active{background:linear-gradient(135deg,rgba(79,70,229,.90),rgba(99,102,241,.82));border-color:rgba(140,130,255,.28);color:#fff;box-shadow:0 8px 18px rgba(76,70,180,.18);}'
+		/* modal custom routes — тёмная тема как у виджета */
+		+ '.shpun-modal-wrap{background:linear-gradient(135deg,rgba(6,18,36,.99) 0%,rgba(8,24,50,.99) 50%,rgba(20,19,58,.99) 100%);border-radius:16px;padding:20px;color:#eef2ff;min-width:480px;}'
+		+ '.shpun-modal-desc{font-size:12px;color:#9fb0c8;margin-bottom:14px;line-height:1.5;}'
+		+ '.shpun-modal-cols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-bottom:12px;}'
+		+ '.shpun-modal-col-label{font-size:11px;font-weight:700;letter-spacing:.03em;margin-bottom:6px;}'
+		+ '.shpun-modal-col-label--vpn{color:#a5b4fc;}'
+		+ '.shpun-modal-col-label--direct{color:#6ee7b7;}'
+		+ '.shpun-modal-list{min-height:60px;max-height:180px;overflow-y:auto;margin-bottom:8px;border:1px solid rgba(120,140,180,.18);border-radius:10px;padding:6px;display:flex;flex-direction:column;gap:4px;background:rgba(8,16,32,.50);}'
+		+ '.shpun-modal-empty{font-size:11px;color:#4a5568;font-style:italic;padding:4px;}'
+		+ '.shpun-modal-tag{display:flex;align-items:center;justify-content:space-between;padding:4px 8px;border-radius:7px;font-size:12px;font-family:monospace;font-weight:600;}'
+		+ '.shpun-modal-tag--vpn{background:rgba(99,102,241,.18);color:#c7d2fe;border:1px solid rgba(99,102,241,.28);}'
+		+ '.shpun-modal-tag--direct{background:rgba(16,185,129,.14);color:#a7f3d0;border:1px solid rgba(16,185,129,.24);}'
+		+ '.shpun-modal-tag-del{background:none;border:none;cursor:pointer;font-size:14px;opacity:.4;padding:0 2px;line-height:1;color:inherit;}'
+		+ '.shpun-modal-tag-del:hover{opacity:1;}'
+		+ '.shpun-modal-input-row{display:flex;gap:6px;}'
+		+ '.shpun-modal-input{flex:1 1 auto;padding:7px 10px;border:1px solid rgba(120,140,180,.22);border-radius:9px;background:rgba(8,16,32,.60);color:#e2e8f0;font-size:12px;font-family:monospace;outline:none;}'
+		+ '.shpun-modal-input:focus{border-color:rgba(140,130,255,.45);background:rgba(12,22,44,.80);}'
+		+ '.shpun-modal-input::placeholder{color:#4a5568;}'
+		+ '.shpun-modal-add-btn{padding:7px 14px;border:1px solid rgba(120,140,180,.24);border-radius:9px;background:rgba(14,23,38,.80);color:#e6edf8;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;transition:all .14s ease;}'
+		+ '.shpun-modal-add-btn:hover{background:rgba(25,35,54,.96);border-color:rgba(140,160,200,.34);}'
+		+ '.shpun-modal-footer{display:flex;justify-content:flex-end;gap:8px;margin-top:14px;border-top:1px solid rgba(120,140,180,.12);padding-top:14px;}'
+		+ '.shpun-modal-btn{padding:8px 20px;border-radius:999px;font-size:12px;font-weight:800;cursor:pointer;border:1px solid rgba(120,140,180,.24);background:rgba(14,23,38,.78);color:#e6edf8;transition:all .14s ease;}'
+		+ '.shpun-modal-btn:hover{background:rgba(25,35,54,.96);}'
+		+ '.shpun-modal-btn--primary{background:linear-gradient(135deg,rgba(79,70,229,.90),rgba(99,102,241,.82));border-color:rgba(140,130,255,.28);color:#fff;}'
+		+ '.shpun-modal-btn--primary:hover{background:linear-gradient(135deg,rgba(88,80,238,.96),rgba(110,114,248,.88));}'
+		+ '@media(max-width:980px){.shpun-card-main{grid-template-columns:1fr;}.shpun-fields-grid{grid-template-columns:repeat(2,minmax(0,1fr));}.shpun-actions{grid-template-columns:repeat(3,minmax(0,1fr));}.shpun-side-flex-spacer{display:none;}}'
+		+ '@media(max-width:640px){.shpun-widget-card{padding:14px;border-radius:18px;}.shpun-title{font-size:18px;}.shpun-fields-grid{grid-template-columns:1fr;}.shpun-routing-actions{grid-template-columns:1fr;}.shpun-actions{grid-template-columns:repeat(2,minmax(0,1fr));}.shpun-modal-cols{grid-template-columns:1fr;}.shpun-btn{font-size:12px;}}';
 
-		/* ── Кастомные маршруты ── */
-		+ '.shpun-custom-box{'
-		+ '  padding:13px 14px;'
-		+ '  border-radius:16px;'
-		+ '  background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));'
-		+ '  border:1px solid rgba(120,140,180,.14);'
-		+ '  box-shadow:inset 0 1px 0 rgba(255,255,255,.025);'
-		+ '}'
-
-		+ '.shpun-custom-head{'
-		+ '  display:flex;'
-		+ '  justify-content:space-between;'
-		+ '  align-items:flex-start;'
-		+ '  gap:12px;'
-		+ '  margin-bottom:12px;'
-		+ '}'
-
-		+ '.shpun-custom-title{'
-		+ '  font-size:13px;'
-		+ '  font-weight:800;'
-		+ '  color:#ffffff;'
-		+ '}'
-
-		+ '.shpun-custom-sub{'
-		+ '  font-size:11px;'
-		+ '  line-height:1.45;'
-		+ '  color:#9fb0c8;'
-		+ '  margin-top:2px;'
-		+ '}'
-
-		+ '.shpun-custom-cols{'
-		+ '  display:grid;'
-		+ '  grid-template-columns:repeat(2, minmax(0,1fr));'
-		+ '  gap:12px;'
-		+ '  margin-bottom:10px;'
-		+ '}'
-
-		+ '.shpun-custom-col-label{'
-		+ '  font-size:11px;'
-		+ '  font-weight:700;'
-		+ '  letter-spacing:.03em;'
-		+ '  margin-bottom:6px;'
-		+ '}'
-
-		+ '.shpun-custom-col-label--vpn{ color:#a5b4fc; }'
-		+ '.shpun-custom-col-label--direct{ color:#6ee7b7; }'
-
-		+ '.shpun-custom-list{'
-		+ '  min-height:72px;'
-		+ '  max-height:160px;'
-		+ '  overflow-y:auto;'
-		+ '  margin-bottom:6px;'
-		+ '  display:flex;'
-		+ '  flex-direction:column;'
-		+ '  gap:4px;'
-		+ '}'
-
-		+ '.shpun-custom-empty{'
-		+ '  font-size:11px;'
-		+ '  color:#4a5568;'
-		+ '  font-style:italic;'
-		+ '  padding:4px 0;'
-		+ '}'
-
-		+ '.shpun-custom-tag{'
-		+ '  display:flex;'
-		+ '  align-items:center;'
-		+ '  gap:6px;'
-		+ '  padding:4px 8px;'
-		+ '  border-radius:8px;'
-		+ '  font-size:12px;'
-		+ '  font-family:monospace;'
-		+ '  font-weight:600;'
-		+ '}'
-
-		+ '.shpun-custom-tag--vpn{'
-		+ '  background:rgba(99,102,241,.14);'
-		+ '  color:#c7d2fe;'
-		+ '  border:1px solid rgba(99,102,241,.22);'
-		+ '}'
-
-		+ '.shpun-custom-tag--direct{'
-		+ '  background:rgba(16,185,129,.12);'
-		+ '  color:#a7f3d0;'
-		+ '  border:1px solid rgba(16,185,129,.20);'
-		+ '}'
-
-		+ '.shpun-custom-tag-del{'
-		+ '  margin-left:auto;'
-		+ '  cursor:pointer;'
-		+ '  opacity:.5;'
-		+ '  font-size:14px;'
-		+ '  line-height:1;'
-		+ '  flex:0 0 auto;'
-		+ '  background:none;'
-		+ '  border:none;'
-		+ '  color:inherit;'
-		+ '  padding:0 2px;'
-		+ '}'
-
-		+ '.shpun-custom-tag-del:hover{ opacity:1; }'
-
-		+ '.shpun-custom-input-row{'
-		+ '  display:flex;'
-		+ '  gap:6px;'
-		+ '  align-items:center;'
-		+ '}'
-
-		+ '.shpun-custom-input{'
-		+ '  flex:1 1 auto;'
-		+ '  min-width:0;'
-		+ '  padding:7px 10px;'
-		+ '  border-radius:10px;'
-		+ '  border:1px solid rgba(120,140,180,.22);'
-		+ '  background:rgba(8,16,32,.60);'
-		+ '  color:#e2e8f0;'
-		+ '  font-size:12px;'
-		+ '  font-family:monospace;'
-		+ '  outline:none;'
-		+ '}'
-
-		+ '.shpun-custom-input:focus{'
-		+ '  border-color:rgba(140,130,255,.40);'
-		+ '  background:rgba(12,22,44,.80);'
-		+ '}'
-
-		+ '.shpun-custom-input::placeholder{ color:#4a5568; }'
-
-		+ '.shpun-custom-add-btn{'
-		+ '  flex:0 0 auto;'
-		+ '  padding:7px 14px;'
-		+ '  border-radius:10px;'
-		+ '  border:1px solid rgba(120,140,180,.22);'
-		+ '  background:rgba(14,23,38,.78);'
-		+ '  color:#e6edf8;'
-		+ '  font-size:12px;'
-		+ '  font-weight:700;'
-		+ '  cursor:pointer;'
-		+ '  white-space:nowrap;'
-		+ '  transition:all .14s ease;'
-		+ '}'
-
-		+ '.shpun-custom-add-btn:hover{'
-		+ '  background:rgba(25,35,54,.96);'
-		+ '  border-color:rgba(140,160,200,.34);'
-		+ '}'
-
-		+ '.shpun-custom-footer{'
-		+ '  display:flex;'
-		+ '  justify-content:flex-end;'
-		+ '  gap:8px;'
-		+ '  margin-top:4px;'
-		+ '}'
-
-		+ '@media (max-width: 980px){'
-		+ '  .shpun-card-main{grid-template-columns:1fr;}'
-		+ '  .shpun-fields-grid{grid-template-columns:repeat(2, minmax(0,1fr));}'
-		+ '  .shpun-actions{grid-template-columns:repeat(2, minmax(0,1fr));}'
-		+ '  .shpun-side-flex-spacer{display:none;}'
-		+ '  .shpun-side-actions{margin-top:4px;}'
-		+ '}'
-
-		+ '@media (max-width: 640px){'
-		+ '  .shpun-widget-card{padding:14px;border-radius:18px;}'
-		+ '  .shpun-widget-inner{gap:14px;}'
-		+ '  .shpun-widget-header{flex-direction:column;align-items:flex-start;}'
-		+ '  .shpun-title{font-size:18px;}'
-		+ '  .shpun-subtitle{font-size:12px;}'
-		+ '  .shpun-fields-grid{grid-template-columns:1fr;}'
-		+ '  .shpun-routing-actions{grid-template-columns:1fr;}'
-		+ '  .shpun-actions{grid-template-columns:1fr;}'
-		+ '  .shpun-custom-cols{grid-template-columns:1fr;}'
-		+ '  .shpun-btn{font-size:12px;}'
-		+ '}';
-
-	var style = document.createElement('style');
-	style.id = 'shpun-widget-style';
-	style.type = 'text/css';
-	style.appendChild(document.createTextNode(css));
-	document.head.appendChild(style);
+	var s = document.createElement('style');
+	s.id = 'shpun-widget-style';
+	s.type = 'text/css';
+	s.appendChild(document.createTextNode(css));
+	document.head.appendChild(s);
 }
 
 /* ============================================================
@@ -658,31 +161,13 @@ function buildStatusBadge(state) {
 	var ready   = !!state.vpn_ready;
 	var err     = (state.vpn_error || '').trim();
 	var cls, text;
-
-	if (err) {
-		cls = 'shpun-badge shpun-badge--err';
-		text = 'Ошибка подключения';
-	} else if (!hasCode) {
-		cls = 'shpun-badge shpun-badge--off';
-		text = 'Подготовка';
-	} else if (hasCode && !hasSub) {
-		cls = 'shpun-badge shpun-badge--warn';
-		text = 'Ожидает привязки';
-	} else if (hasCode && hasSub && !ready) {
-		cls = 'shpun-badge shpun-badge--warn';
-		text = 'Подключаемся';
-	} else if (hasCode && hasSub && ready) {
-		cls = 'shpun-badge shpun-badge--ok';
-		text = 'VPN подключен';
-	} else {
-		cls = 'shpun-badge shpun-badge--off';
-		text = 'Ожидание';
-	}
-
-	return E('span', { 'class': cls }, [
-		E('span', { 'class': 'shpun-badge-dot' }),
-		text
-	]);
+	if (err)                              { cls = 'shpun-badge shpun-badge--err';  text = 'Ошибка подключения'; }
+	else if (!hasCode)                    { cls = 'shpun-badge shpun-badge--off';  text = 'Подготовка'; }
+	else if (hasCode && !hasSub)          { cls = 'shpun-badge shpun-badge--warn'; text = 'Ожидает привязки'; }
+	else if (hasCode && hasSub && !ready) { cls = 'shpun-badge shpun-badge--warn'; text = 'Подключаемся'; }
+	else if (hasCode && hasSub && ready)  { cls = 'shpun-badge shpun-badge--ok';   text = 'VPN подключен'; }
+	else                                  { cls = 'shpun-badge shpun-badge--off';  text = 'Ожидание'; }
+	return E('span', { 'class': cls }, [ E('span', { 'class': 'shpun-badge-dot' }), text ]);
 }
 
 function hideLuCIHeader(rootNode) {
@@ -694,212 +179,155 @@ function hideLuCIHeader(rootNode) {
 	}
 }
 
-function rerenderView(view, state) {
-	state = state || {};
-	view._state = state;
-	var root = view.render(state);
-	var container = view.container;
-	if (container && container.parentNode) {
-		container.parentNode.replaceChild(root, container);
-		view.container = root;
-		hideLuCIHeader(root);
-	}
-}
-
 function getRoutingModeLabel(mode) {
 	return String(mode || 'full').trim() === 'split_ru'
 		? 'РФ напрямую, остальное через VPN'
 		: 'Весь трафик через VPN';
 }
 
-/* Валидация IP/CIDR на клиенте */
 function validateIpCidr(entry) {
 	entry = entry.trim();
 	if (!entry) return false;
-
-	var ip, prefix;
-	var slashIdx = entry.indexOf('/');
-
+	var ip, prefix, slashIdx = entry.indexOf('/');
 	if (slashIdx >= 0) {
 		ip = entry.slice(0, slashIdx);
 		prefix = parseInt(entry.slice(slashIdx + 1), 10);
 		if (isNaN(prefix) || prefix < 0 || prefix > 32) return false;
 	} else {
 		ip = entry;
-		prefix = 32;
 	}
-
 	var parts = ip.split('.');
 	if (parts.length !== 4) return false;
-
 	for (var i = 0; i < 4; i++) {
 		var octet = parseInt(parts[i], 10);
 		if (isNaN(octet) || octet < 0 || octet > 255) return false;
 		if (String(octet) !== parts[i]) return false;
 	}
-
 	return true;
 }
 
 /* ============================================================
- *  Custom routes UI builder
+ *  Custom routes modal
+ *  Живёт вне #view — LuCI его не трогает никогда
  * ========================================================== */
 
-function buildCustomRoutesSection(view) {
-	var custom = view._customRoutes || { vpn: [], direct: [] };
-	var vpnList    = custom.vpn    ? custom.vpn.slice()    : [];
-	var directList = custom.direct ? custom.direct.slice() : [];
+function openCustomRoutesModal() {
+	/* Показываем спиннер пока грузим */
+	ui.showModal('Дополнительные маршруты', [
+		E('p', {}, 'Загружаем маршруты…')
+	]);
 
-	/* --- Рендер тегов одного списка --- */
-	function renderTags(list, cls, onDelete) {
-		if (!list.length)
-			return [ E('div', { 'class': 'shpun-custom-empty' }, 'Пусто') ];
+	callShpunCustomRoutesGet().then(function(res) {
+		res = res || {};
+		var vpnList    = (res.vpn    || []).slice();
+		var directList = (res.direct || []).slice();
 
-		return list.map(function(entry, idx) {
-			return E('div', { 'class': 'shpun-custom-tag shpun-custom-tag--' + cls }, [
-				E('span', {}, entry),
-				E('button', {
-					'class': 'shpun-custom-tag-del',
-					'title': 'Удалить',
-					'click': function(ev) {
-						ev.preventDefault();
-						onDelete(idx);
-					}
-				}, '×')
-			]);
-		});
-	}
+		function renderList(wrap, list, cls) {
+			while (wrap.firstChild) wrap.removeChild(wrap.firstChild);
+			if (!list.length) {
+				wrap.appendChild(E('div', { 'class': 'shpun-modal-empty' }, 'Пусто'));
+				return;
+			}
+			list.forEach(function(entry, idx) {
+				var del = E('button', { 'type': 'button', 'class': 'shpun-modal-tag-del', 'title': 'Удалить' }, '×');
+				del.addEventListener('click', function(ev) {
+					ev.preventDefault();
+					list.splice(idx, 1);
+					renderList(wrap, list, cls);
+				});
+				wrap.appendChild(E('div', { 'class': 'shpun-modal-tag shpun-modal-tag--' + cls }, [
+					E('span', {}, entry),
+					del
+				]));
+			});
+		}
 
-	/* --- Колонка --- */
-	function buildCol(cls, label, list, placeholder, onDelete, inputId) {
-		var listWrap = E('div', { 'class': 'shpun-custom-list', 'id': 'shpun-list-' + cls });
-		var tags = renderTags(list, cls, onDelete);
-		tags.forEach(function(t) { listWrap.appendChild(t); });
+		function buildCol(cls, label, list) {
+			var wrap = E('div', { 'class': 'shpun-modal-list' });
+			renderList(wrap, list, cls);
 
-		var input = E('input', {
-			'class': 'shpun-custom-input',
-			'id': inputId,
-			'type': 'text',
-			'placeholder': placeholder,
-			'autocomplete': 'off',
-			'spellcheck': 'false'
-		});
+			var input = E('input', {
+				'class': 'shpun-modal-input',
+				'type': 'text',
+				'placeholder': '1.2.3.4 или 10.0.0.0/8',
+				'autocomplete': 'off',
+				'spellcheck': 'false'
+			});
 
-		var addBtn = E('button', {
-			'class': 'shpun-custom-add-btn',
-			'click': function(ev) {
+			var addBtn = E('button', { 'type': 'button', 'class': 'shpun-modal-add-btn' }, 'Добавить');
+
+			addBtn.addEventListener('click', function(ev) {
 				ev.preventDefault();
 				var val = input.value.trim();
 				if (!val) return;
-
 				if (!validateIpCidr(val)) {
-					ui.addNotification(null, E('p', {}, [
-						'Неверный формат: ',
-						E('code', {}, val),
-						'. Допустимы только IPv4-адреса и CIDR (например: 1.2.3.4 или 10.0.0.0/8)'
-					]), 'error');
+					ui.addNotification(null, E('p', {}, 'Неверный формат: ' + val + '. Допустимы только IPv4 и CIDR.'), 'error');
 					return;
 				}
-
-				// Проверяем дубликаты в обоих списках
 				if (vpnList.indexOf(val) >= 0 || directList.indexOf(val) >= 0) {
 					ui.addNotification(null, E('p', {}, 'Адрес ' + val + ' уже добавлен.'), 'warning');
 					return;
 				}
-
 				list.push(val);
 				input.value = '';
-				rebuildSection();
-			}
-		}, 'Добавить');
-
-		// Enter в поле ввода
-		input.addEventListener('keydown', function(ev) {
-			if (ev.key === 'Enter') {
-				ev.preventDefault();
-				addBtn.click();
-			}
-		});
-
-		return E('div', {}, [
-			E('div', { 'class': 'shpun-custom-col-label shpun-custom-col-label--' + cls }, label),
-			listWrap,
-			E('div', { 'class': 'shpun-custom-input-row' }, [ input, addBtn ])
-		]);
-	}
-
-	var sectionWrap = E('div', { 'id': 'shpun-custom-section' });
-
-	function rebuildSection() {
-		var newSection = buildCustomRoutesSection(view);
-		var old = document.getElementById('shpun-custom-section');
-		if (old && old.parentNode)
-			old.parentNode.replaceChild(newSection, old);
-	}
-
-	var vpnCol = buildCol(
-		'vpn',
-		'Принудительно через VPN',
-		vpnList,
-		'1.2.3.4 или 10.0.0.0/8',
-		function(idx) { vpnList.splice(idx, 1); rebuildSection(); },
-		'shpun-input-vpn'
-	);
-
-	var directCol = buildCol(
-		'direct',
-		'Принудительно напрямую',
-		directList,
-		'1.2.3.4 или 10.0.0.0/8',
-		function(idx) { directList.splice(idx, 1); rebuildSection(); },
-		'shpun-input-direct'
-	);
-
-	var saveBtn = E('button', {
-		'class': 'shpun-btn shpun-btn--primary',
-		'style': 'min-width:140px; min-height:36px; padding:7px 18px; font-size:12px; border-radius:10px;',
-		'click': function(ev) {
-			ev.preventDefault();
-
-			// Берём актуальные списки из view
-			var cr = view._customRoutes || { vpn: [], direct: [] };
-
-			callShpunCustomRoutesSet(cr.vpn, cr.direct).then(function(res) {
-				res = res || {};
-				if (res.ok) {
-					var msg = 'Маршруты сохранены: ' + res.vpn_count + ' через VPN, ' + res.direct_count + ' напрямую.';
-					if (res.warning) msg += ' Предупреждение: ' + res.warning;
-					ui.addNotification(null, E('p', {}, msg), 'info');
-				} else {
-					var errText = 'Не удалось сохранить маршруты: ' + (res.error || 'неизвестная ошибка');
-					if (res.errors && res.errors.length)
-						errText += '. Невалидные записи: ' + res.errors.join(', ');
-					ui.addNotification(null, E('p', {}, errText), 'error');
-				}
-			}).catch(function(err) {
-				ui.addNotification(null, E('p', {}, 'Ошибка при сохранении маршрутов: ' + String(err)), 'error');
+				renderList(wrap, list, cls);
 			});
 
-			// Сохраняем в view для следующего рендера
-			view._customRoutes = { vpn: vpnList.slice(), direct: directList.slice() };
+			input.addEventListener('keydown', function(ev) {
+				if (ev.key === 'Enter') { ev.preventDefault(); addBtn.click(); }
+			});
+
+			return E('div', {}, [
+				E('div', { 'class': 'shpun-modal-col-label shpun-modal-col-label--' + cls }, label),
+				wrap,
+				E('div', { 'class': 'shpun-modal-input-row' }, [ input, addBtn ])
+			]);
 		}
-	}, 'Сохранить маршруты');
 
-	var section = E('div', { 'class': 'shpun-custom-box' }, [
-		E('div', { 'class': 'shpun-custom-head' }, [
-			E('div', {}, [
-				E('div', { 'class': 'shpun-custom-title' }, 'Дополнительные маршруты'),
-				E('div', { 'class': 'shpun-custom-sub' },
-					'Укажите IP-адреса или подсети (CIDR). Работает поверх основного режима и split_ru.'
-				)
+		ui.showModal('Дополнительные маршруты', [
+			E('div', { 'class': 'shpun-modal-wrap' }, [
+				E('div', { 'class': 'shpun-modal-desc' },
+					'Только IPv4-адреса и CIDR (например: 1.2.3.4 или 10.0.0.0/8). Работает поверх основного режима и split_ru.'),
+				E('div', { 'class': 'shpun-modal-cols' }, [
+					buildCol('vpn',    'Принудительно через VPN', vpnList),
+					buildCol('direct', 'Принудительно напрямую',  directList)
+				]),
+				E('div', { 'class': 'shpun-modal-footer' }, [
+					E('button', {
+						'type': 'button',
+						'class': 'shpun-modal-btn',
+						'click': function() { ui.hideModal(); }
+					}, 'Отмена'),
+					E('button', {
+						'type': 'button',
+						'class': 'shpun-modal-btn shpun-modal-btn--primary',
+						'click': function() {
+							callShpunCustomRoutesSet(vpnList.slice(), directList.slice()).then(function(res) {
+								res = res || {};
+								ui.hideModal();
+								if (res.ok)
+									ui.addNotification(null, E('p', {}, 'Маршруты сохранены: ' + res.vpn_count + ' через VPN, ' + res.direct_count + ' напрямую.'), 'info');
+								else
+									ui.addNotification(null, E('p', {}, 'Ошибка: ' + (res.error || 'неизвестная ошибка')), 'error');
+							}).catch(function(err) {
+								ui.hideModal();
+								ui.addNotification(null, E('p', {}, 'Ошибка сохранения: ' + String(err)), 'error');
+							});
+						}
+					}, 'Сохранить')
+				])
 			])
-		]),
-		E('div', { 'class': 'shpun-custom-cols' }, [ vpnCol, directCol ]),
-		E('div', { 'class': 'shpun-custom-footer' }, [ saveBtn ])
-	]);
-
-	sectionWrap.appendChild(section);
-	return sectionWrap;
+		]);
+	}).catch(function(err) {
+		ui.showModal('Дополнительные маршруты', [
+			E('div', { 'class': 'shpun-modal-wrap' }, [
+				E('p', { 'style': 'color:#fecaca;' }, 'Не удалось загрузить маршруты: ' + String(err)),
+				E('div', { 'class': 'shpun-modal-footer' }, [
+					E('button', { 'type': 'button', 'class': 'shpun-modal-btn', 'click': function() { ui.hideModal(); } }, 'Закрыть')
+				])
+			])
+		]);
+	});
 }
 
 /* ============================================================
@@ -907,17 +335,15 @@ function buildCustomRoutesSection(view) {
  * ========================================================== */
 
 return view.extend({
+
 	load: function() {
 		injectStyles();
-
 		return Promise.all([
 			callShpunState(),
-			callShpunRoutingGet(),
-			callShpunCustomRoutesGet()
+			callShpunRoutingGet()
 		]).then(function(res) {
 			var st = res[0] || {};
 			st.routing = res[1] || {};
-			st.customRoutes = res[2] || { vpn: [], direct: [] };
 			return st;
 		});
 	},
@@ -927,22 +353,16 @@ return view.extend({
 		this._state = state;
 		var view = this;
 
-		// Сохраняем кастомные маршруты в view (чтобы не затирать при poll)
-		if (state.customRoutes)
-			this._customRoutes = state.customRoutes;
-		if (!this._customRoutes)
-			this._customRoutes = { vpn: [], direct: [] };
-
 		var code     = (state.code || '').trim();
 		var hasSub   = !!state.has_sub;
 		var vpnReady = !!state.vpn_ready;
 		var err      = (state.vpn_error || '').trim();
 
-		var routing      = state.routing || {};
-		var routingMode  = String(routing.mode || 'full').trim();
-		var routingLabel = getRoutingModeLabel(routingMode);
+		var routing       = state.routing || {};
+		var routingMode   = String(routing.mode || 'full').trim();
+		var routingLabel  = getRoutingModeLabel(routingMode);
 		var routesVersion = String(routing.routes_version || '0').trim();
-		var routesCount  = routing.routes_count || 0;
+		var routesCount   = routing.routes_count || 0;
 
 		var fwCurrentRaw     = (state.fw_current || '').trim();
 		var fwCurrentDisplay = fwCurrentRaw || '—';
@@ -958,44 +378,26 @@ return view.extend({
 			'click': code ? ui.createHandlerFn(this, 'handleCopyCode', code) : null
 		}, code || '— — — —');
 
-		var fwValue;
-		if (hasNewFw) {
-			fwValue = E('span', {}, [
-				fwCurrentDisplay,
-				E('span', { 'class': 'shpun-fw-badge' }, 'доступна ' + fwLatest)
-			]);
-		} else {
-			fwValue = fwCurrentDisplay;
-		}
-
-		var updateBtnLabel = hasNewFw ? ('Установить ' + fwLatest) : 'Проверить обновление';
+		var fwValue = hasNewFw
+			? E('span', {}, [ fwCurrentDisplay, E('span', { 'class': 'shpun-fw-badge' }, 'доступна ' + fwLatest) ])
+			: fwCurrentDisplay;
 
 		var hintText =
-			!code
-				? 'Роутер готовится к подключению. После генерации кода откройте ShpunApp и оформите услугу для роутера.'
-				: !hasSub
-					? 'Откройте ShpunApp, закажите или активируйте услугу для роутера и выполните привязку по этому коду.'
-					: !vpnReady
-						? (err
-							? 'Привязка найдена, но подключение завершилось ошибкой: ' + err
-							: 'Привязка найдена. Роутер получает конфигурацию и поднимает VPN. Обычно до минуты.')
-						: 'Роутер подключен к Shpun SDN System. Для смены сервера и управления услугой используйте ShpunApp.';
+			!code     ? 'Роутер готовится к подключению. После генерации кода откройте ShpunApp и оформите услугу для роутера.'
+			: !hasSub ? 'Откройте ShpunApp, закажите или активируйте услугу и выполните привязку по этому коду.'
+			: !vpnReady ? (err ? 'Ошибка: ' + err : 'Привязка найдена. Роутер поднимает VPN…')
+			: 'Роутер подключен к Shpun SDN System. Для смены сервера используйте ShpunApp.';
 
 		return E('div', { 'class': 'shpun-widget-card' }, [
 			E('div', { 'class': 'shpun-widget-inner' }, [
 
 				E('div', { 'class': 'shpun-widget-header' }, [
 					E('div', { 'class': 'shpun-title-wrap' }, [
-						E('div', { 'class': 'shpun-kicker' }, [
-							E('span', { 'class': 'shpun-kicker-dot' }),
-							'Shpun Router'
-						]),
+						E('div', { 'class': 'shpun-kicker' }, [ E('span', { 'class': 'shpun-kicker-dot' }), 'Shpun Router' ]),
 						E('div', { 'class': 'shpun-title' }, 'SDN System'),
-						E('div', { 'class': 'shpun-subtitle' },
-							code
-								? 'Статус роутера, подключение и быстрые действия по конфигурации'
-								: 'Подготовка роутера к подключению через ShpunApp'
-						)
+						E('div', { 'class': 'shpun-subtitle' }, code
+							? 'Статус роутера, подключение и быстрые действия'
+							: 'Подготовка роутера к подключению через ShpunApp')
 					]),
 					buildStatusBadge(state)
 				]),
@@ -1004,6 +406,7 @@ return view.extend({
 
 				E('div', { 'class': 'shpun-card-main' }, [
 					E('div', { 'class': 'shpun-col-main' }, [
+
 						E('div', { 'class': 'shpun-fields-grid' }, [
 							E('div', { 'class': 'shpun-field' }, [
 								E('div', { 'class': 'shpun-field-label' }, 'Код роутера'),
@@ -1012,13 +415,10 @@ return view.extend({
 							E('div', { 'class': 'shpun-field' }, [
 								E('div', { 'class': 'shpun-field-label' }, 'Статус услуги'),
 								E('div', { 'class': 'shpun-field-value' }, [
-									!code
-										? 'Ожидает генерации кода'
-										: !hasSub
-											? 'Ожидает привязки'
-											: vpnReady
-												? 'Подключен'
-												: (err ? 'Ошибка подключения' : 'Подключение…')
+									!code ? 'Ожидает генерации кода'
+									: !hasSub ? 'Ожидает привязки'
+									: vpnReady ? 'Подключен'
+									: err ? 'Ошибка подключения' : 'Подключение…'
 								])
 							]),
 							E('div', { 'class': 'shpun-field' }, [
@@ -1031,9 +431,7 @@ return view.extend({
 							E('div', { 'class': 'shpun-routing-head' }, [
 								E('div', {}, [
 									E('div', { 'class': 'shpun-routing-title' }, 'Маршрутизация'),
-									E('div', { 'class': 'shpun-routing-sub' },
-										'Выберите, направлять ли весь трафик в туннель или пускать российские адреса напрямую.'
-									)
+									E('div', { 'class': 'shpun-routing-sub' }, 'Направлять ли весь трафик в туннель или пускать российские адреса напрямую.')
 								]),
 								E('div', { 'class': 'shpun-routing-meta' }, [
 									E('div', {}, 'Режим: ' + routingLabel),
@@ -1042,44 +440,22 @@ return view.extend({
 							]),
 							E('div', { 'class': 'shpun-routing-actions' }, [
 								E('button', {
-									'class': 'shpun-btn ' + (routingMode === 'full'
-										? 'shpun-btn--primary is-active'
-										: 'shpun-btn--ghost'),
-									'click': function(ev) {
-										return view.handleSetRoutingMode(ev, 'full');
-									}
+									'class': 'shpun-btn ' + (routingMode === 'full' ? 'shpun-btn--primary is-active' : 'shpun-btn--ghost'),
+									'click': function(ev) { return view.handleSetRoutingMode(ev, 'full'); }
 								}, 'Весь трафик через VPN'),
 								E('button', {
-									'class': 'shpun-btn ' + (routingMode === 'split_ru'
-										? 'shpun-btn--primary is-active'
-										: 'shpun-btn--ghost'),
-									'click': function(ev) {
-										return view.handleSetRoutingMode(ev, 'split_ru');
-									}
+									'class': 'shpun-btn ' + (routingMode === 'split_ru' ? 'shpun-btn--primary is-active' : 'shpun-btn--ghost'),
+									'click': function(ev) { return view.handleSetRoutingMode(ev, 'split_ru'); }
 								}, 'РФ напрямую, остальное через VPN')
 							])
 						]),
 
-						// ── Кастомные маршруты ──
-						buildCustomRoutesSection(view),
-
 						E('div', { 'class': 'shpun-actions' }, [
-							E('button', {
-								'class': 'shpun-btn shpun-btn--ghost',
-								'click': ui.createHandlerFn(this, 'handleRefresh')
-							}, 'Обновить статус'),
-							E('button', {
-								'class': 'shpun-btn shpun-btn--ghost',
-								'click': ui.createHandlerFn(this, 'handleUpdateFirmware')
-							}, updateBtnLabel),
-							E('button', {
-								'class': 'shpun-btn shpun-btn--primary',
-								'click': ui.createHandlerFn(this, 'handleRefreshConnection')
-							}, 'Обновить подключение'),
-							E('button', {
-								'class': 'shpun-btn shpun-btn--danger',
-								'click': ui.createHandlerFn(this, 'handleResetVpn')
-							}, 'Сбросить конфиг')
+							E('button', { 'class': 'shpun-btn shpun-btn--ghost',   'click': ui.createHandlerFn(this, 'handleRefresh') }, 'Обновить статус'),
+							E('button', { 'class': 'shpun-btn shpun-btn--ghost',   'click': ui.createHandlerFn(this, 'handleCustomRoutes') }, 'Доп. маршруты'),
+							E('button', { 'class': 'shpun-btn shpun-btn--ghost',   'click': ui.createHandlerFn(this, 'handleUpdateFirmware') }, hasNewFw ? ('Установить ' + fwLatest) : 'Проверить обновление'),
+							E('button', { 'class': 'shpun-btn shpun-btn--primary', 'click': ui.createHandlerFn(this, 'handleRefreshConnection') }, 'Обновить подключение'),
+							E('button', { 'class': 'shpun-btn shpun-btn--danger',  'click': ui.createHandlerFn(this, 'handleResetVpn') }, 'Сбросить конфиг')
 						])
 					]),
 
@@ -1087,35 +463,14 @@ return view.extend({
 						E('div', { 'class': 'shpun-side-card' }, [
 							E('div', { 'class': 'shpun-side-title' }, 'Управление через ShpunApp'),
 							E('div', { 'class': 'shpun-side-url' }, 'app.sdnonline.online'),
-							E('a', {
-								'class': 'shpun-qr-link',
-								'href': appLink,
-								'target': '_blank',
-								'rel': 'noreferrer'
-							}, [
-								E('img', {
-									'class': 'shpun-qr',
-									'src': qrUrl,
-									'alt': 'QR-код для открытия ShpunApp'
-								})
+							E('a', { 'class': 'shpun-qr-link', 'href': appLink, 'target': '_blank', 'rel': 'noreferrer' }, [
+								E('img', { 'class': 'shpun-qr', 'src': qrUrl, 'alt': 'QR' })
 							]),
-							E('div', { 'class': 'shpun-qr-caption' },
-								'Сканируйте QR-код, чтобы открыть ShpunApp на телефоне'
-							),
+							E('div', { 'class': 'shpun-qr-caption' }, 'Сканируйте QR-код, чтобы открыть ShpunApp на телефоне'),
 							E('div', { 'class': 'shpun-side-flex-spacer' }),
 							E('div', { 'class': 'shpun-side-actions' }, [
-								E('a', {
-									'class': 'shpun-btn shpun-btn--primary',
-									'href': appLink,
-									'target': '_blank',
-									'rel': 'noreferrer'
-								}, 'Открыть ShpunApp'),
-								E('a', {
-									'class': 'shpun-btn shpun-btn--ghost',
-									'href': botLink,
-									'target': '_blank',
-									'rel': 'noreferrer'
-								}, 'Бот — резервный вариант')
+								E('a', { 'class': 'shpun-btn shpun-btn--primary', 'href': appLink, 'target': '_blank', 'rel': 'noreferrer' }, 'Открыть ShpunApp'),
+								E('a', { 'class': 'shpun-btn shpun-btn--ghost',   'href': botLink, 'target': '_blank', 'rel': 'noreferrer' }, 'Бот — резервный вариант')
 							])
 						])
 					])
@@ -1128,68 +483,55 @@ return view.extend({
 		if (ev) { ev.preventDefault(); ev.stopPropagation(); }
 		if (!code) return;
 		var text = String(code).trim();
-		var notifyOk  = function() { ui.addNotification(null, E('p', {}, 'Код роутера скопирован в буфер обмена.'), 'info'); };
-		var notifyErr = function(e) { ui.addNotification(null, E('p', {}, 'Не удалось скопировать: ' + (e || 'ошибка')), 'error'); };
+		var ok  = function() { ui.addNotification(null, E('p', {}, 'Код роутера скопирован.'), 'info'); };
+		var err = function(e) { ui.addNotification(null, E('p', {}, 'Не удалось скопировать: ' + e), 'error'); };
 		try {
-			if (navigator.clipboard && navigator.clipboard.writeText)
-				navigator.clipboard.writeText(text).then(notifyOk).catch(notifyErr);
+			if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(ok).catch(err);
 			else {
-				var input = document.createElement('input');
-				input.type = 'text'; input.value = text;
-				document.body.appendChild(input); input.select();
-				try { document.execCommand('copy'); notifyOk(); } catch(e) { notifyErr(e); }
-				document.body.removeChild(input);
+				var i = document.createElement('input'); i.type = 'text'; i.value = text;
+				document.body.appendChild(i); i.select();
+				try { document.execCommand('copy'); ok(); } catch(e) { err(e); }
+				document.body.removeChild(i);
 			}
-		} catch(e) { notifyErr(e); }
+		} catch(e) { err(e); }
 	},
 
 	handleRefresh: function(ev) {
 		if (ev) ev.preventDefault();
 		var view = this;
-		return Promise.all([
-			callShpunState(),
-			callShpunRoutingGet()
-			// Кастомные маршруты не перезапрашиваем при poll — пользователь мог редактировать
-		]).then(function(data) {
+		return Promise.all([ callShpunState(), callShpunRoutingGet() ]).then(function(data) {
 			var st = data[0] || {};
 			st.routing = data[1] || {};
-			// Восстанавливаем кастомные из view
-			st.customRoutes = view._customRoutes;
-			rerenderView(view, st);
+			view._state = st;
 		}).catch(function(err) {
 			ui.addNotification(null, E('p', {}, 'Не удалось обновить статус: ' + String(err)), 'error');
 		});
 	},
 
+	handleCustomRoutes: function(ev) {
+		if (ev) ev.preventDefault();
+		openCustomRoutesModal();
+	},
+
 	handleSetRoutingMode: function(ev, mode) {
 		if (ev) { ev.preventDefault(); ev.stopPropagation(); }
-		var view = this;
 		var targetMode = String(mode || '').trim();
 		if (targetMode !== 'full' && targetMode !== 'split_ru') return;
 
 		ui.addNotification(null, E('p', {}, 'Применяем режим маршрутизации…'), 'info');
 
-		var wait = function(ms) {
-			return new Promise(function(resolve) { window.setTimeout(resolve, ms); });
-		};
-
 		return Promise.resolve()
 			.then(function() { return callShpunRoutingSet(targetMode); })
 			.catch(function() { return null; })
-			.then(function() { return wait(1500); })
+			.then(function() { return new Promise(function(r) { window.setTimeout(r, 1500); }); })
 			.then(function() {
-				return Promise.all([ callShpunState(), callShpunRoutingGet() ])
-					.then(function(data) {
-						var st = data[0] || {};
-						st.routing = data[1] || {};
-						st.customRoutes = view._customRoutes;
-						rerenderView(view, st);
-						var actual = String((st.routing && st.routing.mode) || '').trim();
-						if (actual === targetMode)
-							ui.addNotification(null, E('p', {}, 'Режим маршрутизации обновлён.'), 'info');
-						else
-							ui.addNotification(null, E('p', {}, 'Не удалось применить режим. Текущий: ' + (actual || 'неизвестно')), 'error');
-					});
+				return Promise.all([ callShpunState(), callShpunRoutingGet() ]).then(function(data) {
+					var actual = String(((data[1] || {}).mode) || '').trim();
+					if (actual === targetMode)
+						ui.addNotification(null, E('p', {}, 'Режим маршрутизации обновлён.'), 'info');
+					else
+						ui.addNotification(null, E('p', {}, 'Не удалось применить режим.'), 'error');
+				});
 			});
 	},
 
@@ -1200,31 +542,20 @@ return view.extend({
 		var fwCurrentRaw = (st.fw_current || '').trim();
 		var fwLatest     = (st.fw_latest  || '').trim();
 		var hasNew = !!(fwLatest && fwCurrentRaw && compareVersions(fwCurrentRaw, fwLatest) < 0);
-		var fwCurrentDisplay = fwCurrentRaw || '—';
 
 		if (hasNew) {
 			ui.showModal('Обновление прошивки', [
-				E('p', {}, ['Доступна новая версия: ', E('strong', {}, fwCurrentDisplay), ' → ', E('strong', {}, fwLatest), '.']),
-				E('p', {}, 'Установить? Во время процесса VPN-соединение будет перезапущено.'),
-				E('div', { 'style': 'margin-top:10px; text-align:right' }, [
+				E('p', {}, [ 'Доступна новая версия: ', E('strong', {}, fwCurrentRaw || '—'), ' → ', E('strong', {}, fwLatest), '.' ]),
+				E('p', {}, 'Установить? VPN-соединение будет перезапущено.'),
+				E('div', { 'style': 'margin-top:10px;text-align:right' }, [
 					E('button', { 'class': 'btn', 'click': function() { ui.hideModal(); } }, 'Отмена'),
 					E('button', {
-						'class': 'btn cbi-button cbi-button-apply',
-						'style': 'margin-left:8px',
+						'class': 'btn cbi-button cbi-button-apply', 'style': 'margin-left:8px',
 						'click': function() {
 							ui.hideModal();
-							ui.addNotification(null, E('p', {}, 'Установка обновления запущена. Не отключайте питание.'), 'info');
-							callShpunOtaInstall().then(function() {
-								window.setTimeout(function() {
-									Promise.all([ callShpunState(), callShpunRoutingGet() ]).then(function(data) {
-										var st2 = data[0] || {};
-										st2.routing = data[1] || {};
-										st2.customRoutes = view._customRoutes;
-										rerenderView(view, st2);
-									});
-								}, 20000);
-							}).catch(function(err) {
-								ui.addNotification(null, E('p', {}, 'Ошибка запуска обновления: ' + String(err)), 'error');
+							ui.addNotification(null, E('p', {}, 'Установка обновления запущена.'), 'info');
+							callShpunOtaInstall().catch(function(err) {
+								ui.addNotification(null, E('p', {}, 'Ошибка: ' + String(err)), 'error');
 							});
 						}
 					}, 'Установить ' + fwLatest)
@@ -1234,58 +565,29 @@ return view.extend({
 		}
 
 		ui.addNotification(null, E('p', {}, 'Проверка обновлений запущена.'), 'info');
-		return callShpunOtaCheck().then(function() {
-			return new Promise(function(r) { window.setTimeout(r, 15000); });
-		}).then(function() {
-			return Promise.all([ callShpunState(), callShpunRoutingGet() ]);
-		}).then(function(data) {
-			var st2 = data[0] || {};
-			st2.routing = data[1] || {};
-			st2.customRoutes = view._customRoutes;
-			rerenderView(view, st2);
-			var fwCur = (st2.fw_current || '').trim();
-			var fwLat = (st2.fw_latest  || '').trim();
-			if (!(fwLat && fwCur && compareVersions(fwCur, fwLat) < 0))
-				ui.addNotification(null, E('p', {}, 'Установлена актуальная версия: ' + (fwCur || '—') + '.'), 'info');
-		}).catch(function(err) {
-			ui.addNotification(null, E('p', {}, 'Ошибка проверки обновления: ' + String(err)), 'error');
+		callShpunOtaCheck().catch(function(err) {
+			ui.addNotification(null, E('p', {}, 'Ошибка проверки: ' + String(err)), 'error');
 		});
 	},
 
 	handleRefreshConnection: function(ev) {
 		if (ev) ev.preventDefault();
-		var view = this;
-		var st = view._state || {};
+		var st = this._state || {};
 		var code = (st.code || '').trim();
-		if (!code) {
-			ui.addNotification(null, E('p', {}, 'Сначала дождитесь генерации кода роутера.'), 'warning');
-			return;
-		}
+		if (!code) { ui.addNotification(null, E('p', {}, 'Сначала дождитесь генерации кода.'), 'warning'); return; }
+
 		ui.showModal('Обновить подключение', [
-			E('p', {}, 'Роутер заново получит актуальную конфигурацию и пересоберёт подключение.'),
-			E('p', {}, 'Используйте после смены сервера или обновления услуги в ShpunApp.'),
-			E('div', { 'style': 'margin-top:10px; text-align:right' }, [
+			E('p', {}, 'Роутер заново получит конфигурацию и пересоберёт подключение.'),
+			E('div', { 'style': 'margin-top:10px;text-align:right' }, [
 				E('button', { 'class': 'btn', 'click': function() { ui.hideModal(); } }, 'Отмена'),
 				E('button', {
-					'class': 'btn cbi-button cbi-button-apply',
-					'style': 'margin-left:8px',
+					'class': 'btn cbi-button cbi-button-apply', 'style': 'margin-left:8px',
 					'click': function() {
 						ui.hideModal();
 						ui.addNotification(null, E('p', {}, 'Обновление подключения запущено.'), 'info');
-						return callShpunRefreshConnection().then(function(res) {
+						callShpunRefreshConnection().then(function(res) {
 							res = res || {};
-							if (!res.ok) {
-								ui.addNotification(null, E('p', {}, 'Не удалось запустить: ' + (res.error || 'ошибка')), 'error');
-								return;
-							}
-							window.setTimeout(function() {
-								Promise.all([ callShpunState(), callShpunRoutingGet() ]).then(function(data) {
-									var st2 = data[0] || {};
-									st2.routing = data[1] || {};
-									st2.customRoutes = view._customRoutes;
-									rerenderView(view, st2);
-								});
-							}, 15000);
+							if (!res.ok) ui.addNotification(null, E('p', {}, 'Не удалось запустить: ' + (res.error || 'ошибка')), 'error');
 						}).catch(function(err) {
 							ui.addNotification(null, E('p', {}, 'Ошибка: ' + String(err)), 'error');
 						});
@@ -1297,31 +599,18 @@ return view.extend({
 
 	handleResetVpn: function(ev) {
 		if (ev) ev.preventDefault();
-		var view = this;
 		ui.showModal('Сброс конфигурации', [
-			E('p', {}, 'Полный сброс Shpun Router. Будет сгенерирован новый код, текущая привязка и конфигурация VPN будут потеряны.'),
-			E('div', { 'style': 'margin-top:10px; text-align:right' }, [
+			E('p', {}, 'Полный сброс. Новый код, привязка и конфигурация VPN будут потеряны.'),
+			E('div', { 'style': 'margin-top:10px;text-align:right' }, [
 				E('button', { 'class': 'btn', 'click': function() { ui.hideModal(); } }, 'Отмена'),
 				E('button', {
-					'class': 'btn cbi-button cbi-button-negative',
-					'style': 'margin-left:8px',
+					'class': 'btn cbi-button cbi-button-negative', 'style': 'margin-left:8px',
 					'click': function() {
 						ui.hideModal();
-						return callShpunResetVpn().then(function(res) {
+						callShpunResetVpn().then(function(res) {
 							res = res || {};
-							if (res.ok) {
-								ui.addNotification(null, E('p', {}, 'Конфигурация сброшена. Роутер переведён в режим первоначальной настройки.'), 'info');
-								window.setTimeout(function() {
-									Promise.all([ callShpunState(), callShpunRoutingGet() ]).then(function(data) {
-										var st2 = data[0] || {};
-										st2.routing = data[1] || {};
-										st2.customRoutes = { vpn: [], direct: [] };
-										rerenderView(view, st2);
-									});
-								}, 5000);
-							} else {
-								ui.addNotification(null, E('p', {}, 'Не удалось сбросить: ' + (res.error || 'ошибка')), 'error');
-							}
+							if (res.ok) ui.addNotification(null, E('p', {}, 'Конфигурация сброшена.'), 'info');
+							else ui.addNotification(null, E('p', {}, 'Не удалось сбросить: ' + (res.error || 'ошибка')), 'error');
 						}).catch(function(err) {
 							ui.addNotification(null, E('p', {}, 'Ошибка: ' + String(err)), 'error');
 						});
@@ -1338,25 +627,7 @@ return view.extend({
 	onmount: function(node) {
 		this.container = node;
 		hideLuCIHeader(node);
-		var view = this;
-
-		this._pollId = poll.add(function() {
-			if (!view.container || !view.container.parentNode) return;
-			return Promise.all([
-				callShpunState(),
-				callShpunRoutingGet()
-				// Кастомные маршруты при poll не перезапрашиваем
-			]).then(function(data) {
-				var st = data[0] || {};
-				st.routing = data[1] || {};
-				st.customRoutes = view._customRoutes; // сохраняем локальное состояние
-				rerenderView(view, st);
-			});
-		}, 10);
 	},
 
-	onunload: function() {
-		if (this._pollId != null)
-			poll.remove(this._pollId);
-	}
+	onunload: function() {}
 });

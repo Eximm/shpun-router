@@ -195,7 +195,9 @@ case "$ROUTER_PROTO" in
         cat >"$OUT_CFG" <<EOF
 {
   "log": {
-    "loglevel": "warning"
+    "access": "none",
+    "error": "none",
+    "loglevel": "none"
   },
 
   "inbounds": [
@@ -425,7 +427,9 @@ EOF
         cat >"$OUT_CFG" <<EOF
 {
   "log": {
-    "loglevel": "warning"
+    "access": "none",
+    "error": "none",
+    "loglevel": "none"
   },
 
   "inbounds": [
