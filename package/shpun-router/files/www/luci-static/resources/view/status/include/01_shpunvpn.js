@@ -1,633 +1,464 @@
 'use strict';
-'require view';
-'require rpc';
-'require ui';
-'require poll';
 
-/* ============================================================
- *  RPC
- * ========================================================== */
+import { open, popen } from 'fs';
 
-var callShpunState = rpc.declare({
-	object: 'shpun', method: 'state', expect: { '': {} }
-});
-var callShpunRoutingGet = rpc.declare({
-	object: 'shpun', method: 'routing_get', expect: { '': {} }
-});
-var callShpunRoutingSet = rpc.declare({
-	object: 'shpun', method: 'routing_set', params: ['mode'], expect: { '': {} }
-});
-var callShpunOtaCheck = rpc.declare({
-	object: 'shpun', method: 'ota_check', expect: { '': {} }
-});
-var callShpunOtaInstall = rpc.declare({
-	object: 'shpun', method: 'ota_install', expect: { '': {} }
-});
-var callShpunRefreshConnection = rpc.declare({
-	object: 'shpun', method: 'refresh_connection', expect: { '': {} }
-});
-var callShpunResetVpn = rpc.declare({
-	object: 'shpun', method: 'reset_vpn', expect: { '': {} }
-});
-var callShpunCustomRoutesGet = rpc.declare({
-	object: 'shpun', method: 'custom_routes_get', expect: { '': {} }
-});
-var callShpunCustomRoutesSet = rpc.declare({
-	object: 'shpun', method: 'custom_routes_set', params: ['vpn', 'direct'], expect: { '': {} }
-});
+const DIR       = "/etc/shpun";
+const CODE      = DIR + "/router_code";
+const SUB       = DIR + "/subscription.json";
+const READY     = DIR + "/vpn_ready";
+const VERROR    = DIR + "/vpn_error";
 
-/* ============================================================
- *  Styles
- * ========================================================== */
+const FW_CUR_NEW   = DIR + "/fw_current";
+const FW_LAST_NEW  = DIR + "/fw_latest";
+const FW_CUR_MAIN  = DIR + "/router_software_version";
+const FW_LAST_MAIN = DIR + "/router_latest_version";
+const FW_CUR_OLD   = DIR + "/router_version";
 
-function injectStyles() {
-	if (document.getElementById('shpun-widget-style')) return;
-	var css = ''
-		+ '.shpun-widget-card{position:relative;margin:0 0 16px;padding:20px;border-radius:24px;overflow:hidden;color:#eef2ff;background:linear-gradient(135deg,rgba(6,18,36,.98) 0%,rgba(8,24,50,.98) 42%,rgba(20,19,58,.98) 100%);border:1px solid rgba(110,130,185,.18);box-shadow:0 18px 44px rgba(0,0,0,.28);}'
-		+ '.shpun-widget-card:before{content:"";position:absolute;inset:0;pointer-events:none;background:radial-gradient(circle at 0% 0%,rgba(95,140,255,.15),transparent 30%),radial-gradient(circle at 100% 0%,rgba(139,92,246,.14),transparent 28%),radial-gradient(circle at 50% 100%,rgba(59,130,246,.08),transparent 35%);}'
-		+ '.shpun-widget-inner{position:relative;z-index:1;display:flex;flex-direction:column;gap:16px;}'
-		+ '.shpun-widget-header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;}'
-		+ '.shpun-title-wrap{display:flex;flex-direction:column;gap:5px;min-width:0;}'
-		+ '.shpun-kicker{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;color:#9fb5ff;}'
-		+ '.shpun-kicker-dot{width:8px;height:8px;border-radius:999px;background:#6ea8ff;box-shadow:0 0 10px rgba(110,168,255,.65);}'
-		+ '.shpun-title{font-size:22px;line-height:1.08;font-weight:800;letter-spacing:-.025em;color:#fff;}'
-		+ '.shpun-subtitle{font-size:13px;line-height:1.45;color:#c2ccde;max-width:680px;}'
-		+ '.shpun-badge{display:inline-flex;align-items:center;padding:7px 12px;border-radius:999px;font-size:12px;font-weight:800;white-space:nowrap;border:1px solid transparent;align-self:flex-start;}'
-		+ '.shpun-badge-dot{width:8px;height:8px;margin-right:8px;border-radius:999px;flex:0 0 auto;}'
-		+ '.shpun-badge--off{background:rgba(148,163,184,.11);color:#e5e7eb;border-color:rgba(148,163,184,.20);}'
-		+ '.shpun-badge--off .shpun-badge-dot{background:#94a3b8;}'
-		+ '.shpun-badge--warn{background:rgba(250,204,21,.12);color:#fde68a;border-color:rgba(250,204,21,.22);}'
-		+ '.shpun-badge--warn .shpun-badge-dot{background:#facc15;}'
-		+ '.shpun-badge--ok{background:rgba(34,197,94,.14);color:#bbf7d0;border-color:rgba(34,197,94,.24);}'
-		+ '.shpun-badge--ok .shpun-badge-dot{background:#22c55e;}'
-		+ '.shpun-badge--err{background:rgba(248,113,113,.14);color:#fecaca;border-color:rgba(248,113,113,.24);}'
-		+ '.shpun-badge--err .shpun-badge-dot{background:#f87171;}'
-		+ '.shpun-hint-box{padding:13px 15px;border-radius:16px;border:1px solid rgba(120,140,180,.16);background:rgba(10,17,32,.40);color:#cad4e4;font-size:13px;line-height:1.55;}'
-		+ '.shpun-card-main{display:grid;grid-template-columns:minmax(0,1fr) 220px;gap:16px;align-items:stretch;}'
-		+ '.shpun-col-main{min-width:0;min-height:100%;display:flex;flex-direction:column;gap:14px;}'
-		+ '.shpun-fields-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;}'
-		+ '.shpun-field{min-width:0;padding:13px 14px;border-radius:16px;background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.02));border:1px solid rgba(120,140,180,.14);box-shadow:inset 0 1px 0 rgba(255,255,255,.025);}'
-		+ '.shpun-field-label{margin-bottom:5px;font-size:11px;font-weight:700;letter-spacing:.03em;color:#90a3c3;}'
-		+ '.shpun-field-value{font-size:14px;font-weight:800;line-height:1.4;color:#fff;word-break:break-word;}'
-		+ '.shpun-routing-box{padding:13px 14px;border-radius:16px;background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.02));border:1px solid rgba(120,140,180,.14);box-shadow:inset 0 1px 0 rgba(255,255,255,.025);}'
-		+ '.shpun-routing-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:10px;}'
-		+ '.shpun-routing-title{font-size:13px;font-weight:800;color:#fff;}'
-		+ '.shpun-routing-sub{font-size:11px;line-height:1.45;color:#9fb0c8;}'
-		+ '.shpun-routing-meta{font-size:11px;line-height:1.45;color:#b8c3d9;text-align:right;}'
-		+ '.shpun-routing-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}'
-		+ '.shpun-code{font-family:monospace;font-size:18px;font-weight:800;letter-spacing:.06em;color:#fff;}'
-		+ '.shpun-code-copy{display:inline-block;cursor:pointer;border-bottom:1px dashed rgba(165,180,252,.55);}'
-		+ '.shpun-code-copy:hover{color:#c4b5fd;border-bottom-color:#a78bfa;}'
-		+ '.shpun-fw-badge{display:inline-block;margin-left:8px;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:800;color:#bfdbfe;background:rgba(96,165,250,.16);border:1px solid rgba(96,165,250,.22);animation:shpun-fw-pulse 1.8s ease-in-out infinite;}'
-		+ '@keyframes shpun-fw-pulse{0%{box-shadow:0 0 0 0 rgba(96,165,250,.35);}70%{box-shadow:0 0 0 8px rgba(96,165,250,0);}100%{box-shadow:0 0 0 0 rgba(96,165,250,0);}}'
-		+ '.shpun-actions{margin-top:auto;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;align-items:stretch;}'
-		+ '.shpun-col-side{display:flex;flex-direction:column;min-height:100%;}'
-		+ '.shpun-side-card{width:100%;height:100%;padding:12px;border-radius:18px;background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.02));border:1px solid rgba(120,140,180,.14);display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:8px;}'
-		+ '.shpun-side-title{font-size:13px;font-weight:800;color:#fff;text-align:center;line-height:1.3;}'
-		+ '.shpun-side-url{font-size:12px;font-weight:700;color:#c7d2fe;text-align:center;word-break:break-word;line-height:1.35;}'
-		+ '.shpun-qr-link{display:inline-flex;margin-top:2px;}'
-		+ '.shpun-qr{width:104px;height:auto;display:block;padding:6px;border-radius:14px;background:#fff;border:1px solid rgba(120,140,180,.18);box-shadow:0 8px 20px rgba(0,0,0,.18);}'
-		+ '.shpun-qr-caption{font-size:11px;line-height:1.45;color:#9fb0c8;text-align:center;min-height:32px;display:flex;align-items:center;justify-content:center;}'
-		+ '.shpun-side-flex-spacer{flex:1 1 auto;width:100%;}'
-		+ '.shpun-side-actions{width:100%;display:flex;flex-direction:column;gap:8px;margin-top:auto;}'
-		+ '.shpun-btn{min-height:42px;width:100%;padding:8px 12px;border-radius:999px;border:1px solid rgba(120,140,180,.24);background:rgba(14,23,38,.78);color:#e6edf8;font-size:12px;font-weight:800;line-height:1.25;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;transition:all .16s ease;text-align:center;white-space:normal;word-break:break-word;overflow-wrap:anywhere;}'
-		+ '.shpun-btn:hover{transform:translateY(-1px);background:rgba(25,35,54,.96);border-color:rgba(140,160,200,.34);}'
-		+ '.shpun-btn--ghost{background:rgba(255,255,255,.03);}'
-		+ '.shpun-btn--primary{background:linear-gradient(135deg,rgba(79,70,229,.90),rgba(99,102,241,.82));border-color:rgba(140,130,255,.28);color:#fff;box-shadow:0 8px 18px rgba(76,70,180,.18);}'
-		+ '.shpun-btn--primary:hover{background:linear-gradient(135deg,rgba(88,80,238,.96),rgba(110,114,248,.88));}'
-		+ '.shpun-btn--danger{background:rgba(101,24,34,.42);border-color:rgba(248,113,113,.30);color:#fecaca;}'
-		+ '.shpun-btn--danger:hover{background:rgba(122,29,42,.50);}'
-		+ '.shpun-btn.is-active{background:linear-gradient(135deg,rgba(79,70,229,.90),rgba(99,102,241,.82));border-color:rgba(140,130,255,.28);color:#fff;box-shadow:0 8px 18px rgba(76,70,180,.18);}'
-		/* modal custom routes — тёмная тема как у виджета */
-		+ '.shpun-modal-wrap{background:linear-gradient(135deg,rgba(6,18,36,.99) 0%,rgba(8,24,50,.99) 50%,rgba(20,19,58,.99) 100%);border-radius:16px;padding:20px;color:#eef2ff;min-width:480px;}'
-		+ '.shpun-modal-desc{font-size:12px;color:#9fb0c8;margin-bottom:14px;line-height:1.5;}'
-		+ '.shpun-modal-cols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-bottom:12px;}'
-		+ '.shpun-modal-col-label{font-size:11px;font-weight:700;letter-spacing:.03em;margin-bottom:6px;}'
-		+ '.shpun-modal-col-label--vpn{color:#a5b4fc;}'
-		+ '.shpun-modal-col-label--direct{color:#6ee7b7;}'
-		+ '.shpun-modal-list{min-height:60px;max-height:180px;overflow-y:auto;margin-bottom:8px;border:1px solid rgba(120,140,180,.18);border-radius:10px;padding:6px;display:flex;flex-direction:column;gap:4px;background:rgba(8,16,32,.50);}'
-		+ '.shpun-modal-empty{font-size:11px;color:#4a5568;font-style:italic;padding:4px;}'
-		+ '.shpun-modal-tag{display:flex;align-items:center;justify-content:space-between;padding:4px 8px;border-radius:7px;font-size:12px;font-family:monospace;font-weight:600;}'
-		+ '.shpun-modal-tag--vpn{background:rgba(99,102,241,.18);color:#c7d2fe;border:1px solid rgba(99,102,241,.28);}'
-		+ '.shpun-modal-tag--direct{background:rgba(16,185,129,.14);color:#a7f3d0;border:1px solid rgba(16,185,129,.24);}'
-		+ '.shpun-modal-tag-del{background:none;border:none;cursor:pointer;font-size:14px;opacity:.4;padding:0 2px;line-height:1;color:inherit;}'
-		+ '.shpun-modal-tag-del:hover{opacity:1;}'
-		+ '.shpun-modal-input-row{display:flex;gap:6px;}'
-		+ '.shpun-modal-input{flex:1 1 auto;padding:7px 10px;border:1px solid rgba(120,140,180,.22);border-radius:9px;background:rgba(8,16,32,.60);color:#e2e8f0;font-size:12px;font-family:monospace;outline:none;}'
-		+ '.shpun-modal-input:focus{border-color:rgba(140,130,255,.45);background:rgba(12,22,44,.80);}'
-		+ '.shpun-modal-input::placeholder{color:#4a5568;}'
-		+ '.shpun-modal-add-btn{padding:7px 14px;border:1px solid rgba(120,140,180,.24);border-radius:9px;background:rgba(14,23,38,.80);color:#e6edf8;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;transition:all .14s ease;}'
-		+ '.shpun-modal-add-btn:hover{background:rgba(25,35,54,.96);border-color:rgba(140,160,200,.34);}'
-		+ '.shpun-modal-footer{display:flex;justify-content:flex-end;gap:8px;margin-top:14px;border-top:1px solid rgba(120,140,180,.12);padding-top:14px;}'
-		+ '.shpun-modal-btn{padding:8px 20px;border-radius:999px;font-size:12px;font-weight:800;cursor:pointer;border:1px solid rgba(120,140,180,.24);background:rgba(14,23,38,.78);color:#e6edf8;transition:all .14s ease;}'
-		+ '.shpun-modal-btn:hover{background:rgba(25,35,54,.96);}'
-		+ '.shpun-modal-btn--primary{background:linear-gradient(135deg,rgba(79,70,229,.90),rgba(99,102,241,.82));border-color:rgba(140,130,255,.28);color:#fff;}'
-		+ '.shpun-modal-btn--primary:hover{background:linear-gradient(135deg,rgba(88,80,238,.96),rgba(110,114,248,.88));}'
-		+ '@media(max-width:980px){.shpun-card-main{grid-template-columns:1fr;}.shpun-fields-grid{grid-template-columns:repeat(2,minmax(0,1fr));}.shpun-actions{grid-template-columns:repeat(3,minmax(0,1fr));}.shpun-side-flex-spacer{display:none;}}'
-		+ '@media(max-width:640px){.shpun-widget-card{padding:14px;border-radius:18px;}.shpun-title{font-size:18px;}.shpun-fields-grid{grid-template-columns:1fr;}.shpun-routing-actions{grid-template-columns:1fr;}.shpun-actions{grid-template-columns:repeat(2,minmax(0,1fr));}.shpun-modal-cols{grid-template-columns:1fr;}.shpun-btn{font-size:12px;}}';
+const LASTCHK   = DIR + "/last_sub_check";
 
-	var s = document.createElement('style');
-	s.id = 'shpun-widget-style';
-	s.type = 'text/css';
-	s.appendChild(document.createTextNode(css));
-	document.head.appendChild(s);
+const ROUTES_DIR      = DIR + "/routes";
+const ROUTES_MODE     = ROUTES_DIR + "/mode";
+const ROUTES_VER      = ROUTES_DIR + "/ru.version";
+const ROUTES_LASTCHK  = ROUTES_DIR + "/last_check";
+const ROUTES_CIDRS    = DIR + "/routes/ru.cidrs";
+const ROUTING_SETTER  = DIR + "/set-routing-mode.sh";
+
+const CUSTOM_FILE     = ROUTES_DIR + "/custom.json";
+const CUSTOM_SCRIPT   = DIR + "/apply-custom-routes.sh";
+
+function readfile(path) {
+	try {
+		let f = open(path, "r");
+		if (!f) return "";
+		let d = f.read("all");
+		f.close();
+		return d ? d : "";
+	} catch(e) { return ""; }
 }
 
-/* ============================================================
- *  Helpers
- * ========================================================== */
-
-function normalizeVersionPart(v) {
-	var n = parseInt(String(v || '0').replace(/[^0-9].*$/, ''), 10);
-	return isNaN(n) ? 0 : n;
+function readcmd(cmd) {
+	try {
+		let p = popen(cmd);
+		if (!p) return "";
+		let d = p.read("all");
+		p.close();
+		return d ? d : "";
+	} catch(e) { return ""; }
 }
 
-function compareVersions(a, b) {
-	var pa = String(a || '').trim().split('.');
-	var pb = String(b || '').trim().split('.');
-	var len = Math.max(pa.length, pb.length, 3);
-	for (var i = 0; i < len; i++) {
-		var av = normalizeVersionPart(pa[i]);
-		var bv = normalizeVersionPart(pb[i]);
-		if (av < bv) return -1;
-		if (av > bv) return 1;
-	}
-	return 0;
+function norm(v) {
+	if (v == null) return "";
+	return '' + v;
 }
 
-function buildStatusBadge(state) {
-	var hasCode = !!(state.code && state.code.trim().length > 0);
-	var hasSub  = !!state.has_sub;
-	var ready   = !!state.vpn_ready;
-	var err     = (state.vpn_error || '').trim();
-	var cls, text;
-	if (err)                              { cls = 'shpun-badge shpun-badge--err';  text = 'Ошибка подключения'; }
-	else if (!hasCode)                    { cls = 'shpun-badge shpun-badge--off';  text = 'Подготовка'; }
-	else if (hasCode && !hasSub)          { cls = 'shpun-badge shpun-badge--warn'; text = 'Ожидает привязки'; }
-	else if (hasCode && hasSub && !ready) { cls = 'shpun-badge shpun-badge--warn'; text = 'Подключаемся'; }
-	else if (hasCode && hasSub && ready)  { cls = 'shpun-badge shpun-badge--ok';   text = 'VPN подключен'; }
-	else                                  { cls = 'shpun-badge shpun-badge--off';  text = 'Ожидание'; }
-	return E('span', { 'class': cls }, [ E('span', { 'class': 'shpun-badge-dot' }), text ]);
+function exists(path) {
+	try {
+		let f = open(path, "r");
+		if (!f) return false;
+		f.close();
+		return true;
+	} catch(e) { return false; }
 }
 
-function hideLuCIHeader(rootNode) {
-	if (!rootNode) return;
-	var prev = rootNode.previousSibling;
-	while (prev) {
-		if (prev.style !== undefined) prev.style.display = 'none';
-		prev = prev.previousSibling;
-	}
+function read_fw_current() {
+	let v = "";
+	if (exists(FW_CUR_NEW))       v = readfile(FW_CUR_NEW);
+	else if (exists(FW_CUR_MAIN)) v = readfile(FW_CUR_MAIN);
+	else if (exists(FW_CUR_OLD))  v = readfile(FW_CUR_OLD);
+	return v || "";
 }
 
-function getRoutingModeLabel(mode) {
-	return String(mode || 'full').trim() === 'split_ru'
-		? 'РФ напрямую, остальное через VPN'
-		: 'Весь трафик через VPN';
+function read_fw_latest() {
+	let v = "";
+	if (exists(FW_LAST_NEW))       v = readfile(FW_LAST_NEW);
+	else if (exists(FW_LAST_MAIN)) v = readfile(FW_LAST_MAIN);
+	return v || "";
 }
 
-function validateIpCidr(entry) {
-	entry = entry.trim();
-	if (!entry) return false;
-	var ip, prefix, slashIdx = entry.indexOf('/');
-	if (slashIdx >= 0) {
-		ip = entry.slice(0, slashIdx);
-		prefix = parseInt(entry.slice(slashIdx + 1), 10);
-		if (isNaN(prefix) || prefix < 0 || prefix > 32) return false;
+// Валидация одной записи: только IPv4 и CIDR
+function validate_ip_cidr(entry) {
+	entry = trim(entry);
+	if (!entry || length(entry) == 0) return false;
+
+	let ip, prefix;
+	let slash = index(entry, "/");
+
+	if (slash >= 0) {
+		ip     = substr(entry, 0, slash);
+		prefix = int(substr(entry, slash + 1));
+		if (prefix < 0 || prefix > 32) return false;
 	} else {
-		ip = entry;
+		ip     = entry;
+		prefix = 32;
 	}
-	var parts = ip.split('.');
-	if (parts.length !== 4) return false;
-	for (var i = 0; i < 4; i++) {
-		var octet = parseInt(parts[i], 10);
-		if (isNaN(octet) || octet < 0 || octet > 255) return false;
-		if (String(octet) !== parts[i]) return false;
+
+	// Проверяем четыре октета
+	let parts = split(ip, "\\.");
+	if (length(parts) != 4) return false;
+
+	for (let i = 0; i < 4; i++) {
+		let octet = int(parts[i]);
+		// Дополнительная проверка: строка должна быть числовой
+		if (parts[i] != '' + octet) return false;
+		if (octet < 0 || octet > 255) return false;
 	}
+
 	return true;
 }
 
-/* ============================================================
- *  Custom routes modal
- *  Живёт вне #view — LuCI его не трогает никогда
- * ========================================================== */
+return {
+	shpun: {
 
-function openCustomRoutesModal() {
-	/* Показываем спиннер пока грузим */
-	ui.showModal('Дополнительные маршруты', [
-		E('p', {}, 'Загружаем маршруты…')
-	]);
-
-	callShpunCustomRoutesGet().then(function(res) {
-		res = res || {};
-		var vpnList    = (res.vpn    || []).slice();
-		var directList = (res.direct || []).slice();
-
-		function renderList(wrap, list, cls) {
-			while (wrap.firstChild) wrap.removeChild(wrap.firstChild);
-			if (!list.length) {
-				wrap.appendChild(E('div', { 'class': 'shpun-modal-empty' }, 'Пусто'));
-				return;
+		/* --- PING --- */
+		ping: {
+			call: function(req) {
+				return { ok: 1, msg: "shpun ucode pong" };
 			}
-			list.forEach(function(entry, idx) {
-				var del = E('button', { 'type': 'button', 'class': 'shpun-modal-tag-del', 'title': 'Удалить' }, '×');
-				del.addEventListener('click', function(ev) {
-					ev.preventDefault();
-					list.splice(idx, 1);
-					renderList(wrap, list, cls);
-				});
-				wrap.appendChild(E('div', { 'class': 'shpun-modal-tag shpun-modal-tag--' + cls }, [
-					E('span', {}, entry),
-					del
-				]));
-			});
-		}
+		},
 
-		function buildCol(cls, label, list) {
-			var wrap = E('div', { 'class': 'shpun-modal-list' });
-			renderList(wrap, list, cls);
+		/* --- STATE --- */
+		state: {
+			call: function(req) {
+				try {
+					let code_raw = readfile(CODE);
+					let sub_raw  = readfile(SUB);
+					let err_raw  = readfile(VERROR);
+					let fw_cur   = read_fw_current();
+					let fw_last  = read_fw_latest();
 
-			var input = E('input', {
-				'class': 'shpun-modal-input',
-				'type': 'text',
-				'placeholder': '1.2.3.4 или 10.0.0.0/8',
-				'autocomplete': 'off',
-				'spellcheck': 'false'
-			});
+					let res = {
+						code:             code_raw || "",
+						has_sub:          (sub_raw != ""),
+						subscription_url: sub_raw || "",
+						vpn_ready:        exists(READY),
+						vpn_error:        err_raw || ""
+					};
 
-			var addBtn = E('button', { 'type': 'button', 'class': 'shpun-modal-add-btn' }, 'Добавить');
+					if (fw_cur  != "") res.fw_current = fw_cur;
+					if (fw_last != "") res.fw_latest  = fw_last;
 
-			addBtn.addEventListener('click', function(ev) {
-				ev.preventDefault();
-				var val = input.value.trim();
-				if (!val) return;
-				if (!validateIpCidr(val)) {
-					ui.addNotification(null, E('p', {}, 'Неверный формат: ' + val + '. Допустимы только IPv4 и CIDR.'), 'error');
-					return;
+					return res;
+				} catch(e) {
+					return { ok: 0, error: String(e) };
 				}
-				if (vpnList.indexOf(val) >= 0 || directList.indexOf(val) >= 0) {
-					ui.addNotification(null, E('p', {}, 'Адрес ' + val + ' уже добавлен.'), 'warning');
-					return;
-				}
-				list.push(val);
-				input.value = '';
-				renderList(wrap, list, cls);
-			});
-
-			input.addEventListener('keydown', function(ev) {
-				if (ev.key === 'Enter') { ev.preventDefault(); addBtn.click(); }
-			});
-
-			return E('div', {}, [
-				E('div', { 'class': 'shpun-modal-col-label shpun-modal-col-label--' + cls }, label),
-				wrap,
-				E('div', { 'class': 'shpun-modal-input-row' }, [ input, addBtn ])
-			]);
-		}
-
-		ui.showModal('Дополнительные маршруты', [
-			E('div', { 'class': 'shpun-modal-wrap' }, [
-				E('div', { 'class': 'shpun-modal-desc' },
-					'Только IPv4-адреса и CIDR (например: 1.2.3.4 или 10.0.0.0/8). Работает поверх основного режима и split_ru.'),
-				E('div', { 'class': 'shpun-modal-cols' }, [
-					buildCol('vpn',    'Принудительно через VPN', vpnList),
-					buildCol('direct', 'Принудительно напрямую',  directList)
-				]),
-				E('div', { 'class': 'shpun-modal-footer' }, [
-					E('button', {
-						'type': 'button',
-						'class': 'shpun-modal-btn',
-						'click': function() { ui.hideModal(); }
-					}, 'Отмена'),
-					E('button', {
-						'type': 'button',
-						'class': 'shpun-modal-btn shpun-modal-btn--primary',
-						'click': function() {
-							callShpunCustomRoutesSet(vpnList.slice(), directList.slice()).then(function(res) {
-								res = res || {};
-								ui.hideModal();
-								if (res.ok)
-									ui.addNotification(null, E('p', {}, 'Маршруты сохранены: ' + res.vpn_count + ' через VPN, ' + res.direct_count + ' напрямую.'), 'info');
-								else
-									ui.addNotification(null, E('p', {}, 'Ошибка: ' + (res.error || 'неизвестная ошибка')), 'error');
-							}).catch(function(err) {
-								ui.hideModal();
-								ui.addNotification(null, E('p', {}, 'Ошибка сохранения: ' + String(err)), 'error');
-							});
-						}
-					}, 'Сохранить')
-				])
-			])
-		]);
-	}).catch(function(err) {
-		ui.showModal('Дополнительные маршруты', [
-			E('div', { 'class': 'shpun-modal-wrap' }, [
-				E('p', { 'style': 'color:#fecaca;' }, 'Не удалось загрузить маршруты: ' + String(err)),
-				E('div', { 'class': 'shpun-modal-footer' }, [
-					E('button', { 'type': 'button', 'class': 'shpun-modal-btn', 'click': function() { ui.hideModal(); } }, 'Закрыть')
-				])
-			])
-		]);
-	});
-}
-
-/* ============================================================
- *  View
- * ========================================================== */
-
-return view.extend({
-
-	load: function() {
-		injectStyles();
-		return Promise.all([
-			callShpunState(),
-			callShpunRoutingGet()
-		]).then(function(res) {
-			var st = res[0] || {};
-			st.routing = res[1] || {};
-			return st;
-		});
-	},
-
-	render: function(state) {
-		state = state || {};
-		this._state = state;
-		var view = this;
-
-		var code     = (state.code || '').trim();
-		var hasSub   = !!state.has_sub;
-		var vpnReady = !!state.vpn_ready;
-		var err      = (state.vpn_error || '').trim();
-
-		var routing       = state.routing || {};
-		var routingMode   = String(routing.mode || 'full').trim();
-		var routingLabel  = getRoutingModeLabel(routingMode);
-		var routesVersion = String(routing.routes_version || '0').trim();
-		var routesCount   = routing.routes_count || 0;
-
-		var fwCurrentRaw     = (state.fw_current || '').trim();
-		var fwCurrentDisplay = fwCurrentRaw || '—';
-		var fwLatest         = (state.fw_latest || '').trim();
-		var hasNewFw = !!(fwLatest && fwCurrentRaw && compareVersions(fwCurrentRaw, fwLatest) < 0);
-
-		var appLink = 'https://app.sdnonline.online';
-		var botLink = 'https://t.me/shpunvpn_bot';
-		var qrUrl   = 'https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=' + encodeURIComponent(appLink);
-
-		var codeNode = E('span', {
-			'class': code ? 'shpun-code shpun-code-copy' : 'shpun-code',
-			'click': code ? ui.createHandlerFn(this, 'handleCopyCode', code) : null
-		}, code || '— — — —');
-
-		var fwValue = hasNewFw
-			? E('span', {}, [ fwCurrentDisplay, E('span', { 'class': 'shpun-fw-badge' }, 'доступна ' + fwLatest) ])
-			: fwCurrentDisplay;
-
-		var hintText =
-			!code     ? 'Роутер готовится к подключению. После генерации кода откройте ShpunApp и оформите услугу для роутера.'
-			: !hasSub ? 'Откройте ShpunApp, закажите или активируйте услугу и выполните привязку по этому коду.'
-			: !vpnReady ? (err ? 'Ошибка: ' + err : 'Привязка найдена. Роутер поднимает VPN…')
-			: 'Роутер подключен к Shpun SDN System. Для смены сервера используйте ShpunApp.';
-
-		return E('div', { 'class': 'shpun-widget-card' }, [
-			E('div', { 'class': 'shpun-widget-inner' }, [
-
-				E('div', { 'class': 'shpun-widget-header' }, [
-					E('div', { 'class': 'shpun-title-wrap' }, [
-						E('div', { 'class': 'shpun-kicker' }, [ E('span', { 'class': 'shpun-kicker-dot' }), 'Shpun Router' ]),
-						E('div', { 'class': 'shpun-title' }, 'SDN System'),
-						E('div', { 'class': 'shpun-subtitle' }, code
-							? 'Статус роутера, подключение и быстрые действия'
-							: 'Подготовка роутера к подключению через ShpunApp')
-					]),
-					buildStatusBadge(state)
-				]),
-
-				E('div', { 'class': 'shpun-hint-box' }, hintText),
-
-				E('div', { 'class': 'shpun-card-main' }, [
-					E('div', { 'class': 'shpun-col-main' }, [
-
-						E('div', { 'class': 'shpun-fields-grid' }, [
-							E('div', { 'class': 'shpun-field' }, [
-								E('div', { 'class': 'shpun-field-label' }, 'Код роутера'),
-								E('div', { 'class': 'shpun-field-value' }, [ codeNode ])
-							]),
-							E('div', { 'class': 'shpun-field' }, [
-								E('div', { 'class': 'shpun-field-label' }, 'Статус услуги'),
-								E('div', { 'class': 'shpun-field-value' }, [
-									!code ? 'Ожидает генерации кода'
-									: !hasSub ? 'Ожидает привязки'
-									: vpnReady ? 'Подключен'
-									: err ? 'Ошибка подключения' : 'Подключение…'
-								])
-							]),
-							E('div', { 'class': 'shpun-field' }, [
-								E('div', { 'class': 'shpun-field-label' }, 'Прошивка'),
-								E('div', { 'class': 'shpun-field-value' }, [ fwValue ])
-							])
-						]),
-
-						E('div', { 'class': 'shpun-routing-box' }, [
-							E('div', { 'class': 'shpun-routing-head' }, [
-								E('div', {}, [
-									E('div', { 'class': 'shpun-routing-title' }, 'Маршрутизация'),
-									E('div', { 'class': 'shpun-routing-sub' }, 'Направлять ли весь трафик в туннель или пускать российские адреса напрямую.')
-								]),
-								E('div', { 'class': 'shpun-routing-meta' }, [
-									E('div', {}, 'Режим: ' + routingLabel),
-									E('div', {}, 'Маршруты: v' + routesVersion + ' · ' + routesCount + ' CIDR')
-								])
-							]),
-							E('div', { 'class': 'shpun-routing-actions' }, [
-								E('button', {
-									'class': 'shpun-btn ' + (routingMode === 'full' ? 'shpun-btn--primary is-active' : 'shpun-btn--ghost'),
-									'click': function(ev) { return view.handleSetRoutingMode(ev, 'full'); }
-								}, 'Весь трафик через VPN'),
-								E('button', {
-									'class': 'shpun-btn ' + (routingMode === 'split_ru' ? 'shpun-btn--primary is-active' : 'shpun-btn--ghost'),
-									'click': function(ev) { return view.handleSetRoutingMode(ev, 'split_ru'); }
-								}, 'РФ напрямую, остальное через VPN')
-							])
-						]),
-
-						E('div', { 'class': 'shpun-actions' }, [
-							E('button', { 'class': 'shpun-btn shpun-btn--ghost',   'click': ui.createHandlerFn(this, 'handleRefresh') }, 'Обновить статус'),
-							E('button', { 'class': 'shpun-btn shpun-btn--ghost',   'click': ui.createHandlerFn(this, 'handleCustomRoutes') }, 'Доп. маршруты'),
-							E('button', { 'class': 'shpun-btn shpun-btn--ghost',   'click': ui.createHandlerFn(this, 'handleUpdateFirmware') }, hasNewFw ? ('Установить ' + fwLatest) : 'Проверить обновление'),
-							E('button', { 'class': 'shpun-btn shpun-btn--primary', 'click': ui.createHandlerFn(this, 'handleRefreshConnection') }, 'Обновить подключение'),
-							E('button', { 'class': 'shpun-btn shpun-btn--danger',  'click': ui.createHandlerFn(this, 'handleResetVpn') }, 'Сбросить конфиг')
-						])
-					]),
-
-					E('div', { 'class': 'shpun-col-side' }, [
-						E('div', { 'class': 'shpun-side-card' }, [
-							E('div', { 'class': 'shpun-side-title' }, 'Управление через ShpunApp'),
-							E('div', { 'class': 'shpun-side-url' }, 'app.sdnonline.online'),
-							E('a', { 'class': 'shpun-qr-link', 'href': appLink, 'target': '_blank', 'rel': 'noreferrer' }, [
-								E('img', { 'class': 'shpun-qr', 'src': qrUrl, 'alt': 'QR' })
-							]),
-							E('div', { 'class': 'shpun-qr-caption' }, 'Сканируйте QR-код, чтобы открыть ShpunApp на телефоне'),
-							E('div', { 'class': 'shpun-side-flex-spacer' }),
-							E('div', { 'class': 'shpun-side-actions' }, [
-								E('a', { 'class': 'shpun-btn shpun-btn--primary', 'href': appLink, 'target': '_blank', 'rel': 'noreferrer' }, 'Открыть ShpunApp'),
-								E('a', { 'class': 'shpun-btn shpun-btn--ghost',   'href': botLink, 'target': '_blank', 'rel': 'noreferrer' }, 'Бот — резервный вариант')
-							])
-						])
-					])
-				])
-			])
-		]);
-	},
-
-	handleCopyCode: function(ev, code) {
-		if (ev) { ev.preventDefault(); ev.stopPropagation(); }
-		if (!code) return;
-		var text = String(code).trim();
-		var ok  = function() { ui.addNotification(null, E('p', {}, 'Код роутера скопирован.'), 'info'); };
-		var err = function(e) { ui.addNotification(null, E('p', {}, 'Не удалось скопировать: ' + e), 'error'); };
-		try {
-			if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(ok).catch(err);
-			else {
-				var i = document.createElement('input'); i.type = 'text'; i.value = text;
-				document.body.appendChild(i); i.select();
-				try { document.execCommand('copy'); ok(); } catch(e) { err(e); }
-				document.body.removeChild(i);
 			}
-		} catch(e) { err(e); }
-	},
+		},
 
-	handleRefresh: function(ev) {
-		if (ev) ev.preventDefault();
-		var view = this;
-		return Promise.all([ callShpunState(), callShpunRoutingGet() ]).then(function(data) {
-			var st = data[0] || {};
-			st.routing = data[1] || {};
-			view._state = st;
-		}).catch(function(err) {
-			ui.addNotification(null, E('p', {}, 'Не удалось обновить статус: ' + String(err)), 'error');
-		});
-	},
+		/* --- ROUTING_GET --- */
+		routing_get: {
+			call: function(req) {
+				try {
+					let mode = readfile(ROUTES_MODE) || "";
+					let ver  = readfile(ROUTES_VER)  || "";
+					let ts   = readfile(ROUTES_LASTCHK) || "";
+					let cnt  = 0;
 
-	handleCustomRoutes: function(ev) {
-		if (ev) ev.preventDefault();
-		openCustomRoutesModal();
-	},
+					if (exists(ROUTES_CIDRS)) {
+						let out = readcmd("wc -l < " + ROUTES_CIDRS + " 2>/dev/null");
+						if (out != "") cnt = +out;
+					}
 
-	handleSetRoutingMode: function(ev, mode) {
-		if (ev) { ev.preventDefault(); ev.stopPropagation(); }
-		var targetMode = String(mode || '').trim();
-		if (targetMode !== 'full' && targetMode !== 'split_ru') return;
+					return {
+						ok:             1,
+						mode:           mode != "" ? mode : "full",
+						routes_version: ver  != "" ? ver  : "0",
+						last_check:     ts   != "" ? ts   : "0",
+						routes_count:   cnt,
+						has_routes:     exists(ROUTES_CIDRS) && cnt > 0
+					};
+				} catch(e) {
+					return { ok: 0, error: String(e) };
+				}
+			}
+		},
 
-		ui.addNotification(null, E('p', {}, 'Применяем режим маршрутизации…'), 'info');
+		/* --- ROUTING_SET --- */
+		routing_set: {
+			args: { mode: "example" },
+			call: function(req) {
+				try {
+					let mode = "";
+					if (req && req.args && req.args.mode)
+						mode = norm(req.args.mode);
 
-		return Promise.resolve()
-			.then(function() { return callShpunRoutingSet(targetMode); })
-			.catch(function() { return null; })
-			.then(function() { return new Promise(function(r) { window.setTimeout(r, 1500); }); })
-			.then(function() {
-				return Promise.all([ callShpunState(), callShpunRoutingGet() ]).then(function(data) {
-					var actual = String(((data[1] || {}).mode) || '').trim();
-					if (actual === targetMode)
-						ui.addNotification(null, E('p', {}, 'Режим маршрутизации обновлён.'), 'info');
-					else
-						ui.addNotification(null, E('p', {}, 'Не удалось применить режим.'), 'error');
-				});
-			});
-	},
+					if (mode != "full" && mode != "split_ru")
+						return { ok: 0, error: "invalid mode", got: mode };
 
-	handleUpdateFirmware: function(ev) {
-		if (ev) ev.preventDefault();
-		var view = this;
-		var st = view._state || {};
-		var fwCurrentRaw = (st.fw_current || '').trim();
-		var fwLatest     = (st.fw_latest  || '').trim();
-		var hasNew = !!(fwLatest && fwCurrentRaw && compareVersions(fwCurrentRaw, fwLatest) < 0);
+					if (!exists(ROUTING_SETTER))
+						return { ok: 0, error: "set-routing-mode.sh not found" };
 
-		if (hasNew) {
-			ui.showModal('Обновление прошивки', [
-				E('p', {}, [ 'Доступна новая версия: ', E('strong', {}, fwCurrentRaw || '—'), ' → ', E('strong', {}, fwLatest), '.' ]),
-				E('p', {}, 'Установить? VPN-соединение будет перезапущено.'),
-				E('div', { 'style': 'margin-top:10px;text-align:right' }, [
-					E('button', { 'class': 'btn', 'click': function() { ui.hideModal(); } }, 'Отмена'),
-					E('button', {
-						'class': 'btn cbi-button cbi-button-apply', 'style': 'margin-left:8px',
-						'click': function() {
-							ui.hideModal();
-							ui.addNotification(null, E('p', {}, 'Установка обновления запущена.'), 'info');
-							callShpunOtaInstall().catch(function(err) {
-								ui.addNotification(null, E('p', {}, 'Ошибка: ' + String(err)), 'error');
-							});
-						}
-					}, 'Установить ' + fwLatest)
-				])
-			]);
-			return;
+					let p = popen(ROUTING_SETTER + " " + mode + " 2>/dev/null");
+					let out = "";
+					if (p) { out = p.read("all") || ""; p.close(); }
+
+					let applied = norm(readfile(ROUTES_MODE)).replace(/[\r\n]+/g, "");
+
+					if (applied != mode)
+						return { ok: 0, error: "routing mode was not applied",
+						         requested: mode, applied: applied, output: out };
+
+					return { ok: 1, mode: mode, applied_mode: applied };
+				} catch(e) {
+					return { ok: 0, error: String(e) };
+				}
+			}
+		},
+
+		/* --- CUSTOM_ROUTES_GET --- */
+		custom_routes_get: {
+			call: function(req) {
+				try {
+					if (!exists(CUSTOM_FILE))
+						return { ok: 1, vpn: [], direct: [] };
+
+					let raw = readfile(CUSTOM_FILE);
+					if (!raw || length(raw) == 0)
+						return { ok: 1, vpn: [], direct: [] };
+
+					let data = json(raw);
+					if (!data)
+						return { ok: 1, vpn: [], direct: [] };
+
+					return {
+						ok:     1,
+						vpn:    data.vpn    || [],
+						direct: data.direct || []
+					};
+				} catch(e) {
+					return { ok: 0, error: String(e) };
+				}
+			}
+		},
+
+		/* --- CUSTOM_ROUTES_SET --- */
+		custom_routes_set: {
+			args: { vpn: [], direct: [] },
+			call: function(req) {
+				try {
+					let vpn_in    = (req && req.args && req.args.vpn)    ? req.args.vpn    : [];
+					let direct_in = (req && req.args && req.args.direct) ? req.args.direct : [];
+
+					// Убеждаемся что это массивы
+					if (type(vpn_in)    != "array") vpn_in    = [];
+					if (type(direct_in) != "array") direct_in = [];
+
+					// Валидируем и фильтруем
+					let vpn_ok    = [];
+					let direct_ok = [];
+					let errors    = [];
+
+					for (let i = 0; i < length(vpn_in); i++) {
+						let e = trim(norm(vpn_in[i]));
+						if (!e) continue;
+						if (validate_ip_cidr(e))
+							push(vpn_ok, e);
+						else
+							push(errors, e);
+					}
+
+					for (let i = 0; i < length(direct_in); i++) {
+						let e = trim(norm(direct_in[i]));
+						if (!e) continue;
+						if (validate_ip_cidr(e))
+							push(direct_ok, e);
+						else
+							push(errors, e);
+					}
+
+					if (length(errors) > 0)
+						return {
+							ok:     0,
+							error:  "invalid entries (only IPv4 and CIDR accepted)",
+							errors: errors
+						};
+
+					// Убеждаемся что директория существует
+					let mkd = popen("mkdir -p " + ROUTES_DIR + " 2>/dev/null");
+					if (mkd) mkd.close();
+
+					// Пишем файл
+					let data = { vpn: vpn_ok, direct: direct_ok };
+					let json_str = sprintf("%s", to_json(data));
+
+					let f = open(CUSTOM_FILE, "w");
+					if (!f)
+						return { ok: 0, error: "cannot write " + CUSTOM_FILE };
+					f.write(json_str);
+					f.close();
+
+					// Применяем в nftables
+					let applied = false;
+					let apply_err = "";
+
+					if (exists(CUSTOM_SCRIPT)) {
+						let p = popen(CUSTOM_SCRIPT + " apply 2>&1");
+						let out = "";
+						if (p) { out = p.read("all") || ""; p.close(); }
+						applied = true;
+					} else {
+						apply_err = "apply-custom-routes.sh not found — routes saved but not applied to firewall";
+					}
+
+					return {
+						ok:          1,
+						vpn_count:   length(vpn_ok),
+						direct_count: length(direct_ok),
+						applied:     applied,
+						warning:     apply_err || null
+					};
+				} catch(e) {
+					return { ok: 0, error: String(e) };
+				}
+			}
+		},
+
+		/* --- OTA_CHECK --- */
+		ota_check: {
+			call: function(req) {
+				try {
+					if (!exists("/etc/init.d/shpun-agent"))
+						return { ok: 0, error: "shpun-agent init script not found" };
+					if (!exists(DIR + "/router_updater"))
+						return { ok: 0, error: "router_updater not found" };
+
+					let cmd =
+						"sh -c '" +
+							"rm -f " + LASTCHK + " >/dev/null 2>&1; " +
+							"/etc/init.d/shpun-agent restart >/dev/null 2>&1; " +
+							"sleep 10; " +
+							"CHECK_ONLY=1 /etc/shpun/router_updater >/dev/null 2>&1" +
+						"' &";
+
+					let p = popen(cmd);
+					if (p) p.close();
+
+					return { ok: 1, msg: "ota check started" };
+				} catch(e) {
+					return { ok: 0, error: String(e) };
+				}
+			}
+		},
+
+		/* --- OTA_INSTALL --- */
+		ota_install: {
+			call: function(req) {
+				try {
+					if (!exists(DIR + "/router_updater"))
+						return { ok: 0, error: "router_updater not found" };
+
+					let p = popen("/etc/shpun/router_updater >/dev/null 2>&1 &");
+					if (p) p.close();
+
+					return { ok: 1, msg: "ota install started" };
+				} catch(e) {
+					return { ok: 0, error: String(e) };
+				}
+			}
+		},
+
+		/* --- REFRESH_CONNECTION --- */
+		refresh_connection: {
+			call: function(req) {
+				try {
+					if (!exists(CODE)) return { ok: 0, error: "router_code not found" };
+					if (!exists(SUB))  return { ok: 0, error: "subscription.json not found" };
+					if (!exists("/etc/init.d/shpun-agent"))
+						return { ok: 0, error: "shpun-agent init script not found" };
+
+					let cmd =
+						"sh -c '" +
+							"STATE_DIR=\"/etc/shpun\"; " +
+							"CODE_FILE=\"$STATE_DIR/router_code\"; " +
+							"SUB_FILE=\"$STATE_DIR/subscription.json\"; " +
+							"VPN_READY_FILE=\"$STATE_DIR/vpn_ready\"; " +
+							"VERROR_FILE=\"$STATE_DIR/vpn_error\"; " +
+							"LAST_CHECK_FILE=\"$STATE_DIR/last_sub_check\"; " +
+							"CONF=\"$STATE_DIR/agent.conf\"; " +
+							"LOG_TAG=\"shpun-refresh\"; " +
+							"API_URL_DEFAULT=\"https://bill.shpyn.online/shm/v1/public/router_public\"; " +
+							"log(){ logger -t \"$LOG_TAG\" \"$*\"; }; " +
+							"[ -f \"$CONF\" ] && . \"$CONF\"; " +
+							"[ -z \"$API_URL\" ] && API_URL=\"$API_URL_DEFAULT\"; " +
+							"if [ ! -s \"$CODE_FILE\" ]; then log \"router_code missing\"; exit 1; fi; " +
+							"if [ ! -s \"$SUB_FILE\" ]; then log \"subscription.json missing\"; exit 1; fi; " +
+							"if ! command -v jsonfilter >/dev/null 2>&1; then log \"jsonfilter not found\"; exit 1; fi; " +
+							"CODE=\"$(cat \"$CODE_FILE\" 2>/dev/null | tr -d \"\\r\\n\")\"; " +
+							"CLEAN_CODE=\"$(printf %s \"$CODE\" | tr \"[:lower:]\" \"[:upper:]\" | tr -dc \"A-Z0-9\")\"; " +
+							"if [ -z \"$CLEAN_CODE\" ]; then log \"clean code is empty\"; exit 1; fi; " +
+							"UID_SUB=\"$(jsonfilter -i \"$SUB_FILE\" -e \"@.uid\" 2>/dev/null || echo \"\")\"; " +
+							"USI_SUB=\"$(jsonfilter -i \"$SUB_FILE\" -e \"@.usi\" 2>/dev/null || echo \"\")\"; " +
+							"if [ -z \"$UID_SUB\" ] || [ -z \"$USI_SUB\" ]; then log \"uid/usi missing\"; exit 1; fi; " +
+							"HTTP_BIN=\"\"; " +
+							"command -v curl >/dev/null 2>&1 && HTTP_BIN=\"curl\"; " +
+							"[ -z \"$HTTP_BIN\" ] && command -v wget >/dev/null 2>&1 && HTTP_BIN=\"wget\"; " +
+							"[ -z \"$HTTP_BIN\" ] && command -v uclient-fetch >/dev/null 2>&1 && HTTP_BIN=\"uclient-fetch\"; " +
+							"if [ -z \"$HTTP_BIN\" ]; then log \"no HTTP client\"; exit 1; fi; " +
+							"BASE_URL=\"${API_URL%/shm/v1/public/router_public}\"; " +
+							"CHECK_URL=\"$BASE_URL/shm/v1/public/router_config?uid=$UID_SUB&usi=$USI_SUB&code=$CLEAN_CODE&format=json\"; " +
+							"TMP_SUB=\"$SUB_FILE.refresh.tmp\"; " +
+							"log \"refreshing via $CHECK_URL\"; " +
+							"case \"$HTTP_BIN\" in " +
+								"curl) curl -fsS \"$CHECK_URL\" -o \"$TMP_SUB\" ;; " +
+								"wget) wget -qO \"$TMP_SUB\" \"$CHECK_URL\" ;; " +
+								"uclient-fetch) uclient-fetch -qO \"$TMP_SUB\" \"$CHECK_URL\" ;; " +
+							"esac || { log \"fetch failed\"; rm -f \"$TMP_SUB\"; exit 1; }; " +
+							"[ ! -s \"$TMP_SUB\" ] && { log \"empty response\"; rm -f \"$TMP_SUB\"; exit 1; }; " +
+							"OK=\"$(jsonfilter -i \"$TMP_SUB\" -e \"@.ok\" 2>/dev/null)\"; " +
+							"if [ \"$OK\" != \"1\" ]; then " +
+								"ERR=\"$(jsonfilter -i \"$TMP_SUB\" -e \"@.error\" 2>/dev/null || echo unknown)\"; " +
+								"log \"error: $ERR\"; rm -f \"$TMP_SUB\"; exit 1; " +
+							"fi; " +
+							"mv \"$TMP_SUB\" \"$SUB_FILE\"; " +
+							"date +%s > \"$LAST_CHECK_FILE\"; " +
+							"log \"subscription refreshed\"; " +
+							"/etc/init.d/shpun-vpn stop >/dev/null 2>&1 || true; " +
+							"[ -x \"$STATE_DIR/firewall-xray.sh\" ] && \"$STATE_DIR/firewall-xray.sh\" stop >/dev/null 2>&1 || true; " +
+							"/etc/init.d/shpun-agent stop >/dev/null 2>&1 || true; " +
+							"rm -f \"$STATE_DIR/xray.json\" \"$VPN_READY_FILE\" \"$VERROR_FILE\" >/dev/null 2>&1 || true; " +
+							"/etc/init.d/shpun-agent start >/dev/null 2>&1 || true; " +
+							"log \"lifecycle restarted\"; " +
+						"' &";
+
+					let p = popen(cmd);
+					if (p) p.close();
+
+					return { ok: 1, msg: "connection refresh started" };
+				} catch(e) {
+					return { ok: 0, error: String(e) };
+				}
+			}
+		},
+
+		/* --- RESET_VPN --- */
+		reset_vpn: {
+			call: function(req) {
+				try {
+					let p1 = popen("/etc/init.d/shpun-vpn stop >/dev/null 2>&1");
+					if (p1) p1.close();
+
+					let p2 = popen("/etc/init.d/shpun-agent stop >/dev/null 2>&1");
+					if (p2) p2.close();
+
+					if (exists(DIR + "/firewall-xray.sh")) {
+						let p_fw = popen(DIR + "/firewall-xray.sh stop >/dev/null 2>&1");
+						if (p_fw) p_fw.close();
+					}
+
+					let p3 = popen(
+						"rm -f " + CODE + " " + SUB + " " +
+						DIR + "/xray.json " + READY + " " + VERROR + " " + LASTCHK +
+						" >/dev/null 2>&1"
+					);
+					if (p3) p3.close();
+
+					let p4 = popen("/etc/init.d/shpun-agent start >/dev/null 2>&1 &");
+					if (p4) p4.close();
+
+					return { ok: 1, msg: "vpn reset to initial state" };
+				} catch(e) {
+					return { ok: 0, error: String(e) };
+				}
+			}
 		}
-
-		ui.addNotification(null, E('p', {}, 'Проверка обновлений запущена.'), 'info');
-		callShpunOtaCheck().catch(function(err) {
-			ui.addNotification(null, E('p', {}, 'Ошибка проверки: ' + String(err)), 'error');
-		});
-	},
-
-	handleRefreshConnection: function(ev) {
-		if (ev) ev.preventDefault();
-		var st = this._state || {};
-		var code = (st.code || '').trim();
-		if (!code) { ui.addNotification(null, E('p', {}, 'Сначала дождитесь генерации кода.'), 'warning'); return; }
-
-		ui.showModal('Обновить подключение', [
-			E('p', {}, 'Роутер заново получит конфигурацию и пересоберёт подключение.'),
-			E('div', { 'style': 'margin-top:10px;text-align:right' }, [
-				E('button', { 'class': 'btn', 'click': function() { ui.hideModal(); } }, 'Отмена'),
-				E('button', {
-					'class': 'btn cbi-button cbi-button-apply', 'style': 'margin-left:8px',
-					'click': function() {
-						ui.hideModal();
-						ui.addNotification(null, E('p', {}, 'Обновление подключения запущено.'), 'info');
-						callShpunRefreshConnection().then(function(res) {
-							res = res || {};
-							if (!res.ok) ui.addNotification(null, E('p', {}, 'Не удалось запустить: ' + (res.error || 'ошибка')), 'error');
-						}).catch(function(err) {
-							ui.addNotification(null, E('p', {}, 'Ошибка: ' + String(err)), 'error');
-						});
-					}
-				}, 'Обновить подключение')
-			])
-		]);
-	},
-
-	handleResetVpn: function(ev) {
-		if (ev) ev.preventDefault();
-		ui.showModal('Сброс конфигурации', [
-			E('p', {}, 'Полный сброс. Новый код, привязка и конфигурация VPN будут потеряны.'),
-			E('div', { 'style': 'margin-top:10px;text-align:right' }, [
-				E('button', { 'class': 'btn', 'click': function() { ui.hideModal(); } }, 'Отмена'),
-				E('button', {
-					'class': 'btn cbi-button cbi-button-negative', 'style': 'margin-left:8px',
-					'click': function() {
-						ui.hideModal();
-						callShpunResetVpn().then(function(res) {
-							res = res || {};
-							if (res.ok) ui.addNotification(null, E('p', {}, 'Конфигурация сброшена.'), 'info');
-							else ui.addNotification(null, E('p', {}, 'Не удалось сбросить: ' + (res.error || 'ошибка')), 'error');
-						}).catch(function(err) {
-							ui.addNotification(null, E('p', {}, 'Ошибка: ' + String(err)), 'error');
-						});
-					}
-				}, 'Сбросить конфиг')
-			])
-		]);
-	},
-
-	handleSaveApply: null,
-	handleSave: null,
-	handleReset: null,
-
-	onmount: function(node) {
-		this.container = node;
-		hideLuCIHeader(node);
-	},
-
-	onunload: function() {}
-});
+	}
+};
