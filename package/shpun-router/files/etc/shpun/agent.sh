@@ -40,8 +40,12 @@ log() {
 }
 
 #######################################
-# State dir helper
+# Helpers
 #######################################
+
+get_routing_mode() {
+	cat "$ROUTES_MODE_FILE" 2>/dev/null | tr -d '\r\n ' || echo "full"
+}
 
 ensure_state_dir() {
 	[ -d "$STATE_DIR" ] || mkdir -p "$STATE_DIR" 2>/dev/null || true
@@ -50,16 +54,12 @@ ensure_state_dir() {
 ensure_routes_dir() {
 	[ -d "$ROUTES_DIR" ] || mkdir -p "$ROUTES_DIR" 2>/dev/null || true
 
-	[ -f "$ROUTES_MODE_FILE" ] || echo "full" > "$ROUTES_MODE_FILE"
-	[ -f "$ROUTES_VER_FILE" ] || echo "0" > "$ROUTES_VER_FILE"
-	[ -f "$ROUTES_LAST_CHECK_FILE" ] || echo "0" > "$ROUTES_LAST_CHECK_FILE"
-	[ -f "$ROUTES_SHA_FILE" ] || : > "$ROUTES_SHA_FILE"
-	[ -f "$ROUTES_CIDRS_FILE" ] || : > "$ROUTES_CIDRS_FILE"
+	[ -f "$ROUTES_MODE_FILE" ]       || echo "full" > "$ROUTES_MODE_FILE"
+	[ -f "$ROUTES_VER_FILE" ]        || echo "0"    > "$ROUTES_VER_FILE"
+	[ -f "$ROUTES_LAST_CHECK_FILE" ] || echo "0"    > "$ROUTES_LAST_CHECK_FILE"
+	[ -f "$ROUTES_SHA_FILE" ]        || : > "$ROUTES_SHA_FILE"
+	[ -f "$ROUTES_CIDRS_FILE" ]      || : > "$ROUTES_CIDRS_FILE"
 }
-
-#######################################
-# Router code helper
-#######################################
 
 ensure_router_code() {
 	if [ -s "$CODE_FILE" ]; then
@@ -81,7 +81,7 @@ ensure_router_code() {
 }
 
 #######################################
-# HTTP client detection
+# HTTP client
 #######################################
 
 detect_http_client() {
@@ -101,18 +101,10 @@ http_get_to_file() {
 	local out="$2"
 
 	case "$HTTP_BIN" in
-		curl)
-			curl -fsS "$url" -o "$out"
-			;;
-		wget)
-			wget -qO "$out" "$url"
-			;;
-		uclient-fetch)
-			uclient-fetch -qO "$out" "$url"
-			;;
-		*)
-			return 1
-			;;
+		curl)         curl -fsS "$url" -o "$out" ;;
+		wget)         wget -qO "$out" "$url" ;;
+		uclient-fetch) uclient-fetch -qO "$out" "$url" ;;
+		*) return 1 ;;
 	esac
 }
 
@@ -120,23 +112,15 @@ http_get_stdout() {
 	local url="$1"
 
 	case "$HTTP_BIN" in
-		curl)
-			curl -fsS "$url"
-			;;
-		wget)
-			wget -qO- "$url"
-			;;
-		uclient-fetch)
-			uclient-fetch -qO- "$url"
-			;;
-		*)
-			return 1
-			;;
+		curl)         curl -fsS "$url" ;;
+		wget)         wget -qO- "$url" ;;
+		uclient-fetch) uclient-fetch -qO- "$url" ;;
+		*) return 1 ;;
 	esac
 }
 
 #######################################
-# Optional TPROXY modules for UDP
+# TPROXY modules
 #######################################
 
 has_tproxy() {
@@ -153,7 +137,6 @@ has_tproxy() {
 	rc=$?
 
 	nft delete table inet shpun_tproxy_test >/dev/null 2>&1
-
 	return "$rc"
 }
 
@@ -190,7 +173,7 @@ ensure_tproxy_modules() {
 }
 
 #######################################
-# Arch detection / config
+# Arch detection
 #######################################
 
 detect_engine_arch() {
@@ -206,21 +189,11 @@ detect_engine_arch() {
 	fi
 
 	case "$arch" in
-		mips_24kc)
-			echo "mips_24kc"
-			;;
-		mipsel_24kc|ramips*|mipsel*)
-			echo "mipsel_24kc"
-			;;
-		arm_cortex-a7|arm_cortex-a9|arm_mpcore|armv7*)
-			echo "armv7"
-			;;
-		aarch64*|arm64*)
-			echo "aarch64"
-			;;
-		x86_64)
-			echo "amd64"
-			;;
+		mips_24kc)                              echo "mips_24kc" ;;
+		mipsel_24kc|ramips*|mipsel*)            echo "mipsel_24kc" ;;
+		arm_cortex-a7|arm_cortex-a9|arm_mpcore|armv7*) echo "armv7" ;;
+		aarch64*|arm64*)                        echo "aarch64" ;;
+		x86_64)                                 echo "amd64" ;;
 		*)
 			log "detect_engine_arch: unknown arch '$arch', fallback to mips_24kc"
 			echo "mips_24kc"
@@ -328,6 +301,8 @@ calc_sha256_file() {
 	return 1
 }
 
+# Применяет маршруты через firewall-xray.sh init.
+# Вызывается только когда CIDR реально изменились.
 apply_routes_rules() {
 	if [ -x /etc/shpun/firewall-xray.sh ]; then
 		log "routes: rebuilding nft route set via firewall-xray.sh init"
@@ -339,9 +314,12 @@ apply_routes_rules() {
 	return 0
 }
 
+# Скачивает CIDR только если версия изменилась.
+# Применяет маршруты только если режим split_ru — в режиме full
+# firewall-xray.sh init будет вызван из restart_vpn без CIDR.
 fetch_routes_once() {
 	local remote_ver local_ver remote_sha local_sha
-	local tmp_cidrs tmp_sha
+	local tmp_cidrs tmp_sha mode
 
 	ensure_routes_dir
 	detect_http_client
@@ -359,6 +337,7 @@ fetch_routes_once() {
 		return 1
 	fi
 
+	# Версия не изменилась — ничего не делаем
 	if [ "$remote_ver" = "$local_ver" ] && [ -s "$ROUTES_CIDRS_FILE" ]; then
 		log "routes: already up-to-date (v=$local_ver)"
 		return 0
@@ -412,15 +391,24 @@ fetch_routes_once() {
 	mv "$tmp_cidrs" "$ROUTES_CIDRS_FILE"
 	echo "$remote_sha" > "$ROUTES_SHA_FILE"
 	echo "$remote_ver" > "$ROUTES_VER_FILE"
-
 	rm -f "$tmp_sha"
 
 	log "routes: updated to version $remote_ver"
 
-	apply_routes_rules
+	# Применяем только если режим split_ru.
+	# В режиме full — firewall уже работает без CIDR,
+	# пересчитывать его из-за обновления маршрутов не нужно.
+	mode="$(get_routing_mode)"
+	if [ "$mode" = "split_ru" ]; then
+		apply_routes_rules
+	else
+		log "routes: mode=$mode, skipping nft rebuild (will apply on next split_ru switch)"
+	fi
+
 	return 0
 }
 
+# Проверяет интервал и при необходимости обновляет CIDR.
 check_routes_update() {
 	local now_ts last_ts
 
@@ -430,9 +418,7 @@ check_routes_update() {
 	last_ts="$(cat "$ROUTES_LAST_CHECK_FILE" 2>/dev/null | tr -d '\r\n ' || echo 0)"
 
 	case "$last_ts" in
-		''|*[!0-9]*)
-			last_ts=0
-			;;
+		''|*[!0-9]*) last_ts=0 ;;
 	esac
 
 	if [ "$((now_ts - last_ts))" -lt "$ROUTES_CHECK_INTERVAL" ]; then
@@ -443,8 +429,19 @@ check_routes_update() {
 	echo "$now_ts" > "$ROUTES_LAST_CHECK_FILE"
 }
 
+# Гарантирует наличие CIDR файла.
+# В режиме full — пропускаем, CIDR не нужны для работы туннеля.
+# В режиме split_ru — скачиваем если отсутствуют.
 ensure_routes_ready() {
 	ensure_routes_dir
+
+	local mode
+	mode="$(get_routing_mode)"
+
+	if [ "$mode" = "full" ]; then
+		# В режиме full CIDR не используются — не тратим время на скачивание
+		return 0
+	fi
 
 	if [ ! -s "$ROUTES_CIDRS_FILE" ]; then
 		log "routes: local route file missing, fetching initial copy"
@@ -510,21 +507,9 @@ restart_vpn() {
 		return 1
 	fi
 
-	if [ -x /etc/shpun/firewall-xray.sh ]; then
-		log "applying firewall redirect rules via firewall-xray.sh"
-
-		if nft list table inet shpun >/dev/null 2>&1; then
-			if ! /etc/shpun/firewall-xray.sh apply-mode 2>/dev/null; then
-				log "firewall-xray.sh apply-mode failed (ignored)"
-			fi
-		else
-			if ! /etc/shpun/firewall-xray.sh init 2>/dev/null; then
-				log "firewall-xray.sh init failed (ignored)"
-			fi
-		fi
-	else
-		log "firewall-xray.sh not found or not executable, skipping firewall rules"
-	fi
+	# НЕ вызываем firewall-xray.sh здесь — shpun-vpn restart уже вызывает
+	# firewall-xray.sh init внутри start_service. Двойной вызов только замедляет
+	# старт и дважды применяет 8000+ CIDR на медленном MIPS.
 
 	return 0
 }
@@ -647,6 +632,7 @@ ensure_vpn_from_subscription() {
 		log "ensure_vpn_from_subscription: proceed without confirmed default route"
 	fi
 
+	# Скачиваем CIDR только если нужны (режим split_ru)
 	ensure_routes_ready
 
 	if ! engine_download; then
@@ -673,6 +659,7 @@ ensure_vpn_from_subscription() {
 		return 1
 	fi
 
+	# restart_vpn вызывает shpun-vpn restart который сам применяет firewall
 	if ! restart_vpn; then
 		log "restart_vpn failed, not marking vpn_ready"
 		echo "restart_vpn_failed" >"$VERROR_FILE"
@@ -839,6 +826,7 @@ vpn_sanity_check() {
 	rm -f "/etc/shpun/vpn_ready"
 	rm -f "$fail_file"
 }
+
 #######################################
 # Main loop
 #######################################

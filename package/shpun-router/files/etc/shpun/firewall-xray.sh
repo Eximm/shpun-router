@@ -8,6 +8,8 @@ MODE_FILE="$ROUTES_DIR/mode"
 CIDRS_FILE="$ROUTES_DIR/ru.cidrs"
 CUSTOM_SCRIPT="/etc/shpun/apply-custom-routes.sh"
 
+LOCKDIR="/tmp/shpun-firewall.lock"
+
 REDIR_PORT_DEFAULT=12345
 TPROXY_PORT_DEFAULT=12346
 TPROXY_MARK_DEFAULT=233
@@ -16,6 +18,21 @@ CHUNK_SIZE_DEFAULT=25
 
 log() {
     logger -t "$LOGTAG" "$*"
+}
+
+lock_acquire() {
+    i=0
+    while ! mkdir "$LOCKDIR" 2>/dev/null; do
+        i=$((i + 1))
+        [ "$i" -gt 120 ] && {
+            log "failed to acquire firewall lock"
+            return 1
+        }
+        sleep 1
+    done
+
+    trap 'rmdir "$LOCKDIR" 2>/dev/null' EXIT INT TERM
+    return 0
 }
 
 load_conf() {
@@ -59,6 +76,7 @@ check_tproxy() {
 
     modprobe nft_tproxy 2>/dev/null || true
     modprobe nf_tproxy_ipv4 2>/dev/null || true
+    modprobe nf_tproxy_ipv6 2>/dev/null || true
 
     nft delete table inet shpun_tproxy_test >/dev/null 2>&1 || true
     nft add table inet shpun_tproxy_test >/dev/null 2>&1 || return 1
@@ -94,28 +112,29 @@ tproxy_routes_del() {
     log "tproxy: ip rule/route removed"
 }
 
-nft_add_base_objects() {
+nft_create_base() {
     MODE="$1"
+
+    nft delete table inet shpun 2>/dev/null
 
     nft add table inet shpun || return 1
 
     if [ "$MODE" = "split_ru" ]; then
-        nft 'add set inet shpun ru_dst { type ipv4_addr; flags interval; }' || return 1
+        nft add set inet shpun ru_dst '{ type ipv4_addr; flags interval; }' || return 1
     fi
 
-    nft 'add set inet shpun custom_direct { type ipv4_addr; flags interval; }' || return 1
-    nft 'add set inet shpun custom_vpn { type ipv4_addr; flags interval; }' || return 1
-    nft 'add chain inet shpun prerouting { type nat hook prerouting priority dstnat; policy accept; }' || return 1
+    nft add set inet shpun custom_direct '{ type ipv4_addr; flags interval; }' || return 1
+    nft add set inet shpun custom_vpn '{ type ipv4_addr; flags interval; }' || return 1
+
+    nft add chain inet shpun prerouting '{ type nat hook prerouting priority dstnat; policy accept; }' || return 1
 
     return 0
 }
 
-nft_add_mangle_chain() {
-    nft 'add chain inet shpun prerouting_mangle { type filter hook prerouting priority mangle; policy accept; }'
-}
-
 nft_fill_ru_dst() {
     [ -s "$CIDRS_FILE" ] || return 0
+
+    log "ru_dst: loading started chunk=$CHUNK_SIZE"
 
     chunk=""
     count=0
@@ -124,7 +143,10 @@ nft_fill_ru_dst() {
     while IFS= read -r cidr; do
         cidr="$(printf '%s' "$cidr" | tr -d ' \t\r')"
         [ -z "$cidr" ] && continue
-        case "$cidr" in \#*) continue ;; esac
+
+        case "$cidr" in
+            \#*) continue ;;
+        esac
 
         chunk="${chunk:+$chunk, }$cidr"
         count=$((count + 1))
@@ -135,8 +157,14 @@ nft_fill_ru_dst() {
                 log "ru_dst: failed to add chunk near total=$total"
                 return 1
             }
+
+            if [ $((total % 500)) -eq 0 ]; then
+                log "ru_dst: loaded progress $total"
+            fi
+
             chunk=""
             count=0
+            sleep 0
         fi
     done < "$CIDRS_FILE"
 
@@ -176,7 +204,7 @@ nft_apply_udp_rules() {
     LAN_IP="$2"
     MODE="$3"
 
-    nft list chain inet shpun prerouting_mangle >/dev/null 2>&1 || nft_add_mangle_chain || return 1
+    nft add chain inet shpun prerouting_mangle '{ type filter hook prerouting priority mangle; policy accept; }' 2>/dev/null || true
     nft flush chain inet shpun prerouting_mangle || return 1
 
     nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" ip daddr "$LAN_IP" return || return 1
@@ -196,7 +224,9 @@ nft_apply_udp_rules() {
 }
 
 nft_apply_custom() {
-    [ -x "$CUSTOM_SCRIPT" ] && "$CUSTOM_SCRIPT" apply || true
+    if [ -x "$CUSTOM_SCRIPT" ]; then
+        "$CUSTOM_SCRIPT" apply || log "custom routes apply failed"
+    fi
 }
 
 nft_init() {
@@ -205,8 +235,8 @@ nft_init() {
     MODE="$(get_mode)"
 
     if [ "$MODE" = "split_ru" ] && [ ! -s "$CIDRS_FILE" ]; then
-        log "nft init: split_ru requested but $CIDRS_FILE missing — using full mode"
-        MODE="full"
+        log "nft init: split_ru requested but $CIDRS_FILE missing"
+        return 1
     fi
 
     WITH_TPROXY="no"
@@ -221,9 +251,7 @@ nft_init() {
 
     log "nft init: mode=$MODE tproxy=$WITH_TPROXY redirect=$REDIR_PORT lan=$LAN_IF chunk=$CHUNK_SIZE"
 
-    nft delete table inet shpun 2>/dev/null
-
-    if ! nft_add_base_objects "$MODE"; then
+    if ! nft_create_base "$MODE"; then
         log "nft init: failed to create base nft objects"
         nft delete table inet shpun 2>/dev/null
         tproxy_routes_del
@@ -239,30 +267,26 @@ nft_init() {
         fi
     fi
 
-    nft_apply_tcp_rules "$LAN_IF" "$LAN_IP" "$MODE" || {
+    if ! nft_apply_tcp_rules "$LAN_IF" "$LAN_IP" "$MODE"; then
         log "nft init: failed to apply tcp rules"
         nft delete table inet shpun 2>/dev/null
         tproxy_routes_del
         return 1
-    }
+    fi
 
     if [ "$WITH_TPROXY" = "yes" ]; then
-        nft_apply_udp_rules "$LAN_IF" "$LAN_IP" "$MODE" || {
+        if ! nft_apply_udp_rules "$LAN_IF" "$LAN_IP" "$MODE"; then
             log "nft init: failed to apply tproxy rules, falling back to TCP-only"
             nft delete chain inet shpun prerouting_mangle 2>/dev/null
             tproxy_routes_del
             WITH_TPROXY="no"
-        }
+        fi
     fi
 
     nft_apply_custom
 
     log "nft init: complete mode=$MODE tproxy=$WITH_TPROXY"
     return 0
-}
-
-nft_apply_mode() {
-    nft_init
 }
 
 nft_stop() {
@@ -274,22 +298,26 @@ nft_stop() {
 case "$1" in
     start|"")
         load_conf
-        command -v nft >/dev/null 2>&1 && { nft_apply_mode && exit 0; }
+        lock_acquire || exit 1
+        command -v nft >/dev/null 2>&1 && { nft_init && exit 0; }
         log "nft not found"
         exit 1
         ;;
     init)
         load_conf
+        lock_acquire || exit 1
         command -v nft >/dev/null 2>&1 && { nft_init && exit 0; }
         exit 1
         ;;
     apply-mode)
         load_conf
-        command -v nft >/dev/null 2>&1 && { nft_apply_mode && exit 0; }
+        lock_acquire || exit 1
+        command -v nft >/dev/null 2>&1 && { nft_init && exit 0; }
         exit 1
         ;;
     stop)
         load_conf
+        lock_acquire || exit 1
         command -v nft >/dev/null 2>&1 && nft_stop
         exit 0
         ;;

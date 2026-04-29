@@ -518,7 +518,48 @@ return view.extend({
 		var targetMode = String(mode || '').trim();
 		if (targetMode !== 'full' && targetMode !== 'split_ru') return;
 
+		var view = this;
+
+		// При переключении на split_ru проверяем — скачаны ли маршруты
+		if (targetMode === 'split_ru') {
+			var routing = (view._state && view._state.routing) || {};
+			var hasRoutes = !!(routing.has_routes) || (routing.routes_count > 0);
+
+			if (!hasRoutes) {
+				// Маршруты не скачаны — предупреждаем пользователя
+				ui.showModal('Переключение режима маршрутизации', [
+					E('p', {}, [
+						E('strong', {}, 'Внимание: '),
+						'Список российских адресов ещё не загружен.'
+					]),
+					E('p', {}, 'После переключения роутер автоматически скачает маршруты (~8000 адресов) и применит их. На медленных роутерах (MIPS) это может занять несколько минут — в это время нагрузка на процессор будет высокой.'),
+					E('p', {}, 'Интернет продолжит работать через туннель, пока маршруты применяются.'),
+					E('div', { 'style': 'margin-top:10px;text-align:right' }, [
+						E('button', {
+							'class': 'btn',
+							'click': function() { ui.hideModal(); }
+						}, 'Отмена'),
+						E('button', {
+							'class': 'btn cbi-button cbi-button-apply',
+							'style': 'margin-left:8px',
+							'click': function() {
+								ui.hideModal();
+								view._applyRoutingMode(targetMode);
+							}
+						}, 'Всё равно переключить')
+					])
+				]);
+				return;
+			}
+		}
+
+		view._applyRoutingMode(targetMode);
+	},
+
+	_applyRoutingMode: function(targetMode) {
 		ui.addNotification(null, E('p', {}, 'Применяем режим маршрутизации…'), 'info');
+
+		var view = this;
 
 		return Promise.resolve()
 			.then(function() { return callShpunRoutingSet(targetMode); })
