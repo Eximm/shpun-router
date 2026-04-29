@@ -1,8 +1,6 @@
 #!/bin/sh /etc/rc.common
 # shellcheck disable=SC2034
 
-# /etc/init.d/shpun-vpn
-
 START=96
 USE_PROCD=1
 SERVICE_DAEMONIZE=0
@@ -13,7 +11,6 @@ LOG_TAG="shpun-vpn"
 ENGINE_BIN="/tmp/xray"
 ENGINE_CONFIG="/etc/shpun/xray.json"
 
-# Дефолты для tproxy — должны совпадать с firewall-xray.sh
 TPROXY_MARK_DEFAULT=233
 TPROXY_TABLE_DEFAULT=233
 
@@ -25,8 +22,6 @@ load_conf() {
     [ -z "$TPROXY_TABLE" ]  && TPROXY_TABLE="$TPROXY_TABLE_DEFAULT"
 }
 
-# Xray нужны права на tproxy socket — выставляем cap через sysctls
-# (на OpenWrt обычно не нужно, xray запускается от root)
 start_service() {
     load_conf
 
@@ -45,10 +40,14 @@ start_service() {
         return 0
     fi
 
-    # Накатываем firewall (включая tproxy если доступен)
     if [ -x /etc/shpun/firewall-xray.sh ]; then
-        /etc/shpun/firewall-xray.sh init || \
-            logger -t "$LOG_TAG" "firewall-xray.sh init failed (ignored)"
+        /etc/shpun/firewall-xray.sh init || {
+            logger -t "$LOG_TAG" "firewall-xray.sh init failed"
+            return 1
+        }
+    else
+        logger -t "$LOG_TAG" "firewall-xray.sh not found"
+        return 1
     fi
 
     logger -t "$LOG_TAG" "starting xray: $ENGINE_BIN run -config $ENGINE_CONFIG"
@@ -65,13 +64,7 @@ stop_service() {
     load_conf
     logger -t "$LOG_TAG" "stopping xray"
 
-    # Убираем firewall правила вместе с ip rule/ip route для tproxy
     if [ -x /etc/shpun/firewall-xray.sh ]; then
         /etc/shpun/firewall-xray.sh stop
     fi
-}
-
-reload_service() {
-    stop
-    start
 }
