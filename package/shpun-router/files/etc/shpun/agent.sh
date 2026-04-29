@@ -765,6 +765,11 @@ vpn_sanity_check() {
 	local fail_file="/etc/shpun/vpn_sanity_fail_count"
 	local fail_limit=3
 
+	if [ -d "/tmp/shpun-firewall.lock" ]; then
+		log "vpn_sanity_check: firewall apply in progress, skipping"
+		return
+	fi
+
 	if [ ! -s "$VPN_READY_FILE" ]; then
 		rm -f "$fail_file"
 		return
