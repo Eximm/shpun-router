@@ -75,6 +75,7 @@ function read_fw_latest() {
 	return v || "";
 }
 
+// Валидация одной записи: только IPv4 и CIDR
 function validate_ip_cidr(entry) {
 	entry = trim(entry);
 	if (!entry || length(entry) == 0) return false;
@@ -91,11 +92,13 @@ function validate_ip_cidr(entry) {
 		prefix = 32;
 	}
 
+	// Проверяем четыре октета
 	let parts = split(ip, ".");
 	if (length(parts) != 4) return false;
 
 	for (let i = 0; i < 4; i++) {
 		let octet = int(parts[i]);
+		// Дополнительная проверка: строка должна быть числовой
 		if (parts[i] != '' + octet) return false;
 		if (octet < 0 || octet > 255) return false;
 	}
@@ -103,24 +106,17 @@ function validate_ip_cidr(entry) {
 	return true;
 }
 
-function json_array(arr) {
-	let out = "[";
-	for (let i = 0; i < length(arr); i++) {
-		if (i > 0) out += ",";
-		out += "\"" + arr[i] + "\"";
-	}
-	out += "]";
-	return out;
-}
-
 return {
 	shpun: {
+
+		/* --- PING --- */
 		ping: {
 			call: function(req) {
 				return { ok: 1, msg: "shpun ucode pong" };
 			}
 		},
 
+		/* --- STATE --- */
 		state: {
 			call: function(req) {
 				try {
@@ -148,11 +144,12 @@ return {
 			}
 		},
 
+		/* --- ROUTING_GET --- */
 		routing_get: {
 			call: function(req) {
 				try {
 					let mode = readfile(ROUTES_MODE) || "";
-					let ver  = readfile(ROUTES_VER) || "";
+					let ver  = readfile(ROUTES_VER)  || "";
 					let ts   = readfile(ROUTES_LASTCHK) || "";
 					let cnt  = 0;
 
@@ -175,6 +172,7 @@ return {
 			}
 		},
 
+		/* --- ROUTING_SET --- */
 		routing_set: {
 			args: { mode: "example" },
 			call: function(req) {
@@ -196,13 +194,8 @@ return {
 					let applied = norm(readfile(ROUTES_MODE)).replace(/[\r\n]+/g, "");
 
 					if (applied != mode)
-						return {
-							ok: 0,
-							error: "routing mode was not applied",
-							requested: mode,
-							applied: applied,
-							output: out
-						};
+						return { ok: 0, error: "routing mode was not applied",
+						         requested: mode, applied: applied, output: out };
 
 					return { ok: 1, mode: mode, applied_mode: applied };
 				} catch(e) {
@@ -211,6 +204,7 @@ return {
 			}
 		},
 
+		/* --- CUSTOM_ROUTES_GET --- */
 		custom_routes_get: {
 			call: function(req) {
 				try {
@@ -236,6 +230,7 @@ return {
 			}
 		},
 
+		/* --- CUSTOM_ROUTES_SET --- */
 		custom_routes_set: {
 			args: { vpn: [], direct: [] },
 			call: function(req) {
@@ -243,9 +238,11 @@ return {
 					let vpn_in    = (req && req.args && req.args.vpn)    ? req.args.vpn    : [];
 					let direct_in = (req && req.args && req.args.direct) ? req.args.direct : [];
 
+					// Убеждаемся что это массивы
 					if (type(vpn_in)    != "array") vpn_in    = [];
 					if (type(direct_in) != "array") direct_in = [];
 
+					// Валидируем и фильтруем
 					let vpn_ok    = [];
 					let direct_ok = [];
 					let errors    = [];
@@ -253,7 +250,6 @@ return {
 					for (let i = 0; i < length(vpn_in); i++) {
 						let e = trim(norm(vpn_in[i]));
 						if (!e) continue;
-
 						if (validate_ip_cidr(e))
 							push(vpn_ok, e);
 						else
@@ -263,7 +259,6 @@ return {
 					for (let i = 0; i < length(direct_in); i++) {
 						let e = trim(norm(direct_in[i]));
 						if (!e) continue;
-
 						if (validate_ip_cidr(e))
 							push(direct_ok, e);
 						else
@@ -277,40 +272,39 @@ return {
 							errors: errors
 						};
 
+					// Убеждаемся что директория существует
 					let mkd = popen("mkdir -p " + ROUTES_DIR + " 2>/dev/null");
 					if (mkd) mkd.close();
 
-					let json_str = "{\"vpn\":" + json_array(vpn_ok) + ",\"direct\":" + json_array(direct_ok) + "}";
+					// Пишем файл
+					let data = { vpn: vpn_ok, direct: direct_ok };
+					let json_str = sprintf("%s", to_json(data));
 
 					let f = open(CUSTOM_FILE, "w");
 					if (!f)
 						return { ok: 0, error: "cannot write " + CUSTOM_FILE };
-
 					f.write(json_str);
 					f.close();
 
+					// Применяем в nftables
 					let applied = false;
-					let apply_output = "";
-					let warning = null;
+					let apply_err = "";
 
 					if (exists(CUSTOM_SCRIPT)) {
 						let p = popen(CUSTOM_SCRIPT + " apply 2>&1");
-						if (p) {
-							apply_output = p.read("all") || "";
-							p.close();
-						}
+						let out = "";
+						if (p) { out = p.read("all") || ""; p.close(); }
 						applied = true;
 					} else {
-						warning = "apply-custom-routes.sh not found — routes saved but not applied";
+						apply_err = "apply-custom-routes.sh not found — routes saved but not applied to firewall";
 					}
 
 					return {
-						ok:           1,
-						vpn_count:    length(vpn_ok),
+						ok:          1,
+						vpn_count:   length(vpn_ok),
 						direct_count: length(direct_ok),
-						applied:      applied,
-						apply_output: apply_output,
-						warning:      warning
+						applied:     applied,
+						warning:     apply_err || null
 					};
 				} catch(e) {
 					return { ok: 0, error: String(e) };
@@ -318,6 +312,7 @@ return {
 			}
 		},
 
+		/* --- OTA_CHECK --- */
 		ota_check: {
 			call: function(req) {
 				try {
@@ -344,6 +339,7 @@ return {
 			}
 		},
 
+		/* --- OTA_INSTALL --- */
 		ota_install: {
 			call: function(req) {
 				try {
@@ -360,6 +356,7 @@ return {
 			}
 		},
 
+		/* --- REFRESH_CONNECTION --- */
 		refresh_connection: {
 			call: function(req) {
 				try {
@@ -368,7 +365,61 @@ return {
 					if (!exists("/etc/init.d/shpun-agent"))
 						return { ok: 0, error: "shpun-agent init script not found" };
 
-					let p = popen("/etc/init.d/shpun-agent restart >/dev/null 2>&1 &");
+					let cmd =
+						"sh -c '" +
+							"STATE_DIR=\"/etc/shpun\"; " +
+							"CODE_FILE=\"$STATE_DIR/router_code\"; " +
+							"SUB_FILE=\"$STATE_DIR/subscription.json\"; " +
+							"VPN_READY_FILE=\"$STATE_DIR/vpn_ready\"; " +
+							"VERROR_FILE=\"$STATE_DIR/vpn_error\"; " +
+							"LAST_CHECK_FILE=\"$STATE_DIR/last_sub_check\"; " +
+							"CONF=\"$STATE_DIR/agent.conf\"; " +
+							"LOG_TAG=\"shpun-refresh\"; " +
+							"API_URL_DEFAULT=\"https://bill.shpyn.online/shm/v1/public/router_public\"; " +
+							"log(){ logger -t \"$LOG_TAG\" \"$*\"; }; " +
+							"[ -f \"$CONF\" ] && . \"$CONF\"; " +
+							"[ -z \"$API_URL\" ] && API_URL=\"$API_URL_DEFAULT\"; " +
+							"if [ ! -s \"$CODE_FILE\" ]; then log \"router_code missing\"; exit 1; fi; " +
+							"if [ ! -s \"$SUB_FILE\" ]; then log \"subscription.json missing\"; exit 1; fi; " +
+							"if ! command -v jsonfilter >/dev/null 2>&1; then log \"jsonfilter not found\"; exit 1; fi; " +
+							"CODE=\"$(cat \"$CODE_FILE\" 2>/dev/null | tr -d \"\\r\\n\")\"; " +
+							"CLEAN_CODE=\"$(printf %s \"$CODE\" | tr \"[:lower:]\" \"[:upper:]\" | tr -dc \"A-Z0-9\")\"; " +
+							"if [ -z \"$CLEAN_CODE\" ]; then log \"clean code is empty\"; exit 1; fi; " +
+							"UID_SUB=\"$(jsonfilter -i \"$SUB_FILE\" -e \"@.uid\" 2>/dev/null || echo \"\")\"; " +
+							"USI_SUB=\"$(jsonfilter -i \"$SUB_FILE\" -e \"@.usi\" 2>/dev/null || echo \"\")\"; " +
+							"if [ -z \"$UID_SUB\" ] || [ -z \"$USI_SUB\" ]; then log \"uid/usi missing\"; exit 1; fi; " +
+							"HTTP_BIN=\"\"; " +
+							"command -v curl >/dev/null 2>&1 && HTTP_BIN=\"curl\"; " +
+							"[ -z \"$HTTP_BIN\" ] && command -v wget >/dev/null 2>&1 && HTTP_BIN=\"wget\"; " +
+							"[ -z \"$HTTP_BIN\" ] && command -v uclient-fetch >/dev/null 2>&1 && HTTP_BIN=\"uclient-fetch\"; " +
+							"if [ -z \"$HTTP_BIN\" ]; then log \"no HTTP client\"; exit 1; fi; " +
+							"BASE_URL=\"${API_URL%/shm/v1/public/router_public}\"; " +
+							"CHECK_URL=\"$BASE_URL/shm/v1/public/router_config?uid=$UID_SUB&usi=$USI_SUB&code=$CLEAN_CODE&format=json\"; " +
+							"TMP_SUB=\"$SUB_FILE.refresh.tmp\"; " +
+							"log \"refreshing via $CHECK_URL\"; " +
+							"case \"$HTTP_BIN\" in " +
+								"curl) curl -fsS \"$CHECK_URL\" -o \"$TMP_SUB\" ;; " +
+								"wget) wget -qO \"$TMP_SUB\" \"$CHECK_URL\" ;; " +
+								"uclient-fetch) uclient-fetch -qO \"$TMP_SUB\" \"$CHECK_URL\" ;; " +
+							"esac || { log \"fetch failed\"; rm -f \"$TMP_SUB\"; exit 1; }; " +
+							"[ ! -s \"$TMP_SUB\" ] && { log \"empty response\"; rm -f \"$TMP_SUB\"; exit 1; }; " +
+							"OK=\"$(jsonfilter -i \"$TMP_SUB\" -e \"@.ok\" 2>/dev/null)\"; " +
+							"if [ \"$OK\" != \"1\" ]; then " +
+								"ERR=\"$(jsonfilter -i \"$TMP_SUB\" -e \"@.error\" 2>/dev/null || echo unknown)\"; " +
+								"log \"error: $ERR\"; rm -f \"$TMP_SUB\"; exit 1; " +
+							"fi; " +
+							"mv \"$TMP_SUB\" \"$SUB_FILE\"; " +
+							"date +%s > \"$LAST_CHECK_FILE\"; " +
+							"log \"subscription refreshed\"; " +
+							"/etc/init.d/shpun-vpn stop >/dev/null 2>&1 || true; " +
+							"[ -x \"$STATE_DIR/firewall-xray.sh\" ] && \"$STATE_DIR/firewall-xray.sh\" stop >/dev/null 2>&1 || true; " +
+							"/etc/init.d/shpun-agent stop >/dev/null 2>&1 || true; " +
+							"rm -f \"$STATE_DIR/xray.json\" \"$VPN_READY_FILE\" \"$VERROR_FILE\" >/dev/null 2>&1 || true; " +
+							"/etc/init.d/shpun-agent start >/dev/null 2>&1 || true; " +
+							"log \"lifecycle restarted\"; " +
+						"' &";
+
+					let p = popen(cmd);
 					if (p) p.close();
 
 					return { ok: 1, msg: "connection refresh started" };
@@ -378,6 +429,7 @@ return {
 			}
 		},
 
+		/* --- RESET_VPN --- */
 		reset_vpn: {
 			call: function(req) {
 				try {
