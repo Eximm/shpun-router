@@ -14,7 +14,7 @@ REDIR_PORT_DEFAULT=12345
 TPROXY_PORT_DEFAULT=12346
 TPROXY_MARK_DEFAULT=233
 TPROXY_TABLE_DEFAULT=233
-CHUNK_SIZE_DEFAULT=25
+CHUNK_SIZE_DEFAULT=100
 
 log() {
     logger -t "$LOGTAG" "$*"
@@ -187,8 +187,8 @@ nft_apply_tcp_rules() {
     nft flush chain inet shpun prerouting || return 1
 
     nft add rule inet shpun prerouting iifname "$LAN_IF" ip daddr "$LAN_IP" return || return 1
-    nft add rule inet shpun prerouting iifname "$LAN_IF" ip daddr @custom_direct return || return 1
-    nft add rule inet shpun prerouting iifname "$LAN_IF" ip daddr @custom_vpn ip protocol tcp redirect to :"$REDIR_PORT" || return 1
+    nft add rule inet shpun prerouting iifname "$LAN_IF" ip daddr @custom_direct counter return || return 1
+    nft add rule inet shpun prerouting iifname "$LAN_IF" ip daddr @custom_vpn ip protocol tcp counter redirect to :"$REDIR_PORT" || return 1
 
     if [ "$MODE" = "split_ru" ]; then
         nft add rule inet shpun prerouting iifname "$LAN_IF" ip daddr @ru_dst return || return 1
@@ -208,11 +208,11 @@ nft_apply_udp_rules() {
     nft flush chain inet shpun prerouting_mangle || return 1
 
     nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" ip daddr "$LAN_IP" return || return 1
-    nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" ip daddr @custom_direct return || return 1
+    nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" ip daddr @custom_direct counter return || return 1
     nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" ip daddr 224.0.0.0/4 return || return 1
     nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" ip daddr 255.255.255.255 return || return 1
 
-    nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" meta l4proto udp ip daddr @custom_vpn tproxy ip to :"$TPROXY_PORT" meta mark set "0x${TPROXY_MARK}" || return 1
+    nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" meta l4proto udp ip daddr @custom_vpn counter tproxy ip to :"$TPROXY_PORT" meta mark set "0x${TPROXY_MARK}" || return 1
 
     if [ "$MODE" = "split_ru" ]; then
         nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" ip daddr @ru_dst return || return 1

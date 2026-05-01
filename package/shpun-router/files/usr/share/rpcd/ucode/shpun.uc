@@ -20,7 +20,7 @@ const ROUTES_DIR      = DIR + "/routes";
 const ROUTES_MODE     = ROUTES_DIR + "/mode";
 const ROUTES_VER      = ROUTES_DIR + "/ru.version";
 const ROUTES_LASTCHK  = ROUTES_DIR + "/last_check";
-const ROUTES_CIDRS    = DIR + "/routes/ru.cidrs";
+const ROUTES_CIDRS    = ROUTES_DIR + "/ru.cidrs";
 const ROUTING_SETTER  = DIR + "/set-routing-mode.sh";
 
 const CUSTOM_FILE     = ROUTES_DIR + "/custom.json";
@@ -75,7 +75,6 @@ function read_fw_latest() {
 	return v || "";
 }
 
-// Валидация одной записи: только IPv4 и CIDR
 function validate_ip_cidr(entry) {
 	entry = trim(entry);
 	if (!entry || length(entry) == 0) return false;
@@ -92,13 +91,11 @@ function validate_ip_cidr(entry) {
 		prefix = 32;
 	}
 
-	// Проверяем четыре октета
 	let parts = split(ip, ".");
 	if (length(parts) != 4) return false;
 
 	for (let i = 0; i < 4; i++) {
 		let octet = int(parts[i]);
-		// Дополнительная проверка: строка должна быть числовой
 		if (parts[i] != '' + octet) return false;
 		if (octet < 0 || octet > 255) return false;
 	}
@@ -106,17 +103,24 @@ function validate_ip_cidr(entry) {
 	return true;
 }
 
+function json_array(arr) {
+	let out = "[";
+	for (let i = 0; i < length(arr); i++) {
+		if (i > 0) out += ",";
+		out += "\"" + arr[i] + "\"";
+	}
+	out += "]";
+	return out;
+}
+
 return {
 	shpun: {
-
-		/* --- PING --- */
 		ping: {
 			call: function(req) {
 				return { ok: 1, msg: "shpun ucode pong" };
 			}
 		},
 
-		/* --- STATE --- */
 		state: {
 			call: function(req) {
 				try {
@@ -144,12 +148,11 @@ return {
 			}
 		},
 
-		/* --- ROUTING_GET --- */
 		routing_get: {
 			call: function(req) {
 				try {
 					let mode = readfile(ROUTES_MODE) || "";
-					let ver  = readfile(ROUTES_VER)  || "";
+					let ver  = readfile(ROUTES_VER) || "";
 					let ts   = readfile(ROUTES_LASTCHK) || "";
 					let cnt  = 0;
 
@@ -172,7 +175,6 @@ return {
 			}
 		},
 
-		/* --- ROUTING_SET --- */
 		routing_set: {
 			args: { mode: "example" },
 			call: function(req) {
@@ -194,8 +196,13 @@ return {
 					let applied = norm(readfile(ROUTES_MODE)).replace(/[\r\n]+/g, "");
 
 					if (applied != mode)
-						return { ok: 0, error: "routing mode was not applied",
-						         requested: mode, applied: applied, output: out };
+						return {
+							ok: 0,
+							error: "routing mode was not applied",
+							requested: mode,
+							applied: applied,
+							output: out
+						};
 
 					return { ok: 1, mode: mode, applied_mode: applied };
 				} catch(e) {
@@ -204,7 +211,6 @@ return {
 			}
 		},
 
-		/* --- CUSTOM_ROUTES_GET --- */
 		custom_routes_get: {
 			call: function(req) {
 				try {
@@ -230,7 +236,6 @@ return {
 			}
 		},
 
-		/* --- CUSTOM_ROUTES_SET --- */
 		custom_routes_set: {
 			args: { vpn: [], direct: [] },
 			call: function(req) {
@@ -238,11 +243,9 @@ return {
 					let vpn_in    = (req && req.args && req.args.vpn)    ? req.args.vpn    : [];
 					let direct_in = (req && req.args && req.args.direct) ? req.args.direct : [];
 
-					// Убеждаемся что это массивы
 					if (type(vpn_in)    != "array") vpn_in    = [];
 					if (type(direct_in) != "array") direct_in = [];
 
-					// Валидируем и фильтруем
 					let vpn_ok    = [];
 					let direct_ok = [];
 					let errors    = [];
@@ -250,6 +253,7 @@ return {
 					for (let i = 0; i < length(vpn_in); i++) {
 						let e = trim(norm(vpn_in[i]));
 						if (!e) continue;
+
 						if (validate_ip_cidr(e))
 							push(vpn_ok, e);
 						else
@@ -259,6 +263,7 @@ return {
 					for (let i = 0; i < length(direct_in); i++) {
 						let e = trim(norm(direct_in[i]));
 						if (!e) continue;
+
 						if (validate_ip_cidr(e))
 							push(direct_ok, e);
 						else
@@ -272,39 +277,40 @@ return {
 							errors: errors
 						};
 
-					// Убеждаемся что директория существует
 					let mkd = popen("mkdir -p " + ROUTES_DIR + " 2>/dev/null");
 					if (mkd) mkd.close();
 
-					// Пишем файл
-					let data = { vpn: vpn_ok, direct: direct_ok };
-					let json_str = sprintf("%s", to_json(data));
+					let json_str = "{\"vpn\":" + json_array(vpn_ok) + ",\"direct\":" + json_array(direct_ok) + "}";
 
 					let f = open(CUSTOM_FILE, "w");
 					if (!f)
 						return { ok: 0, error: "cannot write " + CUSTOM_FILE };
+
 					f.write(json_str);
 					f.close();
 
-					// Применяем в nftables
 					let applied = false;
-					let apply_err = "";
+					let apply_output = "";
+					let warning = null;
 
 					if (exists(CUSTOM_SCRIPT)) {
 						let p = popen(CUSTOM_SCRIPT + " apply 2>&1");
-						let out = "";
-						if (p) { out = p.read("all") || ""; p.close(); }
+						if (p) {
+							apply_output = p.read("all") || "";
+							p.close();
+						}
 						applied = true;
 					} else {
-						apply_err = "apply-custom-routes.sh not found — routes saved but not applied to firewall";
+						warning = "apply-custom-routes.sh not found — routes saved but not applied to firewall";
 					}
 
 					return {
-						ok:          1,
-						vpn_count:   length(vpn_ok),
+						ok:           1,
+						vpn_count:    length(vpn_ok),
 						direct_count: length(direct_ok),
-						applied:     applied,
-						warning:     apply_err || null
+						applied:      applied,
+						apply_output: apply_output,
+						warning:      warning
 					};
 				} catch(e) {
 					return { ok: 0, error: String(e) };
@@ -312,7 +318,6 @@ return {
 			}
 		},
 
-		/* --- OTA_CHECK --- */
 		ota_check: {
 			call: function(req) {
 				try {
@@ -339,7 +344,6 @@ return {
 			}
 		},
 
-		/* --- OTA_INSTALL --- */
 		ota_install: {
 			call: function(req) {
 				try {
@@ -356,7 +360,6 @@ return {
 			}
 		},
 
-		/* --- REFRESH_CONNECTION --- */
 		refresh_connection: {
 			call: function(req) {
 				try {
@@ -429,7 +432,6 @@ return {
 			}
 		},
 
-		/* --- RESET_VPN --- */
 		reset_vpn: {
 			call: function(req) {
 				try {
