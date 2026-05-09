@@ -108,6 +108,8 @@ function injectStyles() {
 		/* modal custom routes — тёмная тема как у виджета */
 		+ '.shpun-modal-wrap{background:linear-gradient(135deg,rgba(6,18,36,.99) 0%,rgba(8,24,50,.99) 50%,rgba(20,19,58,.99) 100%);border-radius:16px;padding:20px;color:#eef2ff;min-width:480px;}'
 		+ '.shpun-modal-desc{font-size:12px;color:#9fb0c8;margin-bottom:14px;line-height:1.5;}'
+		+ '.shpun-modal-help{margin:-4px 0 14px;padding:9px 11px;border-radius:10px;background:rgba(15,23,42,.50);border:1px solid rgba(120,140,180,.14);color:#b8c3d9;font-size:11px;line-height:1.45;}'
+		+ '.shpun-modal-help code{font-family:monospace;color:#e0e7ff;background:rgba(99,102,241,.14);border:1px solid rgba(99,102,241,.18);border-radius:5px;padding:1px 4px;}'
 		+ '.shpun-modal-cols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-bottom:12px;}'
 		+ '.shpun-modal-col-label{font-size:11px;font-weight:700;letter-spacing:.03em;margin-bottom:6px;}'
 		+ '.shpun-modal-col-label--vpn{color:#a5b4fc;}'
@@ -198,9 +200,9 @@ function hideLuCIHeader(rootNode) {
 
 function getRoutingModeLabel(mode) {
 	if (String(mode || 'full').trim() === 'smart_ru')
-		return 'Основные РФ сервисы напрямую';
+		return 'Популярные РФ сервисы напрямую';
 	return String(mode || 'full').trim() === 'split_ru'
-		? 'Вся РФ напрямую'
+		? 'Весь РФ трафик напрямую'
 		: 'Весь трафик через VPN';
 }
 
@@ -371,6 +373,17 @@ function openCustomRoutesModal() {
 			E('div', { 'class': 'shpun-modal-wrap' }, [
 				E('div', { 'class': 'shpun-modal-desc' },
 					'Можно добавить IPv4, CIDR или домен целиком: site.ru, *.site.ru. Работает поверх выбранного режима маршрутизации.'),
+				E('div', { 'class': 'shpun-modal-help' }, [
+					'Форматы: ',
+					E('code', {}, 'site.ru'),
+					' домен целиком, ',
+					E('code', {}, '*.site.ru'),
+					' домен и поддомены, ',
+					E('code', {}, '1.2.3.4'),
+					' IP, ',
+					E('code', {}, '10.0.0.0/8'),
+					' сеть.'
+				]),
 				E('div', { 'class': 'shpun-modal-cols' }, [
 					buildCol('vpn',    'Принудительно через VPN', vpnList),
 					buildCol('direct', 'Принудительно напрямую',  directList)
@@ -574,10 +587,10 @@ return view.extend({
 			: fwCurrentDisplay;
 
 		var hintText =
-			!code     ? 'Роутер готовится к подключению. После генерации кода откройте ShpunApp и оформите услугу для роутера.'
-			: !hasSub ? 'Откройте ShpunApp, закажите или активируйте услугу и выполните привязку по этому коду.'
+			!code     ? 'Роутер готовится к привязке. После генерации кода откройте ShpunApp и оформите услугу для роутера.'
+			: !hasSub ? 'Откройте ShpunApp, закажите или активируйте услугу и привяжите роутер по этому коду.'
 			: !vpnReady ? (err ? 'Ошибка: ' + err : 'Привязка найдена. Роутер поднимает VPN…')
-			: 'Роутер подключен к Shpun SDN System. Для смены сервера используйте ShpunApp.';
+			: 'Роутер подключен. Серверы, маршруты и обновления доступны прямо в этом виджете.';
 
 		return E('div', { 'class': 'shpun-widget-card' }, [
 			E('div', { 'class': 'shpun-widget-inner' }, [
@@ -587,8 +600,8 @@ return view.extend({
 						E('div', { 'class': 'shpun-kicker' }, [ E('span', { 'class': 'shpun-kicker-dot' }), 'Shpun Router' ]),
 						E('div', { 'class': 'shpun-title' }, 'SDN System'),
 						E('div', { 'class': 'shpun-subtitle' }, code
-							? 'Статус роутера, подключение и быстрые действия'
-							: 'Подготовка роутера к подключению через ShpunApp')
+							? 'Статус, серверы, маршруты и обновления'
+							: 'Подготовка роутера к привязке через ShpunApp')
 					]),
 					buildStatusBadge(state)
 				]),
@@ -640,11 +653,11 @@ return view.extend({
 								E('button', {
 									'class': 'shpun-btn ' + (routingMode === 'smart_ru' ? 'shpun-btn--primary is-active' : 'shpun-btn--ghost'),
 									'click': function(ev) { return view.handleSetRoutingMode(ev, 'smart_ru'); }
-								}, 'РФ сервисы напрямую'),
+								}, 'Популярные РФ сервисы напрямую'),
 								E('button', {
 									'class': 'shpun-btn ' + (routingMode === 'split_ru' ? 'shpun-btn--primary is-active' : 'shpun-btn--ghost'),
 									'click': function(ev) { return view.handleSetRoutingMode(ev, 'split_ru'); }
-								}, 'Вся РФ напрямую')
+								}, 'Весь РФ трафик напрямую')
 							])
 						]),
 
@@ -659,16 +672,16 @@ return view.extend({
 
 					E('div', { 'class': 'shpun-col-side' }, [
 						E('div', { 'class': 'shpun-side-card' }, [
-							E('div', { 'class': 'shpun-side-title' }, 'Управление через ShpunApp'),
+							E('div', { 'class': 'shpun-side-title' }, 'Привязка через ShpunApp'),
 							E('div', { 'class': 'shpun-side-url' }, 'app.sdnonline.online'),
 							E('a', { 'class': 'shpun-qr-link', 'href': appLink, 'target': '_blank', 'rel': 'noreferrer' }, [
 								E('img', { 'class': 'shpun-qr', 'src': qrUrl, 'alt': 'QR' })
 							]),
-							E('div', { 'class': 'shpun-qr-caption' }, 'Сканируйте QR-код, чтобы открыть ShpunApp на телефоне'),
+							E('div', { 'class': 'shpun-qr-caption' }, 'Откройте ShpunApp для привязки и управления роутером'),
 							E('div', { 'class': 'shpun-side-flex-spacer' }),
 							E('div', { 'class': 'shpun-side-actions' }, [
-								E('a', { 'class': 'shpun-btn shpun-btn--primary', 'href': appLink, 'target': '_blank', 'rel': 'noreferrer' }, 'Открыть ShpunApp'),
-								E('a', { 'class': 'shpun-btn shpun-btn--ghost',   'href': botLink, 'target': '_blank', 'rel': 'noreferrer' }, 'Бот — резервный вариант')
+								E('a', { 'class': 'shpun-btn shpun-btn--primary', 'href': appLink, 'target': '_blank', 'rel': 'noreferrer' }, 'Привязать в ShpunApp'),
+								E('a', { 'class': 'shpun-btn shpun-btn--ghost',   'href': botLink, 'target': '_blank', 'rel': 'noreferrer' }, 'Бот поддержки')
 							])
 						])
 					])
