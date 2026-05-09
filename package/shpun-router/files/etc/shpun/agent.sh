@@ -19,7 +19,7 @@ API_URL_DEFAULT="https://bill.shpyn.online/shm/v1/public/router_public"
 SUB_CHECK_INTERVAL_DEFAULT=21600
 
 MIN_UPTIME_DEFAULT=120
-NET_FAIL_TIMEOUT_DEFAULT=60
+NET_FAIL_TIMEOUT_DEFAULT=180
 MAIN_LOOP_SLEEP_DEFAULT=30
 
 ROUTES_DIR="$STATE_DIR/routes"
@@ -687,7 +687,7 @@ wait_vpn_started() {
 	local i=0
 
 	while [ "$i" -lt 20 ]; do
-		if pgrep -f "xray.*run.*-config.*xray.json" >/dev/null 2>&1; then
+		if is_vpn_process_running; then
 			return 0
 		fi
 		sleep 1
@@ -697,12 +697,30 @@ wait_vpn_started() {
 	return 1
 }
 
+is_vpn_process_running() {
+	local engine_base
+	local config_base
+
+	engine_base="$(basename "$ENGINE_BIN" 2>/dev/null || echo xray)"
+	config_base="$(basename "$ENGINE_CONFIG" 2>/dev/null || echo xray.json)"
+
+	pgrep -f "$ENGINE_BIN.*run.*-config.*$ENGINE_CONFIG" >/dev/null 2>&1 && return 0
+	pgrep -f "$engine_base.*run.*-config.*$config_base" >/dev/null 2>&1 && return 0
+
+	return 1
+}
+
 get_uptime_secs() {
 	awk -F. '{print $1}' /proc/uptime 2>/dev/null || echo 0
 }
 
 check_internet() {
-	ping -c1 -W1 "$PING_HOST" >/dev/null 2>&1
+	ping -c1 -W1 "$PING_HOST" >/dev/null 2>&1 && return 0
+
+	[ "$PING_HOST" != "1.1.1.1" ] && ping -c1 -W1 1.1.1.1 >/dev/null 2>&1 && return 0
+	[ "$PING_HOST" != "8.8.8.8" ] && ping -c1 -W1 8.8.8.8 >/dev/null 2>&1 && return 0
+
+	return 1
 }
 
 wait_for_default_route() {
@@ -741,7 +759,7 @@ fetch_subscription_once() {
 
 	URL="${API_URL}?code=${CLEAN_CODE}&format=json"
 
-	log "query router_public: $URL"
+	log "query router_public"
 	BODY="$(http_get_stdout "$URL" 2>/dev/null || true)"
 
 	if [ -z "$BODY" ]; then
@@ -930,6 +948,10 @@ ensure_vpn_from_subscription() {
 poll_subscription_loop() {
 	if [ -s "$SUB_FILE" ]; then
 		log "subscription.json already present, skipping router_public"
+		if [ -s "$VPN_READY_FILE" ] && [ -s "$ENGINE_CONFIG" ] && is_vpn_process_running; then
+			log "vpn already running, keeping current tunnel"
+			return 0
+		fi
 		ensure_vpn_from_subscription
 		return 0
 	fi
@@ -1002,7 +1024,7 @@ check_subscription_alive() {
 	BASE_URL="${API_URL%/shm/v1/public/router_public}"
 	CHECK_URL="${BASE_URL}/shm/v1/public/router_config?uid=${UID_SUB}&usi=${USI_SUB}&code=${CLEAN_CODE}&format=json"
 
-	log "checking subscription via $CHECK_URL"
+	log "checking subscription via router_config"
 
 	BODY="$(http_get_stdout "$CHECK_URL" 2>/dev/null || true)"
 
@@ -1015,10 +1037,29 @@ check_subscription_alive() {
 	OK="$(printf '%s' "$BODY" | jsonfilter -e '@.ok' 2>/dev/null || echo "")"
 
 	if [ "$OK" = "1" ]; then
-		printf '%s' "$BODY" > "$SUB_FILE"
-		normalize_subscription_file "$SUB_FILE" >/dev/null 2>&1 || true
-		ensure_selected_link_valid
-		log "subscription_alive: ok=1, subscription.json refreshed"
+		tmp_sub="${SUB_FILE}.tmp.$$"
+		old_sha="$(calc_sha256_file "$SUB_FILE")"
+
+		printf '%s' "$BODY" > "$tmp_sub"
+		if ! normalize_subscription_file "$tmp_sub" >/dev/null 2>&1; then
+			log "subscription_alive: unsupported router_config subscription format"
+			rm -f "$tmp_sub"
+			echo "$now_ts" > "$LAST_CHECK_FILE"
+			return 0
+		fi
+		new_sha="$(calc_sha256_file "$tmp_sub")"
+
+		if [ -s "$tmp_sub" ] && [ "$new_sha" != "$old_sha" ]; then
+			mv "$tmp_sub" "$SUB_FILE"
+			ensure_selected_link_valid
+			log "subscription_alive: ok=1, subscription.json changed, rebuilding VPN"
+			rm -f "$VPN_READY_FILE"
+			ensure_vpn_from_subscription || true
+		else
+			rm -f "$tmp_sub"
+			ensure_selected_link_valid
+			log "subscription_alive: ok=1, subscription.json unchanged"
+		fi
 		echo "$now_ts" > "$LAST_CHECK_FILE"
 		rm -f "$VERROR_FILE"
 		return 0
@@ -1062,7 +1103,7 @@ vpn_sanity_check() {
 		return
 	fi
 
-	if pgrep -f "/tmp/xray" >/dev/null 2>&1; then
+	if is_vpn_process_running; then
 		rm -f "$fail_file"
 		return
 	fi
@@ -1131,11 +1172,7 @@ main_loop() {
 				log "no internet detected for ${NET_FAIL_SECONDS}s while VPN is active"
 
 				if [ "$NET_FAIL_SECONDS" -ge "$NET_FAIL_TIMEOUT" ]; then
-					log "no internet for ${NET_FAIL_SECONDS}s, stopping shpun-vpn and clearing vpn_ready"
-					if [ -x /etc/init.d/shpun-vpn ]; then
-						/etc/init.d/shpun-vpn stop 2>/dev/null || true
-					fi
-					rm -f "$VPN_READY_FILE"
+					log "internet probe failed for ${NET_FAIL_SECONDS}s, keeping tunnel running"
 					NET_FAIL_SECONDS=0
 				fi
 			fi

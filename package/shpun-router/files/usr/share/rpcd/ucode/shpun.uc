@@ -138,6 +138,23 @@ function validate_route_entry(entry) {
 	return validate_ip_cidr(entry) || validate_domain(entry);
 }
 
+function routes_have_domains(arr) {
+	if (type(arr) != "array") return false;
+
+	for (let i = 0; i < length(arr); i++) {
+		let e = trim(norm(arr[i]));
+		if (!validate_ip_cidr(e) && validate_domain(e))
+			return true;
+	}
+
+	return false;
+}
+
+function custom_routes_have_domains(data) {
+	if (!data) return false;
+	return routes_have_domains(data.vpn || []) || routes_have_domains(data.direct || []);
+}
+
 function json_array(arr) {
 	let out = "[";
 	for (let i = 0; i < length(arr); i++) {
@@ -384,6 +401,17 @@ return {
 					if (mkd) mkd.close();
 
 					let json_str = "{\"vpn\":" + json_array(vpn_ok) + ",\"direct\":" + json_array(direct_ok) + "}";
+					let old_raw = readfile(CUSTOM_FILE) || "";
+					let old_data = old_raw ? json(old_raw) : null;
+
+					if (old_raw == json_str)
+						return {
+							ok:           1,
+							vpn_count:    length(vpn_ok),
+							direct_count: length(direct_ok),
+							applied:      false,
+							unchanged:    true
+						};
 
 					let f = open(CUSTOM_FILE, "w");
 					if (!f)
@@ -407,18 +435,26 @@ return {
 						warning = "apply-custom-routes.sh not found — routes saved but not applied to firewall";
 					}
 
-					let rp = popen(
-						"rm -f " + DIR + "/xray.json " + READY + " " + VERROR + " >/dev/null 2>&1; " +
-						"/etc/init.d/shpun-vpn stop >/dev/null 2>&1 || true; " +
-						"/etc/init.d/shpun-agent restart >/dev/null 2>&1 &"
-					);
-					if (rp) rp.close();
+					let needs_rebuild =
+						custom_routes_have_domains(old_data) ||
+						routes_have_domains(vpn_ok) ||
+						routes_have_domains(direct_ok);
+
+					if (needs_rebuild) {
+						let rp = popen(
+							"rm -f " + DIR + "/xray.json " + READY + " " + VERROR + " >/dev/null 2>&1; " +
+							"/etc/init.d/shpun-vpn stop >/dev/null 2>&1 || true; " +
+							"/etc/init.d/shpun-agent restart >/dev/null 2>&1 &"
+						);
+						if (rp) rp.close();
+					}
 
 					return {
 						ok:           1,
 						vpn_count:    length(vpn_ok),
 						direct_count: length(direct_ok),
 						applied:      applied,
+						restarted:    needs_rebuild,
 						apply_output: apply_output,
 						warning:      warning
 					};
@@ -494,6 +530,13 @@ return {
 					if (idx >= length(links))
 						return { ok: 0, error: "index out of range", index: idx, count: length(links) };
 
+					let current = int(trim(readfile(SELECTED_LINK) || "0"));
+					if (current < 0 || current >= length(links))
+						current = 0;
+
+					if (idx == current)
+						return { ok: 1, selected: idx, unchanged: true };
+
 					let f = open(SELECTED_LINK, "w");
 					if (!f)
 						return { ok: 0, error: "cannot write selected link" };
@@ -565,58 +608,8 @@ return {
 						return { ok: 0, error: "shpun-agent init script not found" };
 
 					let cmd =
-						"sh -c '" +
-							"STATE_DIR=\"/etc/shpun\"; " +
-							"CODE_FILE=\"$STATE_DIR/router_code\"; " +
-							"SUB_FILE=\"$STATE_DIR/subscription.json\"; " +
-							"VPN_READY_FILE=\"$STATE_DIR/vpn_ready\"; " +
-							"VERROR_FILE=\"$STATE_DIR/vpn_error\"; " +
-							"LAST_CHECK_FILE=\"$STATE_DIR/last_sub_check\"; " +
-							"CONF=\"$STATE_DIR/agent.conf\"; " +
-							"LOG_TAG=\"shpun-refresh\"; " +
-							"API_URL_DEFAULT=\"https://bill.shpyn.online/shm/v1/public/router_public\"; " +
-							"log(){ logger -t \"$LOG_TAG\" \"$*\"; }; " +
-							"[ -f \"$CONF\" ] && . \"$CONF\"; " +
-							"[ -z \"$API_URL\" ] && API_URL=\"$API_URL_DEFAULT\"; " +
-							"if [ ! -s \"$CODE_FILE\" ]; then log \"router_code missing\"; exit 1; fi; " +
-							"if [ ! -s \"$SUB_FILE\" ]; then log \"subscription.json missing\"; exit 1; fi; " +
-							"if ! command -v jsonfilter >/dev/null 2>&1; then log \"jsonfilter not found\"; exit 1; fi; " +
-							"CODE=\"$(cat \"$CODE_FILE\" 2>/dev/null | tr -d \"\\r\\n\")\"; " +
-							"CLEAN_CODE=\"$(printf %s \"$CODE\" | tr \"[:lower:]\" \"[:upper:]\" | tr -dc \"A-Z0-9\")\"; " +
-							"if [ -z \"$CLEAN_CODE\" ]; then log \"clean code is empty\"; exit 1; fi; " +
-							"UID_SUB=\"$(jsonfilter -i \"$SUB_FILE\" -e \"@.uid\" 2>/dev/null || echo \"\")\"; " +
-							"USI_SUB=\"$(jsonfilter -i \"$SUB_FILE\" -e \"@.usi\" 2>/dev/null || echo \"\")\"; " +
-							"if [ -z \"$UID_SUB\" ] || [ -z \"$USI_SUB\" ]; then log \"uid/usi missing\"; exit 1; fi; " +
-							"HTTP_BIN=\"\"; " +
-							"command -v curl >/dev/null 2>&1 && HTTP_BIN=\"curl\"; " +
-							"[ -z \"$HTTP_BIN\" ] && command -v wget >/dev/null 2>&1 && HTTP_BIN=\"wget\"; " +
-							"[ -z \"$HTTP_BIN\" ] && command -v uclient-fetch >/dev/null 2>&1 && HTTP_BIN=\"uclient-fetch\"; " +
-							"if [ -z \"$HTTP_BIN\" ]; then log \"no HTTP client\"; exit 1; fi; " +
-							"BASE_URL=\"${API_URL%/shm/v1/public/router_public}\"; " +
-							"CHECK_URL=\"$BASE_URL/shm/v1/public/router_config?uid=$UID_SUB&usi=$USI_SUB&code=$CLEAN_CODE&format=json\"; " +
-							"TMP_SUB=\"$SUB_FILE.refresh.tmp\"; " +
-							"log \"refreshing via $CHECK_URL\"; " +
-							"case \"$HTTP_BIN\" in " +
-								"curl) curl -fsS \"$CHECK_URL\" -o \"$TMP_SUB\" ;; " +
-								"wget) wget -qO \"$TMP_SUB\" \"$CHECK_URL\" ;; " +
-								"uclient-fetch) uclient-fetch -qO \"$TMP_SUB\" \"$CHECK_URL\" ;; " +
-							"esac || { log \"fetch failed\"; rm -f \"$TMP_SUB\"; exit 1; }; " +
-							"[ ! -s \"$TMP_SUB\" ] && { log \"empty response\"; rm -f \"$TMP_SUB\"; exit 1; }; " +
-							"OK=\"$(jsonfilter -i \"$TMP_SUB\" -e \"@.ok\" 2>/dev/null)\"; " +
-							"if [ \"$OK\" != \"1\" ]; then " +
-								"ERR=\"$(jsonfilter -i \"$TMP_SUB\" -e \"@.error\" 2>/dev/null || echo unknown)\"; " +
-								"log \"error: $ERR\"; rm -f \"$TMP_SUB\"; exit 1; " +
-							"fi; " +
-							"mv \"$TMP_SUB\" \"$SUB_FILE\"; " +
-							"date +%s > \"$LAST_CHECK_FILE\"; " +
-							"log \"subscription refreshed\"; " +
-							"/etc/init.d/shpun-vpn stop >/dev/null 2>&1 || true; " +
-							"[ -x \"$STATE_DIR/firewall-xray.sh\" ] && \"$STATE_DIR/firewall-xray.sh\" stop >/dev/null 2>&1 || true; " +
-							"/etc/init.d/shpun-agent stop >/dev/null 2>&1 || true; " +
-							"rm -f \"$STATE_DIR/xray.json\" \"$VPN_READY_FILE\" \"$VERROR_FILE\" >/dev/null 2>&1 || true; " +
-							"/etc/init.d/shpun-agent start >/dev/null 2>&1 || true; " +
-							"log \"lifecycle restarted\"; " +
-						"' &";
+						"rm -f " + DIR + "/last_sub_check " + VERROR + " >/dev/null 2>&1; " +
+						"/etc/init.d/shpun-agent restart >/dev/null 2>&1 &";
 
 					let p = popen(cmd);
 					if (p) p.close();

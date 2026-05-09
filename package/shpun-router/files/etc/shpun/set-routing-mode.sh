@@ -334,6 +334,12 @@ elif [ "$MODE" = "split_ru" ]; then
     fi
 fi
 
+if [ "$MODE" = "$OLD_MODE" ]; then
+    log "mode already set to $MODE, keeping current VPN process"
+    echo "ok"
+    exit 0
+fi
+
 printf '%s\n' "$MODE" > "${MODE_FILE}.tmp" || exit 1
 mv "${MODE_FILE}.tmp" "$MODE_FILE" || exit 1
 
