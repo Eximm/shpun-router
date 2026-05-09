@@ -115,6 +115,20 @@ function json_array(arr) {
 	return out;
 }
 
+function cleanup_server_name(name, proto) {
+	name = trim(norm(name));
+	name = name.replace(/%20/g, " ");
+	name = name.replace(/\s+/g, " ");
+	name = trim(name);
+
+	if (proto == "vless")
+		name = name.replace(/\s+VLESS$/i, "");
+	if (proto == "ss")
+		name = name.replace(/\s+Shadowsocks$/i, "");
+
+	return name || "Server";
+}
+
 function parse_link_info(link, idx, selected) {
 	link = trim(norm(link));
 
@@ -157,7 +171,7 @@ function parse_link_info(link, idx, selected) {
 		port = substr(hostport, colon + 1);
 	}
 
-	let name = fragment || host || ("server " + idx);
+	let name = cleanup_server_name(fragment || host || ("server " + idx), proto);
 
 	return {
 		index: idx,

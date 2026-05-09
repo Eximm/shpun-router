@@ -373,8 +373,12 @@ function openServersModal() {
 		var select = E('select', { 'class': 'cbi-input-select', 'style': 'width:100%;margin-top:8px;' });
 		servers.forEach(function(s) {
 			var proto = String(s.proto || 'vpn').toLowerCase();
-			var protoLabel = proto === 'vless' ? 'VLESS · рекомендуется' : (proto === 'ss' ? 'Shadowsocks · резервный' : proto);
-			var label = (s.name || s.host || ('server ' + s.index)) + ' · ' + protoLabel + ' · ' + (s.host || '') + (s.port ? (':' + s.port) : '');
+			var protoLabel = proto === 'vless' ? 'VLESS' : (proto === 'ss' ? 'Shadowsocks' : proto.toUpperCase());
+			var hint = proto === 'vless' ? ' · рекомендуется' : (proto === 'ss' ? ' · резервный' : '');
+			var name = s.name || ('Server ' + s.index);
+			try { name = decodeURIComponent(name); } catch(e) {}
+			name = String(name).replace(/\s+/g, ' ').trim();
+			var label = name + ' · ' + protoLabel + hint;
 			select.appendChild(E('option', { 'value': String(s.index), 'selected': s.index === selected ? 'selected' : null }, label));
 		});
 
