@@ -117,7 +117,10 @@ function json_array(arr) {
 
 function cleanup_server_name(name, proto) {
 	name = trim(norm(name));
-	name = replace(name, "%20", " ");
+	while (index(name, "%20") >= 0) {
+		let p = index(name, "%20");
+		name = substr(name, 0, p) + " " + substr(name, p + 3);
+	}
 	name = trim(name);
 
 	return name || "Server";
@@ -154,11 +157,13 @@ function parse_link_info(link, idx, selected) {
 	let host = hostport;
 	let port = "";
 	let colon = -1;
-	for (let i = length(hostport) - 1; i >= 0; i--) {
+	let i = length(hostport) - 1;
+	while (i >= 0) {
 		if (substr(hostport, i, 1) == ":") {
 			colon = i;
 			break;
 		}
+		i = i - 1;
 	}
 	if (colon >= 0) {
 		host = substr(hostport, 0, colon);
