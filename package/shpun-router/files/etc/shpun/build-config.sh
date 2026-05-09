@@ -7,6 +7,7 @@ CONF="/etc/shpun/agent.conf"
 SELECTED_LINK_FILE="/etc/shpun/selected_link_index"
 ROUTES_MODE_FILE="/etc/shpun/routes/mode"
 SMART_RU_DOMAINS_FILE="/etc/shpun/routes/presets/smart_ru.domains"
+CUSTOM_ROUTES_FILE="/etc/shpun/routes/custom.json"
 
 [ -f "$CONF" ] && . "$CONF"
 
@@ -171,6 +172,72 @@ get_routing_mode() {
     echo "$mode"
 }
 
+is_ipv4_cidr() {
+    entry="$(printf '%s' "$1" | tr -d ' \t\r\n')"
+    [ -n "$entry" ] || return 1
+
+    case "$entry" in
+        */*) ip="${entry%%/*}"; prefix="${entry##*/}" ;;
+        *)   ip="$entry";       prefix="32" ;;
+    esac
+
+    case "$prefix" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$prefix" -gt 32 ] 2>/dev/null && return 1
+
+    oldifs="$IFS"
+    IFS='.'
+    set -- $ip
+    IFS="$oldifs"
+
+    [ "$#" -eq 4 ] || return 1
+    for octet in "$@"; do
+        case "$octet" in ''|*[!0-9]*) return 1 ;; esac
+        [ "$octet" -gt 255 ] 2>/dev/null && return 1
+    done
+
+    return 0
+}
+
+is_domain_entry() {
+    domain="$(printf '%s' "$1" | tr -d ' \t\r\n')"
+    [ -n "$domain" ] || return 1
+
+    case "$domain" in
+        *://*|*/*|*:*|*..*|.*|*.) return 1 ;;
+        \*.*) domain="${domain#*.}" ;;
+        *\**) return 1 ;;
+    esac
+
+    case "$domain" in
+        *.*) ;;
+        *) return 1 ;;
+    esac
+
+    oldifs="$IFS"
+    IFS='.'
+    set -- $domain
+    IFS="$oldifs"
+
+    for label in "$@"; do
+        [ -n "$label" ] || return 1
+        [ "${#label}" -le 63 ] 2>/dev/null || return 1
+        case "$label" in
+            -*|*-) return 1 ;;
+            *[!A-Za-z0-9-]*) return 1 ;;
+        esac
+    done
+
+    return 0
+}
+
+domain_to_xray() {
+    domain="$(printf '%s' "$1" | tr -d ' \t\r\n')"
+    case "$domain" in
+        \*.*) domain="${domain#*.}" ;;
+    esac
+    printf 'domain:%s' "$domain"
+}
+
 build_smart_ru_domain_rule() {
     [ "$(get_routing_mode)" = "smart_ru" ] || return 0
     [ -s "$SMART_RU_DOMAINS_FILE" ] || return 0
@@ -223,6 +290,56 @@ EOF
 }
 
 SMART_RU_RULE="$(build_smart_ru_domain_rule)"
+
+build_custom_domain_rule() {
+    key="$1"
+    outbound="$2"
+    [ -s "$CUSTOM_ROUTES_FILE" ] || return 0
+    command -v jsonfilter >/dev/null 2>&1 || return 0
+
+    tmp="/tmp/shpun_custom_domains_${key}_$$.tmp"
+    jsonfilter -i "$CUSTOM_ROUTES_FILE" -e "@.${key}[*]" 2>/dev/null | tr -d '"' > "$tmp" 2>/dev/null
+
+    first=1
+    domains=""
+    count=0
+
+    while IFS= read -r entry; do
+        entry="$(printf '%s' "$entry" | tr -d ' \t\r\n')"
+        [ -z "$entry" ] && continue
+        is_ipv4_cidr "$entry" && continue
+        is_domain_entry "$entry" || continue
+
+        xray_domain="$(domain_to_xray "$entry")"
+        escaped="$(json_escape "$xray_domain")"
+        if [ "$first" -eq 1 ]; then
+            domains="\"$escaped\""
+            first=0
+        else
+            domains="$domains,
+          \"$escaped\""
+        fi
+        count=$((count + 1))
+    done < "$tmp"
+
+    rm -f "$tmp"
+    [ "$count" -gt 0 ] || return 0
+
+    cat <<EOF
+      {
+        "type": "field",
+        "outboundTag": "$outbound",
+        "domain": [
+          $domains
+        ]
+      },
+EOF
+
+    logger -t shpun-build "custom $key domains enabled: $count outbound=$outbound"
+}
+
+CUSTOM_DIRECT_RULE="$(build_custom_domain_rule direct direct)"
+CUSTOM_VPN_RULE="$(build_custom_domain_rule vpn proxy)"
 
 # ==========================
 # 2. Ветвление по типу профиля
@@ -372,7 +489,9 @@ case "$ROUTER_PROTO" in
           "$SERVER"
         ]
       },
+$CUSTOM_DIRECT_RULE
 $SMART_RU_RULE
+$CUSTOM_VPN_RULE
       {
         "type": "field",
         "network": "tcp",
@@ -606,7 +725,9 @@ $STREAM_SETTINGS
           "$SERVER"
         ]
       },
+$CUSTOM_DIRECT_RULE
 $SMART_RU_RULE
+$CUSTOM_VPN_RULE
       {
         "type": "field",
         "network": "tcp",

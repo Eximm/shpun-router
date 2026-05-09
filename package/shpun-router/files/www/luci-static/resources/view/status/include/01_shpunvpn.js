@@ -226,6 +226,47 @@ function validateIpCidr(entry) {
 	return true;
 }
 
+function normalizeRouteEntry(entry) {
+	entry = String(entry || '').trim();
+	if (!entry) return '';
+
+	if (entry.indexOf('://') >= 0) {
+		entry = entry.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');
+		entry = entry.split('/')[0].split('?')[0].split('#')[0];
+	}
+
+	return entry.replace(/\s+/g, '').toLowerCase();
+}
+
+function validateDomainEntry(entry) {
+	entry = normalizeRouteEntry(entry);
+	if (!entry || entry.length > 253) return false;
+	if (entry.indexOf('/') >= 0 || entry.indexOf(':') >= 0) return false;
+	if (entry.indexOf('..') >= 0) return false;
+
+	if (entry.indexOf('*.') === 0)
+		entry = entry.slice(2);
+
+	if (entry.indexOf('*') >= 0) return false;
+	if (entry[0] === '.' || entry[entry.length - 1] === '.') return false;
+	if (entry.indexOf('.') < 0) return false;
+
+	var labels = entry.split('.');
+	for (var i = 0; i < labels.length; i++) {
+		var label = labels[i];
+		if (!label || label.length > 63) return false;
+		if (label[0] === '-' || label[label.length - 1] === '-') return false;
+		if (!/^[a-z0-9-]+$/.test(label)) return false;
+	}
+
+	return true;
+}
+
+function validateRouteEntry(entry) {
+	entry = normalizeRouteEntry(entry);
+	return validateIpCidr(entry) || validateDomainEntry(entry);
+}
+
 /* ============================================================
  *  Custom routes modal
  *  Живёт вне #view — LuCI его не трогает никогда
@@ -269,7 +310,7 @@ function openCustomRoutesModal() {
 			var input = E('input', {
 				'class': 'shpun-modal-input',
 				'type': 'text',
-				'placeholder': '1.2.3.4 или 10.0.0.0/8',
+				'placeholder': 'site.ru, *.site.ru или 10.0.0.0/8',
 				'autocomplete': 'off',
 				'spellcheck': 'false'
 			});
@@ -278,14 +319,14 @@ function openCustomRoutesModal() {
 
 			addBtn.addEventListener('click', function(ev) {
 				ev.preventDefault();
-				var val = input.value.trim();
+				var val = normalizeRouteEntry(input.value);
 				if (!val) return;
-				if (!validateIpCidr(val)) {
-					ui.addNotification(null, E('p', {}, 'Неверный формат: ' + val + '. Допустимы только IPv4 и CIDR.'), 'error');
+				if (!validateRouteEntry(val)) {
+					ui.addNotification(null, E('p', {}, 'Неверный формат: ' + val + '. Можно добавить IPv4, CIDR, домен или *.домен.'), 'error');
 					return;
 				}
 				if (vpnList.indexOf(val) >= 0 || directList.indexOf(val) >= 0) {
-					ui.addNotification(null, E('p', {}, 'Адрес ' + val + ' уже добавлен.'), 'warning');
+					ui.addNotification(null, E('p', {}, 'Маршрут ' + val + ' уже добавлен.'), 'warning');
 					return;
 				}
 				list.push(val);
@@ -307,7 +348,7 @@ function openCustomRoutesModal() {
 		ui.showModal('Дополнительные маршруты', [
 			E('div', { 'class': 'shpun-modal-wrap' }, [
 				E('div', { 'class': 'shpun-modal-desc' },
-					'Только IPv4-адреса и CIDR (например: 1.2.3.4 или 10.0.0.0/8). Работает поверх основного режима и split_ru.'),
+					'Можно добавить IPv4, CIDR или домен целиком: site.ru, *.site.ru. Работает поверх выбранного режима маршрутизации.'),
 				E('div', { 'class': 'shpun-modal-cols' }, [
 					buildCol('vpn',    'Принудительно через VPN', vpnList),
 					buildCol('direct', 'Принудительно напрямую',  directList)
@@ -466,7 +507,7 @@ return view.extend({
 		var routesCount   = routing.routes_count || 0;
 
 		var fwCurrentRaw     = (state.fw_current || '').trim();
-		var fwCurrentDisplay = fwCurrentRaw || 'вЂ”';
+		var fwCurrentDisplay = fwCurrentRaw || '—';
 		var fwLatest         = (state.fw_latest || '').trim();
 		var hasNewFw = !!(fwLatest && fwCurrentRaw && compareVersions(fwCurrentRaw, fwLatest) < 0);
 
@@ -477,7 +518,7 @@ return view.extend({
 		var codeNode = E('span', {
 			'class': code ? 'shpun-code shpun-code-copy' : 'shpun-code',
 			'click': code ? ui.createHandlerFn(this, 'handleCopyCode', code) : null
-		}, code || 'вЂ” вЂ” вЂ” вЂ”');
+		}, code || '— — — —');
 
 		var fwValue = hasNewFw
 			? E('span', {}, [ fwCurrentDisplay, E('span', { 'class': 'shpun-fw-badge' }, 'доступна ' + fwLatest) ])

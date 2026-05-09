@@ -105,6 +105,39 @@ function validate_ip_cidr(entry) {
 	return true;
 }
 
+function validate_domain(entry) {
+	entry = trim(entry);
+	if (!entry || length(entry) == 0 || length(entry) > 253) return false;
+	if (index(entry, "/") >= 0 || index(entry, ":") >= 0) return false;
+	if (index(entry, "..") >= 0) return false;
+
+	if (substr(entry, 0, 2) == "*.")
+		entry = substr(entry, 2);
+
+	if (index(entry, "*") >= 0) return false;
+	if (substr(entry, 0, 1) == "." || substr(entry, length(entry) - 1) == ".") return false;
+	if (index(entry, ".") < 0) return false;
+
+	let allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-";
+	let labels = split(entry, ".");
+	for (let i = 0; i < length(labels); i++) {
+		let label = labels[i];
+		if (!label || length(label) == 0 || length(label) > 63) return false;
+		if (substr(label, 0, 1) == "-" || substr(label, length(label) - 1) == "-") return false;
+
+		for (let j = 0; j < length(label); j++) {
+			if (index(allowed, substr(label, j, 1)) < 0)
+				return false;
+		}
+	}
+
+	return true;
+}
+
+function validate_route_entry(entry) {
+	return validate_ip_cidr(entry) || validate_domain(entry);
+}
+
 function json_array(arr) {
 	let out = "[";
 	for (let i = 0; i < length(arr); i++) {
@@ -324,7 +357,7 @@ return {
 						let e = trim(norm(vpn_in[i]));
 						if (!e) continue;
 
-						if (validate_ip_cidr(e))
+						if (validate_route_entry(e))
 							push(vpn_ok, e);
 						else
 							push(errors, e);
@@ -334,7 +367,7 @@ return {
 						let e = trim(norm(direct_in[i]));
 						if (!e) continue;
 
-						if (validate_ip_cidr(e))
+						if (validate_route_entry(e))
 							push(direct_ok, e);
 						else
 							push(errors, e);
@@ -343,7 +376,7 @@ return {
 					if (length(errors) > 0)
 						return {
 							ok:     0,
-							error:  "invalid entries (only IPv4 and CIDR accepted)",
+							error:  "invalid entries (IPv4, CIDR and domains accepted)",
 							errors: errors
 						};
 
@@ -373,6 +406,13 @@ return {
 					} else {
 						warning = "apply-custom-routes.sh not found — routes saved but not applied to firewall";
 					}
+
+					let rp = popen(
+						"rm -f " + DIR + "/xray.json " + READY + " " + VERROR + " >/dev/null 2>&1; " +
+						"/etc/init.d/shpun-vpn stop >/dev/null 2>&1 || true; " +
+						"/etc/init.d/shpun-agent restart >/dev/null 2>&1 &"
+					);
+					if (rp) rp.close();
 
 					return {
 						ok:           1,

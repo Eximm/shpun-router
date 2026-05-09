@@ -35,6 +35,38 @@ validate_entry() {
     return 0
 }
 
+validate_domain() {
+    entry="$(printf '%s' "$1" | tr -d ' \t\r\n')"
+    [ -z "$entry" ] && return 1
+
+    case "$entry" in
+        *://*|*/*|*:*|*..*|.*|*.) return 1 ;;
+        \*.*) entry="${entry#*.}" ;;
+        *\**) return 1 ;;
+    esac
+
+    case "$entry" in
+        *.*) ;;
+        *) return 1 ;;
+    esac
+
+    oldifs="$IFS"
+    IFS='.'
+    set -- $entry
+    IFS="$oldifs"
+
+    for label in "$@"; do
+        [ -n "$label" ] || return 1
+        [ "${#label}" -le 63 ] 2>/dev/null || return 1
+        case "$label" in
+            -*|*-) return 1 ;;
+            *[!A-Za-z0-9-]*) return 1 ;;
+        esac
+    done
+
+    return 0
+}
+
 apply_set() {
     set_name="$1"
     key="$2"
@@ -80,6 +112,10 @@ apply_set() {
         [ -z "$entry" ] && continue
 
         if ! validate_entry "$entry"; then
+            if validate_domain "$entry"; then
+                skipped=$((skipped + 1))
+                continue
+            fi
             log "invalid entry skipped: '$entry'"
             skipped=$((skipped + 1))
             continue
