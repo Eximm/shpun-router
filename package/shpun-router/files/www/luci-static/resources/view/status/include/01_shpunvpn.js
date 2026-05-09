@@ -82,6 +82,8 @@ function injectStyles() {
 		+ '.shpun-routing-meta{font-size:11px;line-height:1.45;color:#b8c3d9;text-align:right;}'
 		+ '.shpun-routing-note{margin:0 0 10px;padding:9px 11px;border-radius:10px;background:rgba(59,130,246,.10);border:1px solid rgba(96,165,250,.18);color:#bfdbfe;font-size:11px;line-height:1.45;}'
 		+ '.shpun-routing-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;}'
+		+ '.shpun-route-option{display:flex;flex-direction:column;gap:6px;min-width:0;}'
+		+ '.shpun-route-desc{font-size:10px;line-height:1.35;color:#9fb0c8;}'
 		+ '.shpun-code{font-family:monospace;font-size:18px;font-weight:800;letter-spacing:.06em;color:#fff;}'
 		+ '.shpun-code-copy{display:inline-block;cursor:pointer;border-bottom:1px dashed rgba(165,180,252,.55);}'
 		+ '.shpun-code-copy:hover{color:#c4b5fd;border-bottom-color:#a78bfa;}'
@@ -194,6 +196,15 @@ function getRoutingModeLabel(mode) {
 	return String(mode || 'full').trim() === 'split_ru'
 		? 'Вся РФ напрямую'
 		: 'Весь трафик через VPN';
+}
+
+function getRoutingModeDescription(mode) {
+	mode = String(mode || 'full').trim();
+	if (mode === 'smart_ru')
+		return 'Основной рекомендуемый режим: весь трафик идет через VPN, а популярные российские сервисы открываются напрямую.';
+	if (mode === 'split_ru')
+		return 'Тяжелый режим: весь российский IPv4 идет напрямую. Используйте только на мощных роутерах, если умного режима недостаточно.';
+	return 'Максимальная приватность: весь клиентский трафик идет через VPN. Российские сервисы тоже будут открываться через туннель.';
 }
 
 function validateIpCidr(entry) {
@@ -452,6 +463,7 @@ return view.extend({
 		var routing       = state.routing || {};
 		var routingMode   = String(routing.mode || 'full').trim();
 		var routingLabel  = getRoutingModeLabel(routingMode);
+		var routingDesc   = getRoutingModeDescription(routingMode);
 		var routesVersion = String(routing.routes_version || '0').trim();
 		var routesCount   = routing.routes_count || 0;
 
@@ -529,20 +541,34 @@ return view.extend({
 									E('div', {}, 'Маршруты: v' + routesVersion + ' · ' + routesCount + ' CIDR')
 								])
 							]),
-							E('div', { 'class': 'shpun-routing-note' }, 'Режим "РФ сервисы напрямую" покрывает Госуслуги, mos.ru, ФНС, 2ГИС, основные банки, Ozon, Wildberries, Яндекс Маркет, Avito, Okko, Кинопоиск, Иви, Wink, Kion, Rutube. Обычно этого достаточно. "Вся РФ напрямую" включает полный список российских IPv4 и требует мощный роутер.'),
+							E('div', { 'class': 'shpun-routing-note' }, [
+								E('strong', {}, 'Текущий режим: '),
+								routingDesc,
+								E('br'),
+								'Умный режим покрывает Госуслуги, mos.ru, ФНС, 2ГИС, основные банки, Ozon, Wildberries, Яндекс Маркет, Avito, Okko, Кинопоиск, Иви, Wink, Kion, Rutube.'
+							]),
 							E('div', { 'class': 'shpun-routing-actions' }, [
-								E('button', {
-									'class': 'shpun-btn ' + (routingMode === 'full' ? 'shpun-btn--primary is-active' : 'shpun-btn--ghost'),
-									'click': function(ev) { return view.handleSetRoutingMode(ev, 'full'); }
-								}, 'Весь трафик через VPN'),
-								E('button', {
-									'class': 'shpun-btn ' + (routingMode === 'smart_ru' ? 'shpun-btn--primary is-active' : 'shpun-btn--ghost'),
-									'click': function(ev) { return view.handleSetRoutingMode(ev, 'smart_ru'); }
-								}, 'РФ сервисы напрямую'),
-								E('button', {
-									'class': 'shpun-btn ' + (routingMode === 'split_ru' ? 'shpun-btn--primary is-active' : 'shpun-btn--ghost'),
-									'click': function(ev) { return view.handleSetRoutingMode(ev, 'split_ru'); }
-								}, 'Вся РФ напрямую')
+								E('div', { 'class': 'shpun-route-option' }, [
+									E('button', {
+										'class': 'shpun-btn ' + (routingMode === 'full' ? 'shpun-btn--primary is-active' : 'shpun-btn--ghost'),
+										'click': function(ev) { return view.handleSetRoutingMode(ev, 'full'); }
+									}, 'Весь трафик через VPN'),
+									E('div', { 'class': 'shpun-route-desc' }, 'Все сайты и приложения идут через туннель.')
+								]),
+								E('div', { 'class': 'shpun-route-option' }, [
+									E('button', {
+										'class': 'shpun-btn ' + (routingMode === 'smart_ru' ? 'shpun-btn--primary is-active' : 'shpun-btn--ghost'),
+										'click': function(ev) { return view.handleSetRoutingMode(ev, 'smart_ru'); }
+									}, 'РФ сервисы напрямую'),
+									E('div', { 'class': 'shpun-route-desc' }, 'Банки, маркетплейсы, госуслуги и медиа напрямую, остальное через VPN.')
+								]),
+								E('div', { 'class': 'shpun-route-option' }, [
+									E('button', {
+										'class': 'shpun-btn ' + (routingMode === 'split_ru' ? 'shpun-btn--primary is-active' : 'shpun-btn--ghost'),
+										'click': function(ev) { return view.handleSetRoutingMode(ev, 'split_ru'); }
+									}, 'Вся РФ напрямую'),
+									E('div', { 'class': 'shpun-route-desc' }, 'Полный список российских IPv4. Только для мощных роутеров.')
+								])
 							])
 						]),
 

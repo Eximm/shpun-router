@@ -117,14 +117,8 @@ function json_array(arr) {
 
 function cleanup_server_name(name, proto) {
 	name = trim(norm(name));
-	name = name.replace(/%20/g, " ");
-	name = name.replace(/\s+/g, " ");
+	name = replace(name, "%20", " ");
 	name = trim(name);
-
-	if (proto == "vless")
-		name = name.replace(/\s+VLESS$/i, "");
-	if (proto == "ss")
-		name = name.replace(/\s+Shadowsocks$/i, "");
 
 	return name || "Server";
 }
@@ -264,7 +258,7 @@ return {
 					let out = "";
 					if (p) { out = p.read("all") || ""; p.close(); }
 
-					let applied = norm(readfile(ROUTES_MODE)).replace(/[\r\n]+/g, "");
+					let applied = trim(norm(readfile(ROUTES_MODE)));
 
 					if (applied != mode)
 						return {
