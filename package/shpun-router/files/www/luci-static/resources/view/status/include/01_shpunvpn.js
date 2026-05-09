@@ -187,6 +187,30 @@ function buildStatusBadge(state) {
 	return E('span', { 'class': cls }, [ E('span', { 'class': 'shpun-badge-dot' }), text ]);
 }
 
+function renameLuCIHeader(rootNode) {
+	if (!rootNode) return;
+
+	function isGeneratedTitle(node) {
+		var text = String((node && node.textContent) || '').trim();
+		return /^\[Anonymous\d+Class\]$/.test(text);
+	}
+
+	function renamePreviousGeneratedTitle(node) {
+		var prev = node && node.previousSibling;
+		while (prev) {
+			if (isGeneratedTitle(prev))
+				prev.textContent = 'Shpun Router';
+			prev = prev.previousSibling;
+		}
+	}
+
+	var node = rootNode;
+	for (var i = 0; node && i < 5; i++) {
+		renamePreviousGeneratedTitle(node);
+		node = node.parentNode;
+	}
+}
+
 function getRoutingModeLabel(mode) {
 	if (String(mode || 'full').trim() === 'smart_ru')
 		return 'Популярные РФ сервисы напрямую';
@@ -893,6 +917,9 @@ return view.extend({
 
 	onmount: function(node) {
 		this.container = node;
+		renameLuCIHeader(node);
+		window.setTimeout(function() { renameLuCIHeader(node); }, 0);
+		window.setTimeout(function() { renameLuCIHeader(node); }, 250);
 	},
 
 	onunload: function() {}
