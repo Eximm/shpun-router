@@ -189,15 +189,6 @@ function buildStatusBadge(state) {
 	return E('span', { 'class': cls }, [ E('span', { 'class': 'shpun-badge-dot' }), text ]);
 }
 
-function hideLuCIHeader(rootNode) {
-	if (!rootNode) return;
-	var prev = rootNode.previousSibling;
-	while (prev) {
-		if (prev.style !== undefined) prev.style.display = 'none';
-		prev = prev.previousSibling;
-	}
-}
-
 function getRoutingModeLabel(mode) {
 	if (String(mode || 'full').trim() === 'smart_ru')
 		return 'Популярные РФ сервисы напрямую';
@@ -905,7 +896,6 @@ return view.extend({
 
 	onmount: function(node) {
 		this.container = node;
-		hideLuCIHeader(node);
 	},
 
 	onunload: function() {}
