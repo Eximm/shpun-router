@@ -14,7 +14,7 @@ REDIR_PORT_DEFAULT=12345
 TPROXY_PORT_DEFAULT=12346
 TPROXY_MARK_DEFAULT=233
 TPROXY_TABLE_DEFAULT=233
-CHUNK_SIZE_DEFAULT=100
+CHUNK_SIZE_DEFAULT=500
 
 log() {
     logger -t "$LOGTAG" "$*"
@@ -43,6 +43,12 @@ load_conf() {
     [ -z "$TPROXY_MARK" ]  && TPROXY_MARK="$TPROXY_MARK_DEFAULT"
     [ -z "$TPROXY_TABLE" ] && TPROXY_TABLE="$TPROXY_TABLE_DEFAULT"
     [ -z "$CHUNK_SIZE" ]   && CHUNK_SIZE="$CHUNK_SIZE_DEFAULT"
+
+    case "$CHUNK_SIZE" in
+        ''|*[!0-9]*) CHUNK_SIZE="$CHUNK_SIZE_DEFAULT" ;;
+    esac
+    [ "$CHUNK_SIZE" -lt 25 ] 2>/dev/null && CHUNK_SIZE=25
+    [ "$CHUNK_SIZE" -gt 1000 ] 2>/dev/null && CHUNK_SIZE=1000
 }
 
 get_mode() {
@@ -51,7 +57,7 @@ get_mode() {
     [ -z "$mode" ] && mode="full"
 
     case "$mode" in
-        full|split_ru)
+        full|smart_ru|split_ru)
             echo "$mode"
             ;;
         *)
@@ -134,11 +140,17 @@ nft_create_base() {
 nft_fill_ru_dst() {
     [ -s "$CIDRS_FILE" ] || return 0
 
-    log "ru_dst: loading started chunk=$CHUNK_SIZE"
+    tmp="/tmp/shpun_ru_dst_$$.nft"
+    start_ts="$(date +%s 2>/dev/null || echo 0)"
+
+    log "ru_dst: loading started chunk=$CHUNK_SIZE batch=$tmp"
 
     chunk=""
     count=0
     total=0
+    skipped=0
+
+    rm -f "$tmp"
 
     while IFS= read -r cidr; do
         cidr="$(printf '%s' "$cidr" | tr -d ' \t\r')"
@@ -148,34 +160,84 @@ nft_fill_ru_dst() {
             \#*) continue ;;
         esac
 
+        case "$cidr" in
+            *[!0-9./]*)
+                skipped=$((skipped + 1))
+                continue
+                ;;
+        esac
+
+        case "$cidr" in
+            */*) ip="${cidr%%/*}"; prefix="${cidr##*/}" ;;
+            *)   ip="$cidr";       prefix="32" ;;
+        esac
+
+        case "$prefix" in
+            ''|*[!0-9]*)
+                skipped=$((skipped + 1))
+                continue
+                ;;
+        esac
+
+        [ "$prefix" -gt 32 ] 2>/dev/null && {
+            skipped=$((skipped + 1))
+            continue
+        }
+
+        oldifs="$IFS"
+        IFS='.'
+        set -- $ip
+        IFS="$oldifs"
+
+        if [ "$#" -ne 4 ]; then
+            skipped=$((skipped + 1))
+            continue
+        fi
+
+        valid_ip=1
+        for octet in "$@"; do
+            case "$octet" in
+                ''|*[!0-9]*) valid_ip=0 ;;
+            esac
+            [ "$octet" -gt 255 ] 2>/dev/null && valid_ip=0
+        done
+
+        if [ "$valid_ip" -ne 1 ]; then
+            skipped=$((skipped + 1))
+            continue
+        fi
+
         chunk="${chunk:+$chunk, }$cidr"
         count=$((count + 1))
         total=$((total + 1))
 
         if [ "$count" -ge "$CHUNK_SIZE" ]; then
-            nft add element inet shpun ru_dst "{ $chunk }" >/dev/null 2>&1 || {
-                log "ru_dst: failed to add chunk near total=$total"
-                return 1
-            }
-
-            if [ $((total % 500)) -eq 0 ]; then
-                log "ru_dst: loaded progress $total"
-            fi
-
+            printf 'add element inet shpun ru_dst { %s }\n' "$chunk" >> "$tmp"
             chunk=""
             count=0
-            sleep 0
         fi
     done < "$CIDRS_FILE"
 
     if [ -n "$chunk" ]; then
-        nft add element inet shpun ru_dst "{ $chunk }" >/dev/null 2>&1 || {
-            log "ru_dst: failed to add final chunk near total=$total"
-            return 1
-        }
+        printf 'add element inet shpun ru_dst { %s }\n' "$chunk" >> "$tmp"
     fi
 
-    log "ru_dst: loaded $total CIDR entries"
+    if [ "$total" -eq 0 ]; then
+        rm -f "$tmp"
+        log "ru_dst: no valid CIDR entries found (skipped=$skipped)"
+        return 1
+    fi
+
+    if ! nft -f "$tmp" >/dev/null 2>&1; then
+        rm -f "$tmp"
+        log "ru_dst: batch load failed total=$total skipped=$skipped"
+        return 1
+    fi
+
+    rm -f "$tmp"
+    end_ts="$(date +%s 2>/dev/null || echo 0)"
+    duration=$((end_ts - start_ts))
+    log "ru_dst: loaded $total CIDR entries (skipped=$skipped, duration=${duration}s)"
     return 0
 }
 
@@ -230,6 +292,8 @@ nft_apply_custom() {
 }
 
 nft_init() {
+    start_ts="$(date +%s 2>/dev/null || echo 0)"
+
     LAN_IF="$(get_lan_if)"
     LAN_IP="$(get_lan_ip)"
     MODE="$(get_mode)"
@@ -285,7 +349,9 @@ nft_init() {
 
     nft_apply_custom
 
-    log "nft init: complete mode=$MODE tproxy=$WITH_TPROXY"
+    end_ts="$(date +%s 2>/dev/null || echo 0)"
+    duration=$((end_ts - start_ts))
+    log "nft init: complete mode=$MODE tproxy=$WITH_TPROXY duration=${duration}s"
     return 0
 }
 

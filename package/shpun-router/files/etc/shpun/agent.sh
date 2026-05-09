@@ -6,6 +6,7 @@
 STATE_DIR="/etc/shpun"
 CODE_FILE="$STATE_DIR/router_code"
 SUB_FILE="$STATE_DIR/subscription.json"
+SUB_URL_FILE="$STATE_DIR/subscription_url"
 VPN_READY_FILE="$STATE_DIR/vpn_ready"
 LAST_CHECK_FILE="$STATE_DIR/last_sub_check"
 CONF="$STATE_DIR/agent.conf"
@@ -27,6 +28,10 @@ ROUTES_VER_FILE="$ROUTES_DIR/ru.version"
 ROUTES_SHA_FILE="$ROUTES_DIR/ru.sha256"
 ROUTES_LAST_CHECK_FILE="$ROUTES_DIR/last_check"
 ROUTES_MODE_FILE="$ROUTES_DIR/mode"
+PRESETS_DIR="$ROUTES_DIR/presets"
+SMART_RU_DOMAINS_FILE="$PRESETS_DIR/smart_ru.domains"
+SMART_RU_DOMAINS_VER_FILE="$PRESETS_DIR/smart_ru.domains.version"
+SMART_RU_DOMAINS_SHA_FILE="$PRESETS_DIR/smart_ru.domains.sha256"
 
 ROUTES_URL_BASE_DEFAULT="https://spb.shpyn.online/files/routes"
 ROUTES_CHECK_INTERVAL_DEFAULT=43200
@@ -49,6 +54,7 @@ ensure_state_dir() {
 
 ensure_routes_dir() {
 	[ -d "$ROUTES_DIR" ] || mkdir -p "$ROUTES_DIR" 2>/dev/null || true
+	[ -d "$PRESETS_DIR" ] || mkdir -p "$PRESETS_DIR" 2>/dev/null || true
 
 	# ВАЖНО: режим создаём только при первой установке.
 	# При обновлении пакета пользовательский выбор не перетираем.
@@ -57,6 +63,9 @@ ensure_routes_dir() {
 	[ -f "$ROUTES_LAST_CHECK_FILE" ] || echo "0"    > "$ROUTES_LAST_CHECK_FILE"
 	[ -f "$ROUTES_SHA_FILE" ]        || : > "$ROUTES_SHA_FILE"
 	[ -f "$ROUTES_CIDRS_FILE" ]      || : > "$ROUTES_CIDRS_FILE"
+	[ -f "$SMART_RU_DOMAINS_VER_FILE" ] || echo "0" > "$SMART_RU_DOMAINS_VER_FILE"
+	[ -f "$SMART_RU_DOMAINS_SHA_FILE" ] || : > "$SMART_RU_DOMAINS_SHA_FILE"
+	[ -f "$SMART_RU_DOMAINS_FILE" ]     || : > "$SMART_RU_DOMAINS_FILE"
 }
 
 ensure_router_code() {
@@ -289,6 +298,93 @@ calc_sha256_file() {
 	return 1
 }
 
+json_escape_string() {
+	printf '%s' "$1" | awk '
+		{
+			gsub(/\\/,"\\\\")
+			gsub(/"/,"\\\"")
+			printf "%s", $0
+		}
+	'
+}
+
+normalize_subscription_file() {
+	local file="$1"
+	local tmp line escaped first decoded
+
+	if jsonfilter -i "$file" -e '@.subscription.links[0]' >/dev/null 2>&1; then
+		return 0
+	fi
+
+	if jsonfilter -i "$file" -e '@.links[0]' >/dev/null 2>&1; then
+		tmp="${file}.norm"
+		{
+			printf '{"subscription":{"links":'
+			jsonfilter -i "$file" -e '@.links' 2>/dev/null
+			printf '}}\n'
+		} > "$tmp" && mv "$tmp" "$file"
+		return $?
+	fi
+
+	if ! grep -qE '^(ss|vless)://' "$file" 2>/dev/null; then
+		if command -v base64 >/dev/null 2>&1; then
+			decoded="${file}.decoded"
+			if base64 -d "$file" > "$decoded" 2>/dev/null && grep -qE '^(ss|vless)://' "$decoded" 2>/dev/null; then
+				mv "$decoded" "$file"
+			else
+				rm -f "$decoded"
+			fi
+		fi
+	fi
+
+	if ! grep -qE '^(ss|vless)://' "$file" 2>/dev/null; then
+		return 1
+	fi
+
+	tmp="${file}.norm"
+	first=1
+	printf '{"subscription":{"links":[' > "$tmp" || return 1
+
+	while IFS= read -r line; do
+		line="$(printf '%s' "$line" | tr -d '\r')"
+		case "$line" in
+			ss://*|vless://*) ;;
+			*) continue ;;
+		esac
+		escaped="$(json_escape_string "$line")"
+		if [ "$first" -eq 1 ]; then
+			first=0
+		else
+			printf ',' >> "$tmp"
+		fi
+		printf '"%s"' "$escaped" >> "$tmp"
+	done < "$file"
+
+	printf ']}}\n' >> "$tmp"
+	mv "$tmp" "$file"
+}
+
+ensure_selected_link_valid() {
+	local selected count
+
+	[ -s "$SUB_FILE" ] || return 0
+
+	selected="$(cat "$STATE_DIR/selected_link_index" 2>/dev/null | tr -d '\r\n ' || echo 0)"
+	case "$selected" in
+		''|*[!0-9]*) selected=0 ;;
+	esac
+
+	count="$(jsonfilter -i "$SUB_FILE" -e '@.subscription.links[*]' 2>/dev/null | wc -l | tr -d ' ')"
+	case "$count" in
+		''|*[!0-9]*) count=0 ;;
+	esac
+
+	if [ "$count" -gt 0 ] && [ "$selected" -ge "$count" ]; then
+		log "selected server index $selected is out of range after subscription update (count=$count), fallback to 0"
+		echo "0" > "$STATE_DIR/selected_link_index"
+	fi
+}
+
 restart_vpn() {
 	if [ ! -x /etc/init.d/shpun-vpn ]; then
 		log "shpun-vpn init script not found"
@@ -409,6 +505,93 @@ fetch_routes_once() {
 	return 0
 }
 
+fetch_smart_ru_once() {
+	local remote_ver local_ver remote_sha local_sha
+	local tmp_domains tmp_sha
+
+	ensure_routes_dir
+	detect_http_client
+
+	if [ -z "$HTTP_BIN" ]; then
+		log "smart_ru: no HTTP client"
+		return 1
+	fi
+
+	remote_ver="$(http_get_stdout "$ROUTES_URL_BASE/presets/smart_ru.domains.version" 2>/dev/null | tr -d '\r\n ' || true)"
+	local_ver="$(cat "$SMART_RU_DOMAINS_VER_FILE" 2>/dev/null | tr -d '\r\n ' || echo "0")"
+
+	if [ -z "$remote_ver" ]; then
+		log "smart_ru: empty remote version"
+		return 1
+	fi
+
+	if [ "$remote_ver" = "$local_ver" ] && [ -s "$SMART_RU_DOMAINS_FILE" ]; then
+		log "smart_ru: already up-to-date (v=$local_ver)"
+		return 0
+	fi
+
+	log "smart_ru: updating local=$local_ver remote=$remote_ver"
+
+	tmp_domains="${SMART_RU_DOMAINS_FILE}.tmp"
+	tmp_sha="${SMART_RU_DOMAINS_SHA_FILE}.tmp"
+
+	rm -f "$tmp_domains" "$tmp_sha"
+
+	if ! http_get_to_file "$ROUTES_URL_BASE/presets/smart_ru.domains" "$tmp_domains" 2>/dev/null; then
+		log "smart_ru: failed to download domains"
+		rm -f "$tmp_domains" "$tmp_sha"
+		return 1
+	fi
+
+	if [ ! -s "$tmp_domains" ]; then
+		log "smart_ru: downloaded domains file is empty"
+		rm -f "$tmp_domains" "$tmp_sha"
+		return 1
+	fi
+
+	if ! http_get_to_file "$ROUTES_URL_BASE/presets/smart_ru.domains.sha256" "$tmp_sha" 2>/dev/null; then
+		log "smart_ru: failed to download sha256"
+		rm -f "$tmp_domains" "$tmp_sha"
+		return 1
+	fi
+
+	remote_sha="$(tr -d '\r\n ' < "$tmp_sha" 2>/dev/null)"
+
+	if [ -z "$remote_sha" ]; then
+		log "smart_ru: empty remote sha256"
+		rm -f "$tmp_domains" "$tmp_sha"
+		return 1
+	fi
+
+	local_sha="$(calc_sha256_file "$tmp_domains" 2>/dev/null || true)"
+
+	if [ -z "$local_sha" ]; then
+		log "smart_ru: failed to calculate local sha256"
+		rm -f "$tmp_domains" "$tmp_sha"
+		return 1
+	fi
+
+	if [ "$local_sha" != "$remote_sha" ]; then
+		log "smart_ru: sha256 mismatch local=$local_sha remote=$remote_sha"
+		rm -f "$tmp_domains" "$tmp_sha"
+		return 1
+	fi
+
+	mv "$tmp_domains" "$SMART_RU_DOMAINS_FILE"
+	echo "$remote_sha" > "$SMART_RU_DOMAINS_SHA_FILE"
+	echo "$remote_ver" > "$SMART_RU_DOMAINS_VER_FILE"
+	rm -f "$tmp_sha"
+
+	log "smart_ru: domains updated to version $remote_ver"
+
+	if [ "$(get_routing_mode)" = "smart_ru" ]; then
+		log "smart_ru: domains changed while mode=smart_ru, rebuilding VPN config"
+		ensure_vpn_from_subscription || true
+	fi
+
+	return 0
+}
+
 check_routes_update() {
 	local now_ts last_ts
 
@@ -425,7 +608,10 @@ check_routes_update() {
 		return 0
 	fi
 
-	fetch_routes_once
+	fetch_smart_ru_once
+	if [ "$(get_routing_mode)" = "split_ru" ]; then
+		fetch_routes_once
+	fi
 	echo "$now_ts" > "$ROUTES_LAST_CHECK_FILE"
 }
 
@@ -436,6 +622,14 @@ ensure_routes_ready() {
 	mode="$(get_routing_mode)"
 
 	if [ "$mode" = "full" ]; then
+		return 0
+	fi
+
+	if [ "$mode" = "smart_ru" ]; then
+		if [ ! -s "$SMART_RU_DOMAINS_FILE" ]; then
+			log "routes: smart_ru domains missing, fetching initial copy"
+			fetch_smart_ru_once
+		fi
 		return 0
 	fi
 
@@ -565,21 +759,33 @@ fetch_subscription_once() {
 	fi
 
 	CONFIG_PATH="$(printf '%s' "$BODY" | jsonfilter -e '@.config_url' 2>/dev/null || echo "")"
+	SUBSCRIPTION_URL="$(printf '%s' "$BODY" | jsonfilter -e '@.subscription_url' 2>/dev/null || echo "")"
 
-	if [ -z "$CONFIG_PATH" ]; then
-		log "router_public ok=1 but config_url is empty"
+	if [ -z "$CONFIG_PATH" ] && [ -z "$SUBSCRIPTION_URL" ]; then
+		log "router_public ok=1 but config_url/subscription_url is empty"
 		return 1
 	fi
 
 	BASE_URL="${API_URL%/shm/v1/public/router_public}"
-	CONFIG_URL="${BASE_URL}${CONFIG_PATH}"
+	if [ -n "$SUBSCRIPTION_URL" ]; then
+		CONFIG_URL="$SUBSCRIPTION_URL"
+		printf '%s\n' "$SUBSCRIPTION_URL" > "$SUB_URL_FILE"
+	else
+		CONFIG_URL="${BASE_URL}${CONFIG_PATH}"
+	fi
 
-	log "fetching subscription from $CONFIG_URL"
+	log "fetching subscription"
 
 	TMP_SUB="${SUB_FILE}.tmp"
 
-	if ! http_get_to_file "${CONFIG_URL}&format=json" "$TMP_SUB" 2>/dev/null; then
-		log "failed to download subscription json"
+	if [ -n "$SUBSCRIPTION_URL" ]; then
+		DOWNLOAD_URL="$CONFIG_URL"
+	else
+		DOWNLOAD_URL="${CONFIG_URL}&format=json"
+	fi
+
+	if ! http_get_to_file "$DOWNLOAD_URL" "$TMP_SUB" 2>/dev/null; then
+		log "failed to download subscription"
 		rm -f "$TMP_SUB"
 		return 1
 	fi
@@ -590,11 +796,76 @@ fetch_subscription_once() {
 		return 1
 	fi
 
+	if ! normalize_subscription_file "$TMP_SUB"; then
+		log "downloaded subscription format is unsupported"
+		rm -f "$TMP_SUB"
+		return 1
+	fi
+
 	mv "$TMP_SUB" "$SUB_FILE"
+	ensure_selected_link_valid
 	log "subscription json saved to $SUB_FILE"
 
 	date +%s > "$LAST_CHECK_FILE"
 
+	return 0
+}
+
+refresh_subscription_from_url() {
+	local sub_url tmp_sub old_sha new_sha
+
+	[ -s "$SUB_URL_FILE" ] || return 1
+
+	sub_url="$(cat "$SUB_URL_FILE" 2>/dev/null | tr -d '\r\n ' || true)"
+	[ -n "$sub_url" ] || return 1
+
+	detect_http_client
+
+	if [ -z "$HTTP_BIN" ]; then
+		log "refresh_subscription_from_url: no HTTP client"
+		return 1
+	fi
+
+	tmp_sub="${SUB_FILE}.refresh.tmp"
+	rm -f "$tmp_sub"
+
+	log "refreshing subscription from saved url"
+
+	if ! http_get_to_file "$sub_url" "$tmp_sub" 2>/dev/null; then
+		log "refresh_subscription_from_url: download failed"
+		rm -f "$tmp_sub"
+		return 1
+	fi
+
+	if [ ! -s "$tmp_sub" ]; then
+		log "refresh_subscription_from_url: downloaded file is empty"
+		rm -f "$tmp_sub"
+		return 1
+	fi
+
+	if ! normalize_subscription_file "$tmp_sub"; then
+		log "refresh_subscription_from_url: unsupported subscription format"
+		rm -f "$tmp_sub"
+		return 1
+	fi
+
+	old_sha="$(calc_sha256_file "$SUB_FILE" 2>/dev/null || true)"
+	new_sha="$(calc_sha256_file "$tmp_sub" 2>/dev/null || true)"
+
+	if [ -n "$old_sha" ] && [ "$old_sha" = "$new_sha" ]; then
+		rm -f "$tmp_sub"
+		log "subscription refresh: unchanged"
+		date +%s > "$LAST_CHECK_FILE"
+		return 0
+	fi
+
+	mv "$tmp_sub" "$SUB_FILE"
+	ensure_selected_link_valid
+	log "subscription refresh: updated"
+	date +%s > "$LAST_CHECK_FILE"
+	rm -f "$VERROR_FILE"
+
+	ensure_vpn_from_subscription || true
 	return 0
 }
 
@@ -698,6 +969,13 @@ check_subscription_alive() {
 		return 0
 	fi
 
+	if [ -s "$SUB_URL_FILE" ]; then
+		if refresh_subscription_from_url; then
+			return 0
+		fi
+		log "direct subscription refresh failed, falling back to router_config"
+	fi
+
 	detect_http_client
 
 	if [ -z "$HTTP_BIN" ]; then
@@ -738,6 +1016,8 @@ check_subscription_alive() {
 
 	if [ "$OK" = "1" ]; then
 		printf '%s' "$BODY" > "$SUB_FILE"
+		normalize_subscription_file "$SUB_FILE" >/dev/null 2>&1 || true
+		ensure_selected_link_valid
 		log "subscription_alive: ok=1, subscription.json refreshed"
 		echo "$now_ts" > "$LAST_CHECK_FILE"
 		rm -f "$VERROR_FILE"

@@ -7,6 +7,7 @@ const CODE      = DIR + "/router_code";
 const SUB       = DIR + "/subscription.json";
 const READY     = DIR + "/vpn_ready";
 const VERROR    = DIR + "/vpn_error";
+const SELECTED_LINK = DIR + "/selected_link_index";
 
 const FW_CUR_NEW   = DIR + "/fw_current";
 const FW_LAST_NEW  = DIR + "/fw_latest";
@@ -21,6 +22,7 @@ const ROUTES_MODE     = ROUTES_DIR + "/mode";
 const ROUTES_VER      = ROUTES_DIR + "/ru.version";
 const ROUTES_LASTCHK  = ROUTES_DIR + "/last_check";
 const ROUTES_CIDRS    = ROUTES_DIR + "/ru.cidrs";
+const ROUTER_PROFILE  = ROUTES_DIR + "/router_profile";
 const ROUTING_SETTER  = DIR + "/set-routing-mode.sh";
 
 const CUSTOM_FILE     = ROUTES_DIR + "/custom.json";
@@ -113,6 +115,60 @@ function json_array(arr) {
 	return out;
 }
 
+function parse_link_info(link, idx, selected) {
+	link = trim(norm(link));
+
+	let proto = "";
+	let rest = link;
+	let p = index(link, "://");
+	if (p >= 0) {
+		proto = substr(link, 0, p);
+		rest = substr(link, p + 3);
+	}
+
+	let fragment = "";
+	let hash = index(rest, "#");
+	if (hash >= 0) {
+		fragment = substr(rest, hash + 1);
+		rest = substr(rest, 0, hash);
+	}
+
+	let no_query = rest;
+	let q = index(no_query, "?");
+	if (q >= 0)
+		no_query = substr(no_query, 0, q);
+
+	let hostport = no_query;
+	let at = index(hostport, "@");
+	if (at >= 0)
+		hostport = substr(hostport, at + 1);
+
+	let host = hostport;
+	let port = "";
+	let colon = -1;
+	for (let i = length(hostport) - 1; i >= 0; i--) {
+		if (substr(hostport, i, 1) == ":") {
+			colon = i;
+			break;
+		}
+	}
+	if (colon >= 0) {
+		host = substr(hostport, 0, colon);
+		port = substr(hostport, colon + 1);
+	}
+
+	let name = fragment || host || ("server " + idx);
+
+	return {
+		index: idx,
+		selected: selected,
+		proto: proto,
+		host: host,
+		port: port,
+		name: name
+	};
+}
+
 return {
 	shpun: {
 		ping: {
@@ -167,7 +223,8 @@ return {
 						routes_version: ver  != "" ? ver  : "0",
 						last_check:     ts   != "" ? ts   : "0",
 						routes_count:   cnt,
-						has_routes:     exists(ROUTES_CIDRS) && cnt > 0
+						has_routes:     exists(ROUTES_CIDRS) && cnt > 0,
+						router_profile: readfile(ROUTER_PROFILE) || ""
 					};
 				} catch(e) {
 					return { ok: 0, error: String(e) };
@@ -183,7 +240,7 @@ return {
 					if (req && req.args && req.args.mode)
 						mode = norm(req.args.mode);
 
-					if (mode != "full" && mode != "split_ru")
+					if (mode != "full" && mode != "smart_ru" && mode != "split_ru")
 						return { ok: 0, error: "invalid mode", got: mode };
 
 					if (!exists(ROUTING_SETTER))
@@ -312,6 +369,92 @@ return {
 						apply_output: apply_output,
 						warning:      warning
 					};
+				} catch(e) {
+					return { ok: 0, error: String(e) };
+				}
+			}
+		},
+
+		servers_get: {
+			call: function(req) {
+				try {
+					if (!exists(SUB))
+						return { ok: 1, selected: 0, servers: [] };
+
+					let raw = readfile(SUB);
+					let data = json(raw);
+					if (!data)
+						return { ok: 0, error: "invalid subscription json" };
+
+					let links = [];
+					if (data.subscription && type(data.subscription.links) == "array")
+						links = data.subscription.links;
+					else if (type(data.links) == "array")
+						links = data.links;
+
+					let selected = int(trim(readfile(SELECTED_LINK) || "0"));
+					if (selected < 0 || selected >= length(links))
+						selected = 0;
+
+					let servers = [];
+					for (let i = 0; i < length(links); i++) {
+						push(servers, parse_link_info(links[i], i, i == selected));
+					}
+
+					return {
+						ok: 1,
+						selected: selected,
+						count: length(servers),
+						servers: servers
+					};
+				} catch(e) {
+					return { ok: 0, error: String(e) };
+				}
+			}
+		},
+
+		server_set: {
+			args: { index: 0 },
+			call: function(req) {
+				try {
+					let idx = 0;
+					if (req && req.args && req.args.index != null)
+						idx = int(req.args.index);
+
+					if (idx < 0)
+						return { ok: 0, error: "invalid index", index: idx };
+
+					if (!exists(SUB))
+						return { ok: 0, error: "subscription.json not found" };
+
+					let raw = readfile(SUB);
+					let data = json(raw);
+					if (!data)
+						return { ok: 0, error: "invalid subscription json" };
+
+					let links = [];
+					if (data.subscription && type(data.subscription.links) == "array")
+						links = data.subscription.links;
+					else if (type(data.links) == "array")
+						links = data.links;
+
+					if (idx >= length(links))
+						return { ok: 0, error: "index out of range", index: idx, count: length(links) };
+
+					let f = open(SELECTED_LINK, "w");
+					if (!f)
+						return { ok: 0, error: "cannot write selected link" };
+					f.write("" + idx + "\n");
+					f.close();
+
+					let p = popen(
+						"rm -f " + DIR + "/xray.json " + READY + " " + VERROR + " >/dev/null 2>&1; " +
+						"/etc/init.d/shpun-vpn stop >/dev/null 2>&1 || true; " +
+						"/etc/init.d/shpun-agent restart >/dev/null 2>&1 &"
+					);
+					if (p) p.close();
+
+					return { ok: 1, selected: idx };
 				} catch(e) {
 					return { ok: 0, error: String(e) };
 				}

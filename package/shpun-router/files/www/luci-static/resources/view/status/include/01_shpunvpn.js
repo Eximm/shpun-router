@@ -35,6 +35,12 @@ var callShpunCustomRoutesGet = rpc.declare({
 var callShpunCustomRoutesSet = rpc.declare({
 	object: 'shpun', method: 'custom_routes_set', params: ['vpn', 'direct'], expect: { '': {} }
 });
+var callShpunServersGet = rpc.declare({
+	object: 'shpun', method: 'servers_get', expect: { '': {} }
+});
+var callShpunServerSet = rpc.declare({
+	object: 'shpun', method: 'server_set', params: ['index'], expect: { '': {} }
+});
 
 /* ============================================================
  *  Styles
@@ -74,7 +80,7 @@ function injectStyles() {
 		+ '.shpun-routing-title{font-size:13px;font-weight:800;color:#fff;}'
 		+ '.shpun-routing-sub{font-size:11px;line-height:1.45;color:#9fb0c8;}'
 		+ '.shpun-routing-meta{font-size:11px;line-height:1.45;color:#b8c3d9;text-align:right;}'
-		+ '.shpun-routing-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}'
+		+ '.shpun-routing-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;}'
 		+ '.shpun-code{font-family:monospace;font-size:18px;font-weight:800;letter-spacing:.06em;color:#fff;}'
 		+ '.shpun-code-copy{display:inline-block;cursor:pointer;border-bottom:1px dashed rgba(165,180,252,.55);}'
 		+ '.shpun-code-copy:hover{color:#c4b5fd;border-bottom-color:#a78bfa;}'
@@ -116,6 +122,8 @@ function injectStyles() {
 		+ '.shpun-modal-input{flex:1 1 auto;padding:7px 10px;border:1px solid rgba(120,140,180,.22);border-radius:9px;background:rgba(8,16,32,.60);color:#e2e8f0;font-size:12px;font-family:monospace;outline:none;}'
 		+ '.shpun-modal-input:focus{border-color:rgba(140,130,255,.45);background:rgba(12,22,44,.80);}'
 		+ '.shpun-modal-input::placeholder{color:#4a5568;}'
+		+ '.shpun-modal-wrap select{background:#101b2d;color:#e2e8f0;border:1px solid rgba(120,140,180,.28);border-radius:9px;padding:8px 10px;}'
+		+ '.shpun-server-note{margin:10px 0 12px;padding:10px 12px;border-radius:10px;background:rgba(250,204,21,.10);border:1px solid rgba(250,204,21,.22);color:#fde68a;font-size:12px;line-height:1.45;}'
 		+ '.shpun-modal-add-btn{padding:7px 14px;border:1px solid rgba(120,140,180,.24);border-radius:9px;background:rgba(14,23,38,.80);color:#e6edf8;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;transition:all .14s ease;}'
 		+ '.shpun-modal-add-btn:hover{background:rgba(25,35,54,.96);border-color:rgba(140,160,200,.34);}'
 		+ '.shpun-modal-footer{display:flex;justify-content:flex-end;gap:8px;margin-top:14px;border-top:1px solid rgba(120,140,180,.12);padding-top:14px;}'
@@ -180,6 +188,8 @@ function hideLuCIHeader(rootNode) {
 }
 
 function getRoutingModeLabel(mode) {
+	if (String(mode || 'full').trim() === 'smart_ru')
+		return 'РФ сервисы напрямую, остальное через VPN';
 	return String(mode || 'full').trim() === 'split_ru'
 		? 'РФ напрямую, остальное через VPN'
 		: 'Весь трафик через VPN';
@@ -330,6 +340,82 @@ function openCustomRoutesModal() {
 	});
 }
 
+function openServersModal() {
+	ui.showModal('Серверы VPN', [
+		E('p', {}, 'Загружаем список серверов...')
+	]);
+
+	callShpunServersGet().then(function(res) {
+		res = res || {};
+		var servers = res.servers || [];
+		var selected = res.selected || 0;
+
+		if (!res.ok) {
+			ui.showModal('Серверы VPN', [
+				E('p', {}, 'Не удалось загрузить список серверов: ' + (res.error || 'ошибка')),
+				E('div', { 'style': 'margin-top:10px;text-align:right' }, [
+					E('button', { 'class': 'btn', 'click': function() { ui.hideModal(); } }, 'Закрыть')
+				])
+			]);
+			return;
+		}
+
+		if (!servers.length) {
+			ui.showModal('Серверы VPN', [
+				E('p', {}, 'Список серверов пока недоступен. Дождитесь получения подписки.'),
+				E('div', { 'style': 'margin-top:10px;text-align:right' }, [
+					E('button', { 'class': 'btn', 'click': function() { ui.hideModal(); } }, 'Закрыть')
+				])
+			]);
+			return;
+		}
+
+		var select = E('select', { 'class': 'cbi-input-select', 'style': 'width:100%;margin-top:8px;' });
+		servers.forEach(function(s) {
+			var proto = String(s.proto || 'vpn').toLowerCase();
+			var protoLabel = proto === 'vless' ? 'VLESS · рекомендуется' : (proto === 'ss' ? 'Shadowsocks · резервный' : proto);
+			var label = (s.name || s.host || ('server ' + s.index)) + ' · ' + protoLabel + ' · ' + (s.host || '') + (s.port ? (':' + s.port) : '');
+			select.appendChild(E('option', { 'value': String(s.index), 'selected': s.index === selected ? 'selected' : null }, label));
+		});
+
+		ui.showModal('Серверы VPN', [
+			E('div', {}, [
+				E('p', {}, 'Выберите сервер. VPN будет перезапущен с новым профилем.'),
+				E('div', { 'class': 'shpun-server-note' }, 'Используйте VLESS как основной вариант. Shadowsocks оставлен как резервный режим и может быть менее стабильным.'),
+				select,
+				E('div', { 'style': 'margin-top:10px;text-align:right' }, [
+					E('button', { 'class': 'btn', 'click': function() { ui.hideModal(); } }, 'Отмена'),
+					E('button', {
+						'class': 'btn cbi-button cbi-button-apply',
+						'style': 'margin-left:8px',
+						'click': function() {
+							var idx = parseInt(select.value, 10);
+							ui.hideModal();
+							ui.addNotification(null, E('p', {}, 'Переключаем сервер...'), 'info');
+							callShpunServerSet(idx).then(function(r) {
+								r = r || {};
+								if (r.ok)
+									ui.addNotification(null, E('p', {}, 'Сервер выбран. VPN перезапускается.'), 'info');
+								else
+									ui.addNotification(null, E('p', {}, 'Не удалось выбрать сервер: ' + (r.error || 'ошибка')), 'error');
+							}).catch(function(err) {
+								ui.addNotification(null, E('p', {}, 'Ошибка: ' + String(err)), 'error');
+							});
+						}
+					}, 'Применить')
+				])
+			])
+		]);
+	}).catch(function(err) {
+		ui.showModal('Серверы VPN', [
+			E('p', {}, 'Не удалось загрузить список серверов: ' + String(err)),
+			E('div', { 'style': 'margin-top:10px;text-align:right' }, [
+				E('button', { 'class': 'btn', 'click': function() { ui.hideModal(); } }, 'Закрыть')
+			])
+		]);
+	});
+}
+
 /* ============================================================
  *  View
  * ========================================================== */
@@ -365,7 +451,7 @@ return view.extend({
 		var routesCount   = routing.routes_count || 0;
 
 		var fwCurrentRaw     = (state.fw_current || '').trim();
-		var fwCurrentDisplay = fwCurrentRaw || '—';
+		var fwCurrentDisplay = fwCurrentRaw || 'вЂ”';
 		var fwLatest         = (state.fw_latest || '').trim();
 		var hasNewFw = !!(fwLatest && fwCurrentRaw && compareVersions(fwCurrentRaw, fwLatest) < 0);
 
@@ -376,7 +462,7 @@ return view.extend({
 		var codeNode = E('span', {
 			'class': code ? 'shpun-code shpun-code-copy' : 'shpun-code',
 			'click': code ? ui.createHandlerFn(this, 'handleCopyCode', code) : null
-		}, code || '— — — —');
+		}, code || 'вЂ” вЂ” вЂ” вЂ”');
 
 		var fwValue = hasNewFw
 			? E('span', {}, [ fwCurrentDisplay, E('span', { 'class': 'shpun-fw-badge' }, 'доступна ' + fwLatest) ])
@@ -444,6 +530,10 @@ return view.extend({
 									'click': function(ev) { return view.handleSetRoutingMode(ev, 'full'); }
 								}, 'Весь трафик через VPN'),
 								E('button', {
+									'class': 'shpun-btn ' + (routingMode === 'smart_ru' ? 'shpun-btn--primary is-active' : 'shpun-btn--ghost'),
+									'click': function(ev) { return view.handleSetRoutingMode(ev, 'smart_ru'); }
+								}, 'РФ сервисы напрямую'),
+								E('button', {
 									'class': 'shpun-btn ' + (routingMode === 'split_ru' ? 'shpun-btn--primary is-active' : 'shpun-btn--ghost'),
 									'click': function(ev) { return view.handleSetRoutingMode(ev, 'split_ru'); }
 								}, 'РФ напрямую, остальное через VPN')
@@ -452,6 +542,7 @@ return view.extend({
 
 						E('div', { 'class': 'shpun-actions' }, [
 							E('button', { 'class': 'shpun-btn shpun-btn--ghost',   'click': ui.createHandlerFn(this, 'handleRefresh') }, 'Обновить статус'),
+							E('button', { 'class': 'shpun-btn shpun-btn--ghost',   'click': ui.createHandlerFn(this, 'handleServers') }, 'Серверы'),
 							E('button', { 'class': 'shpun-btn shpun-btn--ghost',   'click': ui.createHandlerFn(this, 'handleCustomRoutes') }, 'Доп. маршруты'),
 							E('button', { 'class': 'shpun-btn shpun-btn--ghost',   'click': ui.createHandlerFn(this, 'handleUpdateFirmware') }, hasNewFw ? ('Установить ' + fwLatest) : 'Проверить обновление'),
 							E('button', { 'class': 'shpun-btn shpun-btn--primary', 'click': ui.createHandlerFn(this, 'handleRefreshConnection') }, 'Обновить подключение'),
@@ -513,10 +604,15 @@ return view.extend({
 		openCustomRoutesModal();
 	},
 
+	handleServers: function(ev) {
+		if (ev) ev.preventDefault();
+		openServersModal();
+	},
+
 	handleSetRoutingMode: function(ev, mode) {
 		if (ev) { ev.preventDefault(); ev.stopPropagation(); }
 		var targetMode = String(mode || '').trim();
-		if (targetMode !== 'full' && targetMode !== 'split_ru') return;
+		if (targetMode !== 'full' && targetMode !== 'smart_ru' && targetMode !== 'split_ru') return;
 
 		var view = this;
 
@@ -533,7 +629,7 @@ return view.extend({
 						'Список российских адресов ещё не загружен.'
 					]),
 					E('p', {}, 'После переключения роутер автоматически скачает маршруты (~8000 адресов) и применит их. На медленных роутерах (MIPS) это может занять несколько минут — в это время нагрузка на процессор будет высокой.'),
-					E('p', {}, 'Интернет продолжит работать через туннель, пока маршруты применяются.'),
+					E('p', {}, 'РРЅС‚РµСЂРЅРµС‚ РїСЂРѕРґРѕР»Р¶РёС‚ СЂР°Р±РѕС‚Р°С‚СЊ С‡РµСЂРµР· С‚СѓРЅРЅРµР»СЊ, РїРѕРєР° РјР°СЂС€СЂСѓС‚С‹ РїСЂРёРјРµРЅСЏСЋС‚СЃСЏ.'),
 					E('div', { 'style': 'margin-top:10px;text-align:right' }, [
 						E('button', {
 							'class': 'btn',
@@ -560,10 +656,28 @@ return view.extend({
 		ui.addNotification(null, E('p', {}, 'Применяем режим маршрутизации…'), 'info');
 
 		var view = this;
+		var setResult = null;
 
 		return Promise.resolve()
 			.then(function() { return callShpunRoutingSet(targetMode); })
-			.catch(function() { return null; })
+			.then(function(res) {
+				setResult = res || {};
+				var out = String(setResult.output || setResult.error || '');
+				if (out.indexOf('weak_router') >= 0) {
+					ui.addNotification(null, E('p', {}, 'Роутер слишком слабый для полного режима РФ-маршрутизации. Применение большого списка маршрутов отключено для защиты устройства.'), 'warning');
+					return Promise.reject('weak_router');
+				}
+				if (out.indexOf('smart_ru_not_ready') >= 0) {
+					ui.addNotification(null, E('p', {}, 'Не удалось скачать список российских сервисов. Проверьте подключение и попробуйте снова.'), 'warning');
+					return Promise.reject('smart_ru_not_ready');
+				}
+				return setResult;
+			})
+			.catch(function(err) {
+				if (err === 'weak_router') return Promise.reject(err);
+				if (err === 'smart_ru_not_ready') return Promise.reject(err);
+				return null;
+			})
 			.then(function() { return new Promise(function(r) { window.setTimeout(r, 1500); }); })
 			.then(function() {
 				return Promise.all([ callShpunState(), callShpunRoutingGet() ]).then(function(data) {
@@ -573,6 +687,10 @@ return view.extend({
 					else
 						ui.addNotification(null, E('p', {}, 'Не удалось применить режим.'), 'error');
 				});
+			})
+			.catch(function(err) {
+				if (err !== 'weak_router' && err !== 'smart_ru_not_ready')
+					ui.addNotification(null, E('p', {}, 'Не удалось применить режим.'), 'error');
 			});
 	},
 

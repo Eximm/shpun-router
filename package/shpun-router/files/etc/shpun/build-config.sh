@@ -4,6 +4,9 @@
 SUB_FILE="/etc/shpun/subscription.json"
 OUT_CFG="/etc/shpun/xray.json"
 CONF="/etc/shpun/agent.conf"
+SELECTED_LINK_FILE="/etc/shpun/selected_link_index"
+ROUTES_MODE_FILE="/etc/shpun/routes/mode"
+SMART_RU_DOMAINS_FILE="/etc/shpun/routes/presets/smart_ru.domains"
 
 [ -f "$CONF" ] && . "$CONF"
 
@@ -111,7 +114,19 @@ b64_url_decode() {
 # 1. Определяем тип профиля (ROUTER_PROTO)
 # ==========================
 
-LINK="$(jsonfilter -i "$SUB_FILE" -e '@.subscription.links[0]' 2>/dev/null)"
+SELECTED_LINK_INDEX="$(cat "$SELECTED_LINK_FILE" 2>/dev/null | tr -d '\r\n ' || echo 0)"
+case "$SELECTED_LINK_INDEX" in
+    ''|*[!0-9]*) SELECTED_LINK_INDEX=0 ;;
+esac
+
+LINK="$(jsonfilter -i "$SUB_FILE" -e "@.subscription.links[$SELECTED_LINK_INDEX]" 2>/dev/null)"
+
+if [ -z "$LINK" ] && [ "$SELECTED_LINK_INDEX" != "0" ]; then
+    logger -t shpun-build "selected link index $SELECTED_LINK_INDEX not found, fallback to 0"
+    SELECTED_LINK_INDEX=0
+    echo "0" > "$SELECTED_LINK_FILE" 2>/dev/null || true
+    LINK="$(jsonfilter -i "$SUB_FILE" -e '@.subscription.links[0]' 2>/dev/null)"
+fi
 
 [ -n "$LINK" ] || {
     logger -t shpun-build "No links[0] in subscription"
@@ -133,11 +148,81 @@ if [ -n "$JSON_PROTO" ] && [ "$JSON_PROTO" != "$ROUTER_PROTO" ]; then
     logger -t shpun-build "router_profile.proto mismatch: json='$JSON_PROTO', link_scheme='$ROUTER_PROTO' — using link_scheme"
 fi
 
-logger -t shpun-build "router profile proto=$ROUTER_PROTO"
+logger -t shpun-build "router profile proto=$ROUTER_PROTO selected_link=$SELECTED_LINK_INDEX"
 
 REDIR_PORT="${REDIR_PORT:-12345}"
 TPROXY_PORT="${TPROXY_PORT:-12346}"
 TPROXY_MARK="${TPROXY_MARK:-233}"
+
+# smart_ru domain preset support
+json_escape() {
+    printf '%s' "$1" | awk '
+        {
+            gsub(/\\/,"\\\\")
+            gsub(/"/,"\\\"")
+            printf "%s", $0
+        }
+    '
+}
+
+get_routing_mode() {
+    mode="$(cat "$ROUTES_MODE_FILE" 2>/dev/null | tr -d '\r\n ' || true)"
+    [ -z "$mode" ] && mode="full"
+    echo "$mode"
+}
+
+build_smart_ru_domain_rule() {
+    [ "$(get_routing_mode)" = "smart_ru" ] || return 0
+    [ -s "$SMART_RU_DOMAINS_FILE" ] || return 0
+
+    first=1
+    domains=""
+    count=0
+
+    while IFS= read -r raw_domain; do
+        domain="$(printf '%s' "$raw_domain" | tr -d ' \t\r')"
+        [ -z "$domain" ] && continue
+        case "$domain" in
+            \#*) continue ;;
+        esac
+        case "$domain" in
+            *[!A-Za-z0-9._*-]*)
+                continue
+                ;;
+        esac
+
+        case "$domain" in
+            \*.*) domain="domain:${domain#*.}" ;;
+            *)    domain="domain:$domain" ;;
+        esac
+
+        escaped="$(json_escape "$domain")"
+        if [ "$first" -eq 1 ]; then
+            domains="\"$escaped\""
+            first=0
+        else
+            domains="$domains,
+          \"$escaped\""
+        fi
+        count=$((count + 1))
+    done < "$SMART_RU_DOMAINS_FILE"
+
+    [ "$count" -gt 0 ] || return 0
+
+    cat <<EOF
+      {
+        "type": "field",
+        "outboundTag": "direct",
+        "domain": [
+          $domains
+        ]
+      },
+EOF
+
+    logger -t shpun-build "smart_ru direct domains enabled: $count"
+}
+
+SMART_RU_RULE="$(build_smart_ru_domain_rule)"
 
 # ==========================
 # 2. Ветвление по типу профиля
@@ -287,6 +372,7 @@ case "$ROUTER_PROTO" in
           "$SERVER"
         ]
       },
+$SMART_RU_RULE
       {
         "type": "field",
         "network": "tcp",
@@ -520,6 +606,7 @@ $STREAM_SETTINGS
           "$SERVER"
         ]
       },
+$SMART_RU_RULE
       {
         "type": "field",
         "network": "tcp",
