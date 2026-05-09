@@ -54,8 +54,6 @@ function injectStyles() {
 		+ '.shpun-widget-inner{position:relative;z-index:1;display:flex;flex-direction:column;gap:16px;}'
 		+ '.shpun-widget-header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;}'
 		+ '.shpun-title-wrap{display:flex;flex-direction:column;gap:5px;min-width:0;}'
-		+ '.shpun-kicker{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;color:#9fb5ff;}'
-		+ '.shpun-kicker-dot{width:8px;height:8px;border-radius:999px;background:#6ea8ff;box-shadow:0 0 10px rgba(110,168,255,.65);}'
 		+ '.shpun-title{font-size:22px;line-height:1.08;font-weight:800;letter-spacing:-.025em;color:#fff;}'
 		+ '.shpun-subtitle{font-size:13px;line-height:1.45;color:#c2ccde;max-width:680px;}'
 		+ '.shpun-badge{display:inline-flex;align-items:center;padding:7px 12px;border-radius:999px;font-size:12px;font-weight:800;white-space:nowrap;border:1px solid transparent;align-self:flex-start;}'
@@ -588,7 +586,6 @@ return view.extend({
 
 				E('div', { 'class': 'shpun-widget-header' }, [
 					E('div', { 'class': 'shpun-title-wrap' }, [
-						E('div', { 'class': 'shpun-kicker' }, [ E('span', { 'class': 'shpun-kicker-dot' }), 'Shpun Router' ]),
 						E('div', { 'class': 'shpun-title' }, 'SDN System'),
 						E('div', { 'class': 'shpun-subtitle' }, code
 							? 'Статус, серверы, маршруты и обновления'
