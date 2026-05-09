@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=shpun-router
-PKG_VERSION:=1.0.6
+PKG_VERSION:=1.0.7
 PKG_RELEASE:=1
 
 PKG_MAINTAINER:=Shpun VPN
@@ -25,14 +25,15 @@ Shpun Router Integration:
  - automatic engine fetch (multi-arch)
  - VPN status widget (LuCI Dashboard)
  - OTA firmware update (from widget)
- - route feed update for split routing
- - routing mode switch: full / split_ru
- - custom routing rules: force VPN / direct
+ - subscription server selection from LuCI widget
+ - route feed update for split routing and smart RU presets
+ - routing mode switch: full / smart_ru / split_ru
+ - custom routing rules: force VPN / direct for IP, CIDR and domains
  - optional UDP tunneling via nft TPROXY
 endef
 
 define Build/Compile
-	# Nothing to compile — pure script package
+	# Nothing to compile - pure script package
 endef
 
 

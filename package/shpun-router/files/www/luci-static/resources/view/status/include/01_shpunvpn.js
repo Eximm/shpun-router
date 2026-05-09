@@ -275,6 +275,20 @@ function validateRouteEntry(entry) {
 	return validateIpCidr(entry) || validateDomainEntry(entry);
 }
 
+function formatServerLocation(name, protoLabel) {
+	name = String(name || '').replace(/\+/g, ' ');
+	try { name = decodeURIComponent(name); } catch(e) {}
+	name = name.replace(/\s+/g, ' ').trim();
+
+	if (protoLabel)
+		name = name.replace(new RegExp('\\s*' + protoLabel + '\\s*$', 'i'), '');
+
+	name = name.replace(/\s*(VLESS|Shadowsocks|SS)\s*$/i, '').trim();
+	name = name.replace(/[-–—]\s*$/g, '').trim();
+
+	return name || 'Server';
+}
+
 /* ============================================================
  *  Custom routes modal
  *  Живёт вне #view — LuCI его не трогает никогда
@@ -401,7 +415,9 @@ function openCustomRoutesModal() {
 
 function openServersModal() {
 	ui.showModal('Серверы VPN', [
-		E('p', {}, 'Загружаем список серверов...')
+		E('div', { 'class': 'shpun-modal-wrap' }, [
+			E('div', { 'class': 'shpun-modal-desc' }, 'Загружаем список серверов...')
+		])
 	]);
 
 	callShpunServersGet().then(function(res) {
@@ -411,9 +427,11 @@ function openServersModal() {
 
 		if (!res.ok) {
 			ui.showModal('Серверы VPN', [
-				E('p', {}, 'Не удалось загрузить список серверов: ' + (res.error || 'ошибка')),
-				E('div', { 'style': 'margin-top:10px;text-align:right' }, [
-					E('button', { 'class': 'btn', 'click': function() { ui.hideModal(); } }, 'Закрыть')
+				E('div', { 'class': 'shpun-modal-wrap' }, [
+					E('p', { 'style': 'color:#fecaca;' }, 'Не удалось загрузить список серверов: ' + (res.error || 'ошибка')),
+					E('div', { 'class': 'shpun-modal-footer' }, [
+						E('button', { 'type': 'button', 'class': 'shpun-modal-btn', 'click': function() { ui.hideModal(); } }, 'Закрыть')
+					])
 				])
 			]);
 			return;
@@ -421,41 +439,62 @@ function openServersModal() {
 
 		if (!servers.length) {
 			ui.showModal('Серверы VPN', [
-				E('p', {}, 'Список серверов пока недоступен. Дождитесь получения подписки.'),
-				E('div', { 'style': 'margin-top:10px;text-align:right' }, [
-					E('button', { 'class': 'btn', 'click': function() { ui.hideModal(); } }, 'Закрыть')
+				E('div', { 'class': 'shpun-modal-wrap' }, [
+					E('div', { 'class': 'shpun-modal-desc' }, 'Список серверов пока недоступен. Дождитесь получения подписки.'),
+					E('div', { 'class': 'shpun-modal-footer' }, [
+						E('button', { 'type': 'button', 'class': 'shpun-modal-btn', 'click': function() { ui.hideModal(); } }, 'Закрыть')
+					])
 				])
 			]);
 			return;
 		}
 
-		var select = E('select', { 'class': 'cbi-input-select', 'style': 'width:100%;margin-top:8px;' });
+		var chosen = selected;
+		var list = E('div', { 'class': 'shpun-server-list' });
+		var rows = [];
+
+		function markSelected() {
+			rows.forEach(function(row) {
+				row.node.className = 'shpun-server-row' + (row.index === chosen ? ' is-selected' : '');
+			});
+		}
+
 		servers.forEach(function(s) {
 			var proto = String(s.proto || 'vpn').toLowerCase();
 			var protoLabel = proto === 'vless' ? 'VLESS' : (proto === 'ss' ? 'Shadowsocks' : proto.toUpperCase());
-			var hint = proto === 'vless' ? ' · рекомендуется' : (proto === 'ss' ? ' · резервный' : '');
-			var name = s.name || ('Server ' + s.index);
-			try { name = decodeURIComponent(name); } catch(e) {}
-			name = String(name).replace(/\s+/g, ' ').trim();
-			var label = name + ' · ' + protoLabel + hint;
-			select.appendChild(E('option', { 'value': String(s.index), 'selected': s.index === selected ? 'selected' : null }, label));
+			var isMain = proto === 'vless';
+			var location = formatServerLocation(s.name || ('Server ' + s.index), protoLabel);
+			var row = E('button', {
+				'type': 'button',
+				'class': 'shpun-server-row' + (s.index === selected ? ' is-selected' : ''),
+				'click': function(ev) {
+					ev.preventDefault();
+					chosen = s.index;
+					markSelected();
+				}
+			}, [
+				E('span', { 'class': 'shpun-server-location', 'title': location }, location),
+				E('span', { 'class': 'shpun-server-proto' }, protoLabel),
+				E('span', { 'class': 'shpun-server-kind ' + (isMain ? 'shpun-server-kind--main' : 'shpun-server-kind--reserve') }, isMain ? 'Рекомендуем' : 'Резерв')
+			]);
+			rows.push({ index: s.index, node: row });
+			list.appendChild(row);
 		});
 
 		ui.showModal('Серверы VPN', [
-			E('div', {}, [
-				E('p', {}, 'Выберите сервер. VPN будет перезапущен с новым профилем.'),
+			E('div', { 'class': 'shpun-modal-wrap' }, [
+				E('div', { 'class': 'shpun-modal-desc' }, 'Выберите сервер. VPN будет перезапущен с новым профилем.'),
 				E('div', { 'class': 'shpun-server-note' }, 'Используйте VLESS как основной вариант. Shadowsocks оставлен как резервный режим и может быть менее стабильным.'),
-				select,
-				E('div', { 'style': 'margin-top:10px;text-align:right' }, [
-					E('button', { 'class': 'btn', 'click': function() { ui.hideModal(); } }, 'Отмена'),
+				list,
+				E('div', { 'class': 'shpun-modal-footer' }, [
+					E('button', { 'type': 'button', 'class': 'shpun-modal-btn', 'click': function() { ui.hideModal(); } }, 'Отмена'),
 					E('button', {
-						'class': 'btn cbi-button cbi-button-apply',
-						'style': 'margin-left:8px',
+						'type': 'button',
+						'class': 'shpun-modal-btn shpun-modal-btn--primary',
 						'click': function() {
-							var idx = parseInt(select.value, 10);
 							ui.hideModal();
 							ui.addNotification(null, E('p', {}, 'Переключаем сервер...'), 'info');
-							callShpunServerSet(idx).then(function(r) {
+							callShpunServerSet(chosen).then(function(r) {
 								r = r || {};
 								if (r.ok)
 									ui.addNotification(null, E('p', {}, 'Сервер выбран. VPN перезапускается.'), 'info');
@@ -471,9 +510,11 @@ function openServersModal() {
 		]);
 	}).catch(function(err) {
 		ui.showModal('Серверы VPN', [
-			E('p', {}, 'Не удалось загрузить список серверов: ' + String(err)),
-			E('div', { 'style': 'margin-top:10px;text-align:right' }, [
-				E('button', { 'class': 'btn', 'click': function() { ui.hideModal(); } }, 'Закрыть')
+			E('div', { 'class': 'shpun-modal-wrap' }, [
+				E('p', { 'style': 'color:#fecaca;' }, 'Не удалось загрузить список серверов: ' + String(err)),
+				E('div', { 'class': 'shpun-modal-footer' }, [
+					E('button', { 'type': 'button', 'class': 'shpun-modal-btn', 'click': function() { ui.hideModal(); } }, 'Закрыть')
+				])
 			])
 		]);
 	});
