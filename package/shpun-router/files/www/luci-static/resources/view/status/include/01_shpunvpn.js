@@ -74,6 +74,8 @@ function injectStyles() {
 		+ '.shpun-badge--server .shpun-badge-dot{background:#60a5fa;}'
 		+ '.shpun-badge--exit{max-width:190px;background:rgba(20,184,166,.12);color:#ccfbf1;border-color:rgba(45,212,191,.22);}'
 		+ '.shpun-badge--exit .shpun-badge-dot{background:#2dd4bf;}'
+		+ '.shpun-badge--gateway{background:rgba(250,204,21,.12);color:#fde68a;border-color:rgba(250,204,21,.22);}'
+		+ '.shpun-badge--gateway .shpun-badge-dot{background:#facc15;}'
 		+ '.shpun-badge--check{background:rgba(168,85,247,.12);color:#ede9fe;border-color:rgba(196,181,253,.22);}'
 		+ '.shpun-badge--check .shpun-badge-dot{background:#a78bfa;}'
 		+ '.shpun-hint-box{padding:13px 15px;border-radius:16px;border:1px solid rgba(120,140,180,.16);background:rgba(10,17,32,.40);color:#cad4e4;font-size:13px;line-height:1.55;}'
@@ -212,15 +214,19 @@ function buildServerBadges(server) {
 	var protoLabel = proto === 'vless' ? 'VLESS' : (proto === 'ss' ? 'SS' : proto.toUpperCase());
 	var location = formatServerLocation(server.name || server.host || 'Server', protoLabel);
 	var exitCheck = parseInt(server.exit_check_ms, 10);
+	var gatewayPing = parseInt(server.gateway_ping_ms, 10);
 	var badges = [
 		makeBadge('shpun-badge--server', location + (protoLabel ? ' - ' + protoLabel : ''))
 	];
+
+	if (!isNaN(gatewayPing) && gatewayPing >= 0)
+		badges.push(makeBadge('shpun-badge--gateway', 'Шлюз РФ ' + gatewayPing + ' ms', 'Пинг до входного РФ-шлюза'));
 
 	if (server.exit_ip)
 		badges.push(makeBadge('shpun-badge--exit', 'Выход ' + server.exit_ip));
 
 	if (!isNaN(exitCheck) && exitCheck >= 0)
-		badges.push(makeBadge('shpun-badge--check', 'Проверка ' + exitCheck + ' ms', 'Время HTTP-проверки через туннель'));
+		badges.push(makeBadge('shpun-badge--check', 'Сервер ' + exitCheck + ' ms', 'Время проверки через туннель до внешнего IP'));
 
 	return badges;
 }
