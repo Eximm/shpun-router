@@ -346,8 +346,13 @@ function exit_probe() {
 		"if command -v curl >/dev/null 2>&1; then " +
 			"curl -sS -m 4 -x " + proxy + " -w '\\n%{time_total}' http://api.ipify.org 2>/dev/null; " +
 		"else " +
-			"env http_proxy=" + proxy + " HTTP_PROXY=" + proxy + " " +
-			"uclient-fetch -q -T 4 -Y on -O - http://api.ipify.org 2>/dev/null; " +
+			"START=$(cut -d' ' -f1 /proc/uptime 2>/dev/null); " +
+			"IP=$(env http_proxy=" + proxy + " HTTP_PROXY=" + proxy + " " +
+				"uclient-fetch -q -T 4 -Y on -O - http://api.ipify.org 2>/dev/null | tr -d '\\r\\n '); " +
+			"RC=$?; END=$(cut -d' ' -f1 /proc/uptime 2>/dev/null); " +
+			"[ \"$RC\" -eq 0 ] && [ -n \"$IP\" ] || exit 1; " +
+			"printf '%s\\n' \"$IP\"; " +
+			"awk -v s=\"$START\" -v e=\"$END\" 'BEGIN{printf \"%.3f\", e-s}'; " +
 		"fi";
 
 	let out = trim(readcmd(cmd));
