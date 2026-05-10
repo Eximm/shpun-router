@@ -384,8 +384,6 @@ base64_decode_subscription() {
 	local b64="${out}.b64"
 	local len mod
 
-	command -v base64 >/dev/null 2>&1 || return 1
-
 	tr -d '\r\n \t' < "$in" 2>/dev/null | tr '_-' '/+' > "$b64" 2>/dev/null || {
 		rm -f "$b64"
 		return 1
@@ -404,12 +402,8 @@ base64_decode_subscription() {
 		*) rm -f "$b64"; return 1 ;;
 	esac
 
-	if base64 -d "$b64" > "$out" 2>/dev/null; then
-		rm -f "$b64"
-		return 0
-	fi
-
-	if base64 -D "$b64" > "$out" 2>/dev/null; then
+	if command -v ucode >/dev/null 2>&1 &&
+		ucode -e "let fs = require('fs'); let s = fs.readfile('$b64'); print(b64dec(s));" > "$out" 2>/dev/null; then
 		rm -f "$b64"
 		return 0
 	fi
@@ -486,13 +480,11 @@ normalize_subscription_file() {
 	fi
 
 	if ! grep -qE '^(ss|vless)://' "$file" 2>/dev/null; then
-		if command -v base64 >/dev/null 2>&1; then
-			decoded="${file}.decoded"
-			if base64_decode_subscription "$file" "$decoded" && grep -qE '(ss|vless)://' "$decoded" 2>/dev/null; then
-				mv "$decoded" "$file"
-			else
-				rm -f "$decoded"
-			fi
+		decoded="${file}.decoded"
+		if base64_decode_subscription "$file" "$decoded" && grep -qE '(ss|vless)://' "$decoded" 2>/dev/null; then
+			mv "$decoded" "$file"
+		else
+			rm -f "$decoded"
 		fi
 	fi
 
