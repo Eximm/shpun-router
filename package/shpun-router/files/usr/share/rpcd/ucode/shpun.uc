@@ -8,6 +8,7 @@ const SUB       = DIR + "/subscription.json";
 const READY     = DIR + "/vpn_ready";
 const VERROR    = DIR + "/vpn_error";
 const SELECTED_LINK = DIR + "/selected_link_index";
+const HTTP_PROXY_PORT = 10809;
 
 const FW_CUR_NEW   = DIR + "/fw_current";
 const FW_LAST_NEW  = DIR + "/fw_latest";
@@ -232,6 +233,18 @@ function parse_link_info(link, idx, selected) {
 	};
 }
 
+function public_server_info(info) {
+	if (!info)
+		return null;
+
+	return {
+		index: info.index,
+		selected: info.selected,
+		proto: info.proto,
+		name: info.name
+	};
+}
+
 function get_current_server() {
 	if (!exists(SUB))
 		return null;
@@ -294,6 +307,71 @@ function tcp_ping_ms(host, port) {
 	return ms;
 }
 
+function safe_public_ip(ip) {
+	ip = trim(norm(ip));
+	if (!ip || length(ip) > 80)
+		return "";
+
+	let allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789:.-";
+	for (let i = 0; i < length(ip); i++) {
+		if (index(allowed, substr(ip, i, 1)) < 0)
+			return "";
+	}
+
+	return ip;
+}
+
+function seconds_to_ms(v) {
+	v = trim(norm(v));
+	if (!v)
+		return null;
+
+	let dot = index(v, ".");
+	if (dot < 0)
+		return int(v) * 1000;
+
+	let whole = int(substr(v, 0, dot));
+	let frac = substr(v, dot + 1);
+	while (length(frac) < 3)
+		frac += "0";
+	if (length(frac) > 3)
+		frac = substr(frac, 0, 3);
+
+	return whole * 1000 + int(frac);
+}
+
+function exit_probe() {
+	let proxy = "http://127.0.0.1:" + HTTP_PROXY_PORT;
+	let cmd =
+		"if command -v curl >/dev/null 2>&1; then " +
+			"curl -sS -m 4 -x " + proxy + " -w '\\n%{time_total}' https://api.ipify.org 2>/dev/null; " +
+		"else " +
+			"env http_proxy=" + proxy + " https_proxy=" + proxy + " HTTP_PROXY=" + proxy + " HTTPS_PROXY=" + proxy + " " +
+			"uclient-fetch -q -T 4 -O - https://api.ipify.org 2>/dev/null; " +
+		"fi";
+
+	let out = trim(readcmd(cmd));
+	if (!out)
+		return null;
+
+	let lines = split(out, "\n");
+	let ip = safe_public_ip(lines[0] || "");
+	if (!ip)
+		return null;
+
+	let ms = null;
+	if (length(lines) > 1)
+		ms = seconds_to_ms(lines[1]);
+
+	if (ms != null && (ms < 0 || ms > 30000))
+		ms = null;
+
+	return {
+		ip: ip,
+		check_ms: ms
+	};
+}
+
 return {
 	shpun: {
 		ping: {
@@ -314,14 +392,22 @@ return {
 					let res = {
 						code:             code_raw || "",
 						has_sub:          (sub_raw != ""),
-						subscription_url: sub_raw || "",
+						subscription_url: "",
 						vpn_ready:        exists(READY),
 						vpn_error:        err_raw || ""
 					};
 					let current_server = get_current_server();
 					if (current_server) {
-						current_server.ping_ms = tcp_ping_ms(current_server.host, current_server.port);
-						res.current_server = current_server;
+						let server_public = public_server_info(current_server);
+						server_public.gateway_ping_ms = tcp_ping_ms(current_server.host, current_server.port);
+
+						let exit = exit_probe();
+						if (exit) {
+							server_public.exit_ip = exit.ip;
+							server_public.exit_check_ms = exit.check_ms;
+						}
+
+						res.current_server = server_public;
 					}
 
 					if (fw_cur  != "") res.fw_current = fw_cur;
@@ -554,7 +640,7 @@ return {
 
 					let servers = [];
 					for (let i = 0; i < length(links); i++) {
-						push(servers, parse_link_info(links[i], i, i == selected));
+						push(servers, public_server_info(parse_link_info(links[i], i, i == selected)));
 					}
 
 					return {

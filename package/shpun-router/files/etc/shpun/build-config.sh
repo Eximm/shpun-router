@@ -154,6 +154,20 @@ logger -t shpun-build "router profile proto=$ROUTER_PROTO selected_link=$SELECTE
 REDIR_PORT="${REDIR_PORT:-12345}"
 TPROXY_PORT="${TPROXY_PORT:-12346}"
 TPROXY_MARK="${TPROXY_MARK:-233}"
+HTTP_PROXY_PORT="${HTTP_PROXY_PORT:-10809}"
+
+mask_host() {
+    host="$(printf '%s' "$1" | tr -d ' \t\r\n')"
+    [ -n "$host" ] || {
+        printf 'hidden'
+        return
+    }
+
+    case "$host" in
+        *.*) printf '%s' "${host%%.*}.***" ;;
+        *)   printf 'hidden' ;;
+    esac
+}
 
 # smart_ru domain preset support
 json_escape() {
@@ -383,7 +397,7 @@ case "$ROUTER_PROTO" in
         PORT="${HOSTPORT##*:}"
 
         if [ -z "$METHOD" ] || [ -z "$PASSWORD" ] || [ -z "$SERVER" ] || [ -z "$PORT" ]; then
-            logger -t shpun-build "Invalid SS link: method='$METHOD' server='$SERVER' port='$PORT'"
+            logger -t shpun-build "Invalid SS link: method='$METHOD' server=$(mask_host "$SERVER") port='$PORT'"
             exit 1
         fi
 
@@ -415,6 +429,13 @@ case "$ROUTER_PROTO" in
       "sniffing": {
         "enabled": false
       }
+    },
+    {
+      "tag": "http-in",
+      "listen": "127.0.0.1",
+      "port": $HTTP_PROXY_PORT,
+      "protocol": "http",
+      "settings": {}
     },
     {
       "tag": "redir-in",
@@ -507,7 +528,7 @@ $CUSTOM_VPN_RULE
 }
 EOF
 
-        logger -t shpun-build "xray config built (Shadowsocks, TCP+UDP, server=$SERVER:$PORT, method=$METHOD, redir=$REDIR_PORT, tproxy=$TPROXY_PORT)"
+        logger -t shpun-build "xray config built (Shadowsocks, TCP+UDP, server=$(mask_host "$SERVER"):$PORT, method=$METHOD, redir=$REDIR_PORT, tproxy=$TPROXY_PORT)"
         exit 0
         ;;
 
@@ -649,6 +670,13 @@ EOF
       }
     },
     {
+      "tag": "http-in",
+      "listen": "127.0.0.1",
+      "port": $HTTP_PROXY_PORT,
+      "protocol": "http",
+      "settings": {}
+    },
+    {
       "tag": "redir-in",
       "listen": "0.0.0.0",
       "port": $REDIR_PORT,
@@ -743,7 +771,7 @@ $CUSTOM_VPN_RULE
 }
 EOF
 
-        logger -t shpun-build "xray config built (VLESS, TCP+UDP, server=$SERVER:$PORT, security=${SECURITY:-none}, redir=$REDIR_PORT, tproxy=$TPROXY_PORT)"
+        logger -t shpun-build "xray config built (VLESS, TCP+UDP, server=$(mask_host "$SERVER"):$PORT, security=${SECURITY:-none}, redir=$REDIR_PORT, tproxy=$TPROXY_PORT)"
         exit 0
         ;;
 
