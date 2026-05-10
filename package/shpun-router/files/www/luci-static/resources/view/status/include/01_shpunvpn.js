@@ -58,7 +58,9 @@ function injectStyles() {
 		+ '.shpun-kicker-dot{width:8px;height:8px;border-radius:999px;background:#6ea8ff;box-shadow:0 0 10px rgba(110,168,255,.65);}'
 		+ '.shpun-title{font-size:22px;line-height:1.08;font-weight:800;letter-spacing:-.025em;color:#fff;}'
 		+ '.shpun-subtitle{font-size:13px;line-height:1.45;color:#c2ccde;max-width:680px;}'
+		+ '.shpun-status-group{display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:flex-start;gap:8px;max-width:420px;}'
 		+ '.shpun-badge{display:inline-flex;align-items:center;padding:7px 12px;border-radius:999px;font-size:12px;font-weight:800;white-space:nowrap;border:1px solid transparent;align-self:flex-start;}'
+		+ '.shpun-badge-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}'
 		+ '.shpun-badge-dot{width:8px;height:8px;margin-right:8px;border-radius:999px;flex:0 0 auto;}'
 		+ '.shpun-badge--off{background:rgba(148,163,184,.11);color:#e5e7eb;border-color:rgba(148,163,184,.20);}'
 		+ '.shpun-badge--off .shpun-badge-dot{background:#94a3b8;}'
@@ -68,6 +70,8 @@ function injectStyles() {
 		+ '.shpun-badge--ok .shpun-badge-dot{background:#22c55e;}'
 		+ '.shpun-badge--err{background:rgba(248,113,113,.14);color:#fecaca;border-color:rgba(248,113,113,.24);}'
 		+ '.shpun-badge--err .shpun-badge-dot{background:#f87171;}'
+		+ '.shpun-badge--server{max-width:250px;background:rgba(96,165,250,.12);color:#dbeafe;border-color:rgba(96,165,250,.22);}'
+		+ '.shpun-badge--server .shpun-badge-dot{background:#60a5fa;}'
 		+ '.shpun-hint-box{padding:13px 15px;border-radius:16px;border:1px solid rgba(120,140,180,.16);background:rgba(10,17,32,.40);color:#cad4e4;font-size:13px;line-height:1.55;}'
 		+ '.shpun-card-main{display:grid;grid-template-columns:minmax(0,1fr) 220px;gap:16px;align-items:stretch;}'
 		+ '.shpun-col-main{min-width:0;min-height:100%;display:flex;flex-direction:column;gap:14px;}'
@@ -187,6 +191,25 @@ function buildStatusBadge(state) {
 	else if (hasCode && hasSub && ready)  { cls = 'shpun-badge shpun-badge--ok';   text = 'VPN подключен'; }
 	else                                  { cls = 'shpun-badge shpun-badge--off';  text = 'Ожидание'; }
 	return E('span', { 'class': cls }, [ E('span', { 'class': 'shpun-badge-dot' }), text ]);
+}
+
+function buildServerBadge(server) {
+	if (!server)
+		return null;
+
+	var proto = String(server.proto || '').toLowerCase();
+	var protoLabel = proto === 'vless' ? 'VLESS' : (proto === 'ss' ? 'SS' : proto.toUpperCase());
+	var location = formatServerLocation(server.name || server.host || 'Server', protoLabel);
+	var ping = parseInt(server.ping_ms, 10);
+	var text = location + (protoLabel ? ' - ' + protoLabel : '');
+
+	if (!isNaN(ping) && ping >= 0)
+		text += ' - ' + ping + ' ms';
+
+	return E('span', { 'class': 'shpun-badge shpun-badge--server', 'title': text }, [
+		E('span', { 'class': 'shpun-badge-dot' }),
+		E('span', { 'class': 'shpun-badge-text' }, text)
+	]);
 }
 
 function getRoutingModeLabel(mode) {
@@ -583,6 +606,11 @@ return view.extend({
 			: !vpnReady ? (err ? 'Ошибка: ' + err : 'Привязка найдена. Роутер поднимает VPN…')
 			: 'Роутер подключен. Серверы, маршруты и обновления доступны прямо в этом виджете.';
 
+		var statusBadges = [ buildStatusBadge(state) ];
+		var serverBadge = buildServerBadge(state.current_server);
+		if (serverBadge)
+			statusBadges.push(serverBadge);
+
 		return E('div', { 'class': 'shpun-widget-card' }, [
 			E('div', { 'class': 'shpun-widget-inner' }, [
 
@@ -594,7 +622,7 @@ return view.extend({
 							? 'Статус, серверы, маршруты и обновления'
 							: 'Подготовка роутера к привязке через ShpunApp')
 					]),
-					buildStatusBadge(state)
+					E('div', { 'class': 'shpun-status-group' }, statusBadges)
 				]),
 
 				E('div', { 'class': 'shpun-hint-box' }, hintText),

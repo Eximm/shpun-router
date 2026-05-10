@@ -232,6 +232,68 @@ function parse_link_info(link, idx, selected) {
 	};
 }
 
+function get_current_server() {
+	if (!exists(SUB))
+		return null;
+
+	let raw = readfile(SUB);
+	let data = json(raw);
+	if (!data)
+		return null;
+
+	let links = [];
+	if (data.subscription && type(data.subscription.links) == "array")
+		links = data.subscription.links;
+	else if (type(data.links) == "array")
+		links = data.links;
+
+	if (length(links) < 1)
+		return null;
+
+	let selected = int(trim(readfile(SELECTED_LINK) || "0"));
+	if (selected < 0 || selected >= length(links))
+		selected = 0;
+
+	return parse_link_info(links[selected], selected, true);
+}
+
+function is_safe_ping_host(host) {
+	host = trim(norm(host));
+	if (!host || length(host) > 253)
+		return false;
+
+	let allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-";
+	for (let i = 0; i < length(host); i++) {
+		if (index(allowed, substr(host, i, 1)) < 0)
+			return false;
+	}
+
+	return index(host, ".") >= 0;
+}
+
+function tcp_ping_ms(host, port) {
+	host = trim(norm(host));
+	if (!is_safe_ping_host(host))
+		return null;
+
+	let cmd = "ping -c 1 -W 1 " + host + " 2>/dev/null | sed -n 's/.*time=\\([0-9.]*\\).*/\\1/p' | head -n 1";
+
+	let out = trim(readcmd(cmd));
+	if (!out)
+		return null;
+
+	let dot = index(out, ".");
+	if (dot >= 0)
+		out = substr(out, 0, dot);
+
+	let ms = int(out);
+
+	if (ms < 0 || ms > 10000)
+		return null;
+
+	return ms;
+}
+
 return {
 	shpun: {
 		ping: {
@@ -256,6 +318,11 @@ return {
 						vpn_ready:        exists(READY),
 						vpn_error:        err_raw || ""
 					};
+					let current_server = get_current_server();
+					if (current_server) {
+						current_server.ping_ms = tcp_ping_ms(current_server.host, current_server.port);
+						res.current_server = current_server;
+					}
 
 					if (fw_cur  != "") res.fw_current = fw_cur;
 					if (fw_last != "") res.fw_latest  = fw_last;
