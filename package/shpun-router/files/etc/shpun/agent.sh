@@ -7,6 +7,7 @@ STATE_DIR="/etc/shpun"
 CODE_FILE="$STATE_DIR/router_code"
 SUB_FILE="$STATE_DIR/subscription.json"
 SUB_URL_FILE="$STATE_DIR/subscription_url"
+CONFIG_URL_FILE="$STATE_DIR/router_config_url"
 VPN_READY_FILE="$STATE_DIR/vpn_ready"
 LAST_CHECK_FILE="$STATE_DIR/last_sub_check"
 CONF="$STATE_DIR/agent.conf"
@@ -306,6 +307,75 @@ json_escape_string() {
 			printf "%s", $0
 		}
 	'
+}
+
+extract_subscription_url_from_json_file() {
+	local file="$1"
+	local url
+
+	url="$(jsonfilter -i "$file" -e '@.subscription_url' 2>/dev/null || echo "")"
+	[ -z "$url" ] && url="$(jsonfilter -i "$file" -e '@.sub_url' 2>/dev/null || echo "")"
+	[ -z "$url" ] && url="$(jsonfilter -i "$file" -e '@.sub' 2>/dev/null || echo "")"
+	[ -z "$url" ] && url="$(jsonfilter -i "$file" -e '@.subscription.url' 2>/dev/null || echo "")"
+
+	case "$url" in
+		http://*|https://*) printf '%s' "$url"; return 0 ;;
+	esac
+
+	return 1
+}
+
+extract_subscription_url_from_json_text() {
+	local url
+
+	url="$(printf '%s' "$1" | jsonfilter -e '@.subscription_url' 2>/dev/null || echo "")"
+	[ -z "$url" ] && url="$(printf '%s' "$1" | jsonfilter -e '@.sub_url' 2>/dev/null || echo "")"
+	[ -z "$url" ] && url="$(printf '%s' "$1" | jsonfilter -e '@.sub' 2>/dev/null || echo "")"
+	[ -z "$url" ] && url="$(printf '%s' "$1" | jsonfilter -e '@.subscription.url' 2>/dev/null || echo "")"
+
+	case "$url" in
+		http://*|https://*) printf '%s' "$url"; return 0 ;;
+	esac
+
+	return 1
+}
+
+save_subscription_url() {
+	local url="$1"
+
+	case "$url" in
+		http://*|https://*)
+			printf '%s\n' "$url" > "$SUB_URL_FILE"
+			log "subscription url saved"
+			return 0
+			;;
+	esac
+
+	return 1
+}
+
+save_config_url() {
+	local url="$1"
+
+	case "$url" in
+		http://*|https://*)
+			printf '%s\n' "$url" > "$CONFIG_URL_FILE"
+			log "router config url saved"
+			return 0
+			;;
+	esac
+
+	return 1
+}
+
+append_format_json() {
+	local url="$1"
+
+	case "$url" in
+		*format=*) printf '%s' "$url" ;;
+		*\?*)     printf '%s&format=json' "$url" ;;
+		*)        printf '%s?format=json' "$url" ;;
+	esac
 }
 
 base64_decode_subscription() {
@@ -812,7 +882,7 @@ fetch_subscription_once() {
 	fi
 
 	CONFIG_PATH="$(printf '%s' "$BODY" | jsonfilter -e '@.config_url' 2>/dev/null || echo "")"
-	SUBSCRIPTION_URL="$(printf '%s' "$BODY" | jsonfilter -e '@.subscription_url' 2>/dev/null || echo "")"
+	SUBSCRIPTION_URL="$(extract_subscription_url_from_json_text "$BODY" || echo "")"
 
 	if [ -z "$CONFIG_PATH" ] && [ -z "$SUBSCRIPTION_URL" ]; then
 		log "router_public ok=1 but config_url/subscription_url is empty"
@@ -820,22 +890,29 @@ fetch_subscription_once() {
 	fi
 
 	BASE_URL="${API_URL%/shm/v1/public/router_public}"
+	CONFIG_URL=""
+	if [ -n "$CONFIG_PATH" ]; then
+		case "$CONFIG_PATH" in
+			http://*|https://*) CONFIG_URL="$CONFIG_PATH" ;;
+			*) CONFIG_URL="${BASE_URL}${CONFIG_PATH}" ;;
+		esac
+		save_config_url "$CONFIG_URL" >/dev/null 2>&1 || true
+	fi
+
 	if [ -n "$SUBSCRIPTION_URL" ]; then
-		CONFIG_URL="$SUBSCRIPTION_URL"
-		printf '%s\n' "$SUBSCRIPTION_URL" > "$SUB_URL_FILE"
+		save_subscription_url "$SUBSCRIPTION_URL" >/dev/null 2>&1 || true
+		DOWNLOAD_URL="$SUBSCRIPTION_URL"
 	else
-		CONFIG_URL="${BASE_URL}${CONFIG_PATH}"
+		if [ -z "$CONFIG_URL" ]; then
+			log "router_public ok=1 but usable config_url is empty"
+			return 1
+		fi
+		DOWNLOAD_URL="${CONFIG_URL}&format=json"
 	fi
 
 	log "fetching subscription"
 
 	TMP_SUB="${SUB_FILE}.tmp"
-
-	if [ -n "$SUBSCRIPTION_URL" ]; then
-		DOWNLOAD_URL="$CONFIG_URL"
-	else
-		DOWNLOAD_URL="${CONFIG_URL}&format=json"
-	fi
 
 	if ! http_get_to_file "$DOWNLOAD_URL" "$TMP_SUB" 2>/dev/null; then
 		log "failed to download subscription"
@@ -847,6 +924,11 @@ fetch_subscription_once() {
 		log "downloaded subscription json is empty"
 		rm -f "$TMP_SUB"
 		return 1
+	fi
+
+	if [ -z "$SUBSCRIPTION_URL" ]; then
+		SUBSCRIPTION_URL="$(extract_subscription_url_from_json_file "$TMP_SUB" || echo "")"
+		[ -n "$SUBSCRIPTION_URL" ] && save_subscription_url "$SUBSCRIPTION_URL" >/dev/null 2>&1 || true
 	fi
 
 	if ! normalize_subscription_file "$TMP_SUB"; then
@@ -1012,6 +1094,7 @@ poll_subscription_loop() {
 }
 
 check_subscription_alive() {
+	local direct_failed=0
 	[ ! -s "$SUB_FILE" ] && return 0
 
 	now_ts="$(date +%s)"
@@ -1030,6 +1113,7 @@ check_subscription_alive() {
 		if refresh_subscription_from_url; then
 			return 0
 		fi
+		direct_failed=1
 		log "direct subscription refresh failed, falling back to router_config"
 	fi
 
@@ -1041,23 +1125,34 @@ check_subscription_alive() {
 		return 0
 	fi
 
-	UID_SUB="$(jsonfilter -i "$SUB_FILE" -e '@.uid' 2>/dev/null || echo "")"
-	USI_SUB="$(jsonfilter -i "$SUB_FILE" -e '@.usi' 2>/dev/null || echo "")"
+	if [ -s "$CONFIG_URL_FILE" ]; then
+		CHECK_URL="$(cat "$CONFIG_URL_FILE" 2>/dev/null | tr -d '\r\n ' || true)"
+		if [ -z "$CHECK_URL" ]; then
+			log "check_subscription_alive: router_config_url is empty"
+			echo "$now_ts" > "$LAST_CHECK_FILE"
+			return 0
+		fi
+		CHECK_URL="$(append_format_json "$CHECK_URL")"
+	else
+		UID_SUB="$(jsonfilter -i "$SUB_FILE" -e '@.uid' 2>/dev/null || echo "")"
+		USI_SUB="$(jsonfilter -i "$SUB_FILE" -e '@.usi' 2>/dev/null || echo "")"
 
-	if [ -z "$UID_SUB" ] || [ -z "$USI_SUB" ]; then
-		log "check_subscription_alive: uid/usi missing in subscription.json"
-		echo "$now_ts" > "$LAST_CHECK_FILE"
-		return 0
+		if [ -z "$UID_SUB" ] || [ -z "$USI_SUB" ]; then
+			log "check_subscription_alive: uid/usi missing in subscription.json"
+			echo "$now_ts" > "$LAST_CHECK_FILE"
+			return 0
+		fi
+
+		if ! get_code; then
+			log "check_subscription_alive: failed to get code"
+			echo "$now_ts" > "$LAST_CHECK_FILE"
+			return 0
+		fi
+
+		BASE_URL="${API_URL%/shm/v1/public/router_public}"
+		CHECK_URL="${BASE_URL}/shm/v1/public/router_config?uid=${UID_SUB}&usi=${USI_SUB}&code=${CLEAN_CODE}&format=json"
+		save_config_url "$CHECK_URL" >/dev/null 2>&1 || true
 	fi
-
-	if ! get_code; then
-		log "check_subscription_alive: failed to get code"
-		echo "$now_ts" > "$LAST_CHECK_FILE"
-		return 0
-	fi
-
-	BASE_URL="${API_URL%/shm/v1/public/router_public}"
-	CHECK_URL="${BASE_URL}/shm/v1/public/router_config?uid=${UID_SUB}&usi=${USI_SUB}&code=${CLEAN_CODE}&format=json"
 
 	log "checking subscription via router_config"
 
@@ -1076,6 +1171,9 @@ check_subscription_alive() {
 		old_sha="$(calc_sha256_file "$SUB_FILE")"
 
 		printf '%s' "$BODY" > "$tmp_sub"
+		SUBSCRIPTION_URL="$(extract_subscription_url_from_json_file "$tmp_sub" || echo "")"
+		[ -n "$SUBSCRIPTION_URL" ] && save_subscription_url "$SUBSCRIPTION_URL" >/dev/null 2>&1 || true
+
 		if ! normalize_subscription_file "$tmp_sub" >/dev/null 2>&1; then
 			log "subscription_alive: unsupported router_config subscription format"
 			rm -f "$tmp_sub"
@@ -1101,7 +1199,16 @@ check_subscription_alive() {
 	fi
 
 	ERR="$(printf '%s' "$BODY" | jsonfilter -e '@.error' 2>/dev/null || echo "unknown_error")"
-	log "subscription_invalid: ok=$OK, error=$ERR — resetting VPN state"
+	log "subscription_invalid: ok=$OK, error=$ERR"
+
+	if [ -s "$SUB_URL_FILE" ] || [ "$direct_failed" = "1" ]; then
+		log "subscription fallback failed, keeping current subscription because direct subscription url is known"
+		echo "$now_ts" > "$LAST_CHECK_FILE"
+		echo "$ERR" > "$VERROR_FILE"
+		return 0
+	fi
+
+	log "subscription missing in router_config and no direct subscription url is known, resetting VPN state"
 
 	rm -f "$VPN_READY_FILE"
 	rm -f "$SUB_FILE"
