@@ -426,6 +426,37 @@ extract_uri_links_file() {
 	[ -s "$out" ]
 }
 
+write_links_json_from_lines() {
+	local in="$1"
+	local out="$2"
+	local line escaped first count
+
+	first=1
+	count=0
+	printf '{"subscription":{"links":[' > "$out" || return 1
+
+	while IFS= read -r line; do
+		line="$(printf '%s' "$line" | tr -d '\r')"
+		case "$line" in
+			ss://*|vless://*) ;;
+			*) continue ;;
+		esac
+
+		escaped="$(json_escape_string "$line")"
+		if [ "$first" -eq 1 ]; then
+			first=0
+		else
+			printf ',' >> "$out"
+		fi
+		printf '"%s"' "$escaped" >> "$out"
+		count=$((count + 1))
+	done < "$in"
+
+	printf ']}}\n' >> "$out"
+
+	[ "$count" -gt 0 ]
+}
+
 normalize_subscription_file() {
 	local file="$1"
 	local tmp line escaped first decoded links_tmp
@@ -470,6 +501,12 @@ normalize_subscription_file() {
 	fi
 
 	tmp="${file}.norm"
+	if write_links_json_from_lines "$file" "$tmp"; then
+		mv "$tmp" "$file"
+		return 0
+	fi
+	rm -f "$tmp"
+
 	links_tmp="${file}.links"
 	first=1
 
