@@ -409,6 +409,11 @@ base64_decode_subscription() {
 		return 0
 	fi
 
+	if base64 -D "$b64" > "$out" 2>/dev/null; then
+		rm -f "$b64"
+		return 0
+	fi
+
 	rm -f "$b64" "$out"
 	return 1
 }
@@ -417,7 +422,7 @@ extract_uri_links_file() {
 	local file="$1"
 	local out="$2"
 
-	grep -aoE '(ss|vless)://[^"'"'"'[:space:],<>{}]+' "$file" 2>/dev/null > "$out"
+	grep -oE '(ss|vless)://[^"'"'"'[:space:],<>{}]+' "$file" 2>/dev/null > "$out"
 	[ -s "$out" ]
 }
 
