@@ -413,12 +413,30 @@ base64_decode_subscription() {
 	return 1
 }
 
+extract_uri_links_file() {
+	local file="$1"
+	local out="$2"
+
+	grep -aoE '(ss|vless)://[^"'"'"'[:space:],<>{}]+' "$file" 2>/dev/null > "$out"
+	[ -s "$out" ]
+}
+
 normalize_subscription_file() {
 	local file="$1"
-	local tmp line escaped first decoded
+	local tmp line escaped first decoded links_tmp
 
 	if jsonfilter -i "$file" -e '@.subscription.links[0]' >/dev/null 2>&1; then
 		return 0
+	fi
+
+	if jsonfilter -i "$file" -e '@[0]' >/dev/null 2>&1; then
+		tmp="${file}.norm"
+		{
+			printf '{"subscription":{"links":'
+			jsonfilter -i "$file" -e '@' 2>/dev/null
+			printf '}}\n'
+		} > "$tmp" && mv "$tmp" "$file"
+		return $?
 	fi
 
 	if jsonfilter -i "$file" -e '@.links[0]' >/dev/null 2>&1; then
@@ -434,7 +452,7 @@ normalize_subscription_file() {
 	if ! grep -qE '^(ss|vless)://' "$file" 2>/dev/null; then
 		if command -v base64 >/dev/null 2>&1; then
 			decoded="${file}.decoded"
-			if base64_decode_subscription "$file" "$decoded" && grep -qE '^(ss|vless)://' "$decoded" 2>/dev/null; then
+			if base64_decode_subscription "$file" "$decoded" && grep -qE '(ss|vless)://' "$decoded" 2>/dev/null; then
 				mv "$decoded" "$file"
 			else
 				rm -f "$decoded"
@@ -442,12 +460,19 @@ normalize_subscription_file() {
 		fi
 	fi
 
-	if ! grep -qE '^(ss|vless)://' "$file" 2>/dev/null; then
+	if ! grep -qE '(ss|vless)://' "$file" 2>/dev/null; then
 		return 1
 	fi
 
 	tmp="${file}.norm"
+	links_tmp="${file}.links"
 	first=1
+
+	if ! extract_uri_links_file "$file" "$links_tmp"; then
+		rm -f "$links_tmp"
+		return 1
+	fi
+
 	printf '{"subscription":{"links":[' > "$tmp" || return 1
 
 	while IFS= read -r line; do
@@ -463,9 +488,10 @@ normalize_subscription_file() {
 			printf ',' >> "$tmp"
 		fi
 		printf '"%s"' "$escaped" >> "$tmp"
-	done < "$file"
+	done < "$links_tmp"
 
 	printf ']}}\n' >> "$tmp"
+	rm -f "$links_tmp"
 	mv "$tmp" "$file"
 }
 
