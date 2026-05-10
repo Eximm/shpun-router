@@ -344,10 +344,10 @@ function exit_probe() {
 	let proxy = "http://127.0.0.1:" + HTTP_PROXY_PORT;
 	let cmd =
 		"if command -v curl >/dev/null 2>&1; then " +
-			"curl -sS -m 4 -x " + proxy + " -w '\\n%{time_total}' https://api.ipify.org 2>/dev/null; " +
+			"curl -sS -m 4 -x " + proxy + " -w '\\n%{time_total}' http://api.ipify.org 2>/dev/null; " +
 		"else " +
-			"env http_proxy=" + proxy + " https_proxy=" + proxy + " HTTP_PROXY=" + proxy + " HTTPS_PROXY=" + proxy + " " +
-			"uclient-fetch -q -T 4 -O - https://api.ipify.org 2>/dev/null; " +
+			"env http_proxy=" + proxy + " HTTP_PROXY=" + proxy + " " +
+			"uclient-fetch -q -T 4 -Y on -O - http://api.ipify.org 2>/dev/null; " +
 		"fi";
 
 	let out = trim(readcmd(cmd));
