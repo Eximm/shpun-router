@@ -217,10 +217,10 @@ function buildServerBadges(server) {
 	];
 
 	if (server.exit_ip)
-		badges.push(makeBadge('shpun-badge--exit', 'Внешний IP ' + server.exit_ip, 'IP-адрес, который видят сайты при работе через VPN'));
+		badges.push(makeBadge('shpun-badge--exit', 'Внешний IP ' + server.exit_ip, 'IP-адрес VPN, который видят сайты и сервисы в интернете.'));
 
 	if (!isNaN(exitPing) && exitPing >= 0)
-		badges.push(makeBadge('shpun-badge--check', 'Пинг до сервера ' + exitPing + ' ms', 'Пинг до внешнего IP VPN'));
+		badges.push(makeBadge('shpun-badge--check', 'Сервер ' + exitPing + ' ms', 'Время отклика от роутера до выбранного VPN-сервера. Измеряется по внешнему IP, с которым VPN выходит в интернет.'));
 
 	return badges;
 }
