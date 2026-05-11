@@ -404,12 +404,12 @@ return {
 					let current_server = get_current_server();
 					if (current_server) {
 						let server_public = public_server_info(current_server);
-						server_public.gateway_ping_ms = tcp_ping_ms(current_server.host, current_server.port);
 
 						let exit = exit_probe();
 						if (exit) {
 							server_public.exit_ip = exit.ip;
 							server_public.exit_check_ms = exit.check_ms;
+							server_public.exit_ping_ms = tcp_ping_ms(exit.ip, 0);
 						}
 
 						res.current_server = server_public;
