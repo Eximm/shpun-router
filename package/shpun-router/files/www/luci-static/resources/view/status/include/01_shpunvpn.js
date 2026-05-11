@@ -217,10 +217,10 @@ function buildServerBadges(server) {
 	];
 
 	if (server.exit_ip)
-		badges.push(makeBadge('shpun-badge--exit', 'Выход ' + server.exit_ip));
+		badges.push(makeBadge('shpun-badge--exit', 'Внешний IP ' + server.exit_ip, 'IP-адрес, который видят сайты при работе через VPN'));
 
 	if (!isNaN(exitPing) && exitPing >= 0)
-		badges.push(makeBadge('shpun-badge--check', 'Сервер ' + exitPing + ' ms', 'ICMP ping до выходного IP туннеля'));
+		badges.push(makeBadge('shpun-badge--check', 'Пинг до сервера ' + exitPing + ' ms', 'Пинг до внешнего IP VPN'));
 
 	return badges;
 }
