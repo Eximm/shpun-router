@@ -4,6 +4,9 @@
 
 CONF_DIR="/etc/shpun"
 SUB_FILE="$CONF_DIR/subscription.json"
+CONFIG_URL_FILE="$CONF_DIR/router_config_url"
+UPDATE_URL_FILE="$CONF_DIR/router_update_url"
+UPDATE_MIN_VERSION_FILE="$CONF_DIR/router_min_version"
 
 # новые имена (для ucode / виджета)
 FW_CURRENT_FILE="$CONF_DIR/fw_current"
@@ -22,6 +25,48 @@ PKG_NAME="shpun-router"
 
 log() {
 	logger -t "$LOG_TAG" "$*"
+}
+
+append_format_json() {
+	local url="$1"
+
+	case "$url" in
+		*format=*) printf '%s' "$url" ;;
+		*\?*)     printf '%s&format=json' "$url" ;;
+		*)        printf '%s?format=json' "$url" ;;
+	esac
+}
+
+json_value_from_sources() {
+	local expr="$1"
+	shift
+	local src val
+
+	for src in "$@"; do
+		[ -s "$src" ] || continue
+		val="$(jsonfilter -i "$src" -e "$expr" 2>/dev/null || echo "")"
+		[ -n "$val" ] && {
+			printf '%s' "$val"
+			return 0
+		}
+	done
+
+	return 1
+}
+
+file_value_from_sources() {
+	local src val
+
+	for src in "$@"; do
+		[ -s "$src" ] || continue
+		val="$(tr -d '\r\n ' < "$src" 2>/dev/null || echo "")"
+		[ -n "$val" ] && {
+			printf '%s' "$val"
+			return 0
+		}
+	done
+
+	return 1
 }
 
 # --- version compare ---
@@ -60,7 +105,7 @@ if [ -e "$LOCK_FILE" ]; then
 	fi
 fi
 echo $$ >"$LOCK_FILE"
-trap 'rm -f "$LOCK_FILE"' EXIT
+trap 'rm -f "$LOCK_FILE" "$META_FILE"' EXIT
 
 # --- deps ---
 for bin in jsonfilter uclient-fetch opkg; do
@@ -70,31 +115,60 @@ for bin in jsonfilter uclient-fetch opkg; do
 	fi
 done
 
-# нам нужна только информация о router_software из subscription.json;
-# если файла нет — просто ничего не делаем (не считаем это ошибкой привязки)
-if [ ! -f "$SUB_FILE" ]; then
-	log "subscription.json missing, nothing to update"
-	exit 0
+META_FILE=""
+if [ -s "$CONFIG_URL_FILE" ]; then
+	CONFIG_URL="$(tr -d '\r\n ' < "$CONFIG_URL_FILE" 2>/dev/null || echo "")"
+	case "$CONFIG_URL" in
+		http://*|https://*)
+			META_FILE="/tmp/shpun-router-update-meta.json"
+			if ! uclient-fetch -qO "$META_FILE" "$(append_format_json "$CONFIG_URL")" >/dev/null 2>&1; then
+				log "router_config metadata refresh failed, using local subscription metadata"
+				rm -f "$META_FILE"
+				META_FILE=""
+			fi
+			;;
+	esac
 fi
 
+# нам нужна только информация о router_software из subscription.json;
+# если файла нет — просто ничего не делаем (не считаем это ошибкой привязки)
 # --- read remote fields (поддержка двух имён блока) ---
 REMOTE_VER="$(
-	jsonfilter -i "$SUB_FILE" -e '@.router_software.version' 2>/dev/null \
-	|| jsonfilter -i "$SUB_FILE" -e '@.router_software_current.version' 2>/dev/null \
+	json_value_from_sources '@.router_software.version' "$META_FILE" \
+	|| json_value_from_sources '@.router_software_current.version' "$META_FILE" \
+	|| file_value_from_sources "$FW_LATEST_FILE" "$LATEST_VER_FILE" \
+	|| json_value_from_sources '@.router_software.version' "$SUB_FILE" \
+	|| json_value_from_sources '@.router_software_current.version' "$SUB_FILE" \
 	|| echo ""
 )"
 
 UPDATE_URL="$(
-	jsonfilter -i "$SUB_FILE" -e '@.router_software.update_url' 2>/dev/null \
-	|| jsonfilter -i "$SUB_FILE" -e '@.router_software_current.update_url' 2>/dev/null \
+	json_value_from_sources '@.router_software.update_url' "$META_FILE" \
+	|| json_value_from_sources '@.router_software_current.update_url' "$META_FILE" \
+	|| file_value_from_sources "$UPDATE_URL_FILE" \
+	|| json_value_from_sources '@.router_software.update_url' "$SUB_FILE" \
+	|| json_value_from_sources '@.router_software_current.update_url' "$SUB_FILE" \
 	|| echo ""
 )"
 
 MIN_VER="$(
-	jsonfilter -i "$SUB_FILE" -e '@.router_software.min_version' 2>/dev/null \
-	|| jsonfilter -i "$SUB_FILE" -e '@.router_software_current.min_version' 2>/dev/null \
+	json_value_from_sources '@.router_software.min_version' "$META_FILE" \
+	|| json_value_from_sources '@.router_software_current.min_version' "$META_FILE" \
+	|| file_value_from_sources "$UPDATE_MIN_VERSION_FILE" \
+	|| json_value_from_sources '@.router_software.min_version' "$SUB_FILE" \
+	|| json_value_from_sources '@.router_software_current.min_version' "$SUB_FILE" \
 	|| echo ""
 )"
+
+case "$UPDATE_URL" in
+	http://*|https://*) printf '%s\n' "$UPDATE_URL" >"$UPDATE_URL_FILE" ;;
+	*) UPDATE_URL="" ;;
+esac
+[ -n "$REMOTE_VER" ] && {
+	echo "$REMOTE_VER" >"$FW_LATEST_FILE"
+	echo "$REMOTE_VER" >"$LATEST_VER_FILE"
+}
+[ -n "$MIN_VER" ] && echo "$MIN_VER" >"$UPDATE_MIN_VERSION_FILE"
 
 # --- read local version (новые + старые имена) ---
 LOCAL_VER=""

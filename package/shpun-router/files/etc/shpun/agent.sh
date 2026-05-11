@@ -8,6 +8,10 @@ CODE_FILE="$STATE_DIR/router_code"
 SUB_FILE="$STATE_DIR/subscription.json"
 SUB_URL_FILE="$STATE_DIR/subscription_url"
 CONFIG_URL_FILE="$STATE_DIR/router_config_url"
+UPDATE_URL_FILE="$STATE_DIR/router_update_url"
+UPDATE_MIN_VERSION_FILE="$STATE_DIR/router_min_version"
+FW_LATEST_FILE="$STATE_DIR/fw_latest"
+ROUTER_LATEST_VERSION_FILE="$STATE_DIR/router_latest_version"
 VPN_READY_FILE="$STATE_DIR/vpn_ready"
 LAST_CHECK_FILE="$STATE_DIR/last_sub_check"
 CONF="$STATE_DIR/agent.conf"
@@ -368,6 +372,41 @@ save_config_url() {
 	return 1
 }
 
+save_router_software_metadata_file() {
+	local file="$1"
+	local version update_url min_version
+
+	[ -s "$file" ] || return 1
+
+	version="$(jsonfilter -i "$file" -e '@.router_software.version' 2>/dev/null || echo "")"
+	[ -z "$version" ] && version="$(jsonfilter -i "$file" -e '@.router_software_current.version' 2>/dev/null || echo "")"
+
+	update_url="$(jsonfilter -i "$file" -e '@.router_software.update_url' 2>/dev/null || echo "")"
+	[ -z "$update_url" ] && update_url="$(jsonfilter -i "$file" -e '@.router_software_current.update_url' 2>/dev/null || echo "")"
+
+	min_version="$(jsonfilter -i "$file" -e '@.router_software.min_version' 2>/dev/null || echo "")"
+	[ -z "$min_version" ] && min_version="$(jsonfilter -i "$file" -e '@.router_software_current.min_version' 2>/dev/null || echo "")"
+
+	[ -n "$version" ] && {
+		printf '%s\n' "$version" > "$FW_LATEST_FILE"
+		printf '%s\n' "$version" > "$ROUTER_LATEST_VERSION_FILE"
+	}
+
+	case "$update_url" in
+		http://*|https://*) printf '%s\n' "$update_url" > "$UPDATE_URL_FILE" ;;
+	esac
+
+	[ -n "$min_version" ] && printf '%s\n' "$min_version" > "$UPDATE_MIN_VERSION_FILE"
+}
+
+save_router_software_metadata_text() {
+	local tmp="$STATE_DIR/router_software_meta.tmp.$$"
+
+	printf '%s' "$1" > "$tmp" || return 1
+	save_router_software_metadata_file "$tmp"
+	rm -f "$tmp"
+}
+
 append_format_json() {
 	local url="$1"
 
@@ -449,6 +488,118 @@ write_links_json_from_lines() {
 	printf ']}}\n' >> "$out"
 
 	[ "$count" -gt 0 ]
+}
+
+json_value_from_sources() {
+	local expr="$1"
+	shift
+	local src val
+
+	for src in "$@"; do
+		[ -s "$src" ] || continue
+		val="$(jsonfilter -i "$src" -e "$expr" 2>/dev/null || echo "")"
+		[ -n "$val" ] && {
+			printf '%s' "$val"
+			return 0
+		}
+	done
+
+	return 1
+}
+
+append_json_string_field() {
+	local out="$1"
+	local key="$2"
+	local val="$3"
+	local escaped
+
+	[ -n "$val" ] || return 0
+	escaped="$(json_escape_string "$val")"
+	printf ',"%s":"%s"' "$key" "$escaped" >> "$out"
+}
+
+rewrite_subscription_with_metadata() {
+	local file="$1"
+	shift
+	local out="${file}.meta"
+	local first line escaped count
+	local code uid usi v sub_url profile_proto
+	local sw_version sw_update_url sw_min_version
+
+	first=1
+	count=0
+
+	printf '{"subscription":{"links":[' > "$out" || return 1
+	jsonfilter -i "$file" -e '@.subscription.links[*]' 2>/dev/null | while IFS= read -r line; do
+		line="$(printf '%s' "$line" | tr -d '\r')"
+		case "$line" in
+			ss://*|vless://*) ;;
+			*) continue ;;
+		esac
+
+		escaped="$(json_escape_string "$line")"
+		if [ "$first" -eq 1 ]; then
+			first=0
+		else
+			printf ',' >> "$out"
+		fi
+		printf '"%s"' "$escaped" >> "$out"
+		count=$((count + 1))
+		echo "$count" > "${out}.count"
+	done
+
+	count="$(cat "${out}.count" 2>/dev/null || echo 0)"
+	rm -f "${out}.count"
+	case "$count" in ''|*[!0-9]*) count=0 ;; esac
+	[ "$count" -gt 0 ] || {
+		rm -f "$out"
+		return 1
+	}
+
+	printf ']}' >> "$out"
+
+	code="$(json_value_from_sources '@.code' "$@" || echo "")"
+	uid="$(json_value_from_sources '@.uid' "$@" || echo "")"
+	usi="$(json_value_from_sources '@.usi' "$@" || echo "")"
+	v="$(json_value_from_sources '@.v' "$@" || echo "")"
+	sub_url="$(json_value_from_sources '@.subscription_url' "$@" || echo "")"
+	profile_proto="$(json_value_from_sources '@.router_profile.proto' "$@" || echo "")"
+	sw_version="$(json_value_from_sources '@.router_software.version' "$@" || echo "")"
+	[ -z "$sw_version" ] && sw_version="$(json_value_from_sources '@.router_software_current.version' "$@" || echo "")"
+	sw_update_url="$(json_value_from_sources '@.router_software.update_url' "$@" || echo "")"
+	[ -z "$sw_update_url" ] && sw_update_url="$(json_value_from_sources '@.router_software_current.update_url' "$@" || echo "")"
+	sw_min_version="$(json_value_from_sources '@.router_software.min_version' "$@" || echo "")"
+	[ -z "$sw_min_version" ] && sw_min_version="$(json_value_from_sources '@.router_software_current.min_version' "$@" || echo "")"
+
+	append_json_string_field "$out" "code" "$code"
+	append_json_string_field "$out" "uid" "$uid"
+	append_json_string_field "$out" "usi" "$usi"
+	append_json_string_field "$out" "v" "$v"
+	append_json_string_field "$out" "subscription_url" "$sub_url"
+
+	if [ -n "$profile_proto" ]; then
+		printf ',"router_profile":{"proto":"%s"}' "$(json_escape_string "$profile_proto")" >> "$out"
+	fi
+
+	if [ -n "$sw_version" ] || [ -n "$sw_update_url" ] || [ -n "$sw_min_version" ]; then
+		printf ',"router_software":{' >> "$out"
+		first=1
+		for field in version update_url min_version; do
+			case "$field" in
+				version) val="$sw_version" ;;
+				update_url) val="$sw_update_url" ;;
+				min_version) val="$sw_min_version" ;;
+			esac
+			[ -n "$val" ] || continue
+			[ "$first" -eq 1 ] || printf ',' >> "$out"
+			first=0
+			printf '"%s":"%s"' "$field" "$(json_escape_string "$val")" >> "$out"
+		done
+		printf '}' >> "$out"
+	fi
+
+	printf '}\n' >> "$out"
+	mv "$out" "$file"
 }
 
 normalize_subscription_file() {
@@ -940,6 +1091,7 @@ fetch_subscription_once() {
 		log "router_public error: ok=$OK, error=$ERR"
 		return 1
 	fi
+	save_router_software_metadata_text "$BODY" >/dev/null 2>&1 || true
 
 	CONFIG_PATH="$(printf '%s' "$BODY" | jsonfilter -e '@.config_url' 2>/dev/null || echo "")"
 	SUBSCRIPTION_URL="$(extract_subscription_url_from_json_text "$BODY" || echo "")"
@@ -973,16 +1125,28 @@ fetch_subscription_once() {
 	log "fetching subscription"
 
 	TMP_SUB="${SUB_FILE}.tmp"
+	PUBLIC_META="${TMP_SUB}.public"
+	CONFIG_META="${TMP_SUB}.config"
+	rm -f "$PUBLIC_META" "$CONFIG_META"
+	printf '%s' "$BODY" > "$PUBLIC_META"
+
+	if [ -n "$CONFIG_URL" ]; then
+		if http_get_to_file "$(append_format_json "$CONFIG_URL")" "$CONFIG_META" >/dev/null 2>&1; then
+			save_router_software_metadata_file "$CONFIG_META" >/dev/null 2>&1 || true
+		else
+			rm -f "$CONFIG_META"
+		fi
+	fi
 
 	if ! http_get_to_file "$DOWNLOAD_URL" "$TMP_SUB" 2>/dev/null; then
 		log "failed to download subscription"
-		rm -f "$TMP_SUB"
+		rm -f "$TMP_SUB" "$PUBLIC_META" "$CONFIG_META"
 		return 1
 	fi
 
 	if [ ! -s "$TMP_SUB" ]; then
 		log "downloaded subscription json is empty"
-		rm -f "$TMP_SUB"
+		rm -f "$TMP_SUB" "$PUBLIC_META" "$CONFIG_META"
 		return 1
 	fi
 
@@ -993,11 +1157,13 @@ fetch_subscription_once() {
 
 	if ! normalize_subscription_file "$TMP_SUB"; then
 		log "downloaded subscription format is unsupported"
-		rm -f "$TMP_SUB"
+		rm -f "$TMP_SUB" "$PUBLIC_META" "$CONFIG_META"
 		return 1
 	fi
+	rewrite_subscription_with_metadata "$TMP_SUB" "$CONFIG_META" "$PUBLIC_META" "$SUB_FILE" "$TMP_SUB" >/dev/null 2>&1 || true
 
 	mv "$TMP_SUB" "$SUB_FILE"
+	rm -f "$PUBLIC_META" "$CONFIG_META"
 	ensure_selected_link_valid
 	log "subscription json saved to $SUB_FILE"
 
@@ -1043,6 +1209,7 @@ refresh_subscription_from_url() {
 		rm -f "$tmp_sub"
 		return 1
 	fi
+	rewrite_subscription_with_metadata "$tmp_sub" "$SUB_FILE" "$tmp_sub" >/dev/null 2>&1 || true
 
 	old_sha="$(calc_sha256_file "$SUB_FILE" 2>/dev/null || true)"
 	new_sha="$(calc_sha256_file "$tmp_sub" 2>/dev/null || true)"
@@ -1124,6 +1291,7 @@ ensure_vpn_from_subscription() {
 
 poll_subscription_loop() {
 	if [ -s "$SUB_FILE" ]; then
+		save_router_software_metadata_file "$SUB_FILE" >/dev/null 2>&1 || true
 		log "subscription.json already present, skipping router_public"
 		if [ -s "$VPN_READY_FILE" ] && [ -s "$ENGINE_CONFIG" ] && is_vpn_process_running; then
 			log "vpn already running, keeping current tunnel"
@@ -1223,6 +1391,7 @@ check_subscription_alive() {
 		echo "$now_ts" > "$LAST_CHECK_FILE"
 		return 0
 	fi
+	save_router_software_metadata_text "$BODY" >/dev/null 2>&1 || true
 
 	OK="$(printf '%s' "$BODY" | jsonfilter -e '@.ok' 2>/dev/null || echo "")"
 
@@ -1240,6 +1409,7 @@ check_subscription_alive() {
 			echo "$now_ts" > "$LAST_CHECK_FILE"
 			return 0
 		fi
+		rewrite_subscription_with_metadata "$tmp_sub" "$tmp_sub" "$SUB_FILE" >/dev/null 2>&1 || true
 		new_sha="$(calc_sha256_file "$tmp_sub")"
 
 		if [ -s "$tmp_sub" ] && [ "$new_sha" != "$old_sha" ]; then
