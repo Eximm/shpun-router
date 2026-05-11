@@ -58,7 +58,8 @@ function injectStyles() {
 		+ '.shpun-kicker-dot{width:8px;height:8px;border-radius:999px;background:#6ea8ff;box-shadow:0 0 10px rgba(110,168,255,.65);}'
 		+ '.shpun-title{font-size:22px;line-height:1.08;font-weight:800;letter-spacing:-.025em;color:#fff;}'
 		+ '.shpun-subtitle{font-size:13px;line-height:1.45;color:#c2ccde;max-width:680px;}'
-		+ '.shpun-status-group{display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:flex-start;gap:8px;max-width:620px;}'
+		+ '.shpun-status-group{display:flex;flex-direction:column;align-items:flex-end;gap:8px;min-width:0;max-width:620px;}'
+		+ '.shpun-status-row{display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:8px;min-width:0;}'
 		+ '.shpun-badge{display:inline-flex;align-items:center;padding:7px 12px;border-radius:999px;font-size:12px;font-weight:800;white-space:nowrap;border:1px solid transparent;align-self:flex-start;}'
 		+ '.shpun-badge-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}'
 		+ '.shpun-badge-dot{width:8px;height:8px;margin-right:8px;border-radius:999px;flex:0 0 auto;}'
@@ -72,7 +73,7 @@ function injectStyles() {
 		+ '.shpun-badge--err .shpun-badge-dot{background:#f87171;}'
 		+ '.shpun-badge--server{max-width:220px;background:rgba(96,165,250,.12);color:#dbeafe;border-color:rgba(96,165,250,.22);}'
 		+ '.shpun-badge--server .shpun-badge-dot{background:#60a5fa;}'
-		+ '.shpun-badge--exit{max-width:190px;background:rgba(20,184,166,.12);color:#ccfbf1;border-color:rgba(45,212,191,.22);}'
+		+ '.shpun-badge--exit{max-width:260px;background:rgba(20,184,166,.12);color:#ccfbf1;border-color:rgba(45,212,191,.22);}'
 		+ '.shpun-badge--exit .shpun-badge-dot{background:#2dd4bf;}'
 		+ '.shpun-badge--check{background:rgba(168,85,247,.12);color:#ede9fe;border-color:rgba(196,181,253,.22);}'
 		+ '.shpun-badge--check .shpun-badge-dot{background:#a78bfa;}'
@@ -619,10 +620,18 @@ return view.extend({
 			: !vpnReady ? (err ? 'Ошибка: ' + err : 'Привязка найдена. Роутер поднимает VPN…')
 			: 'Роутер подключен. Серверы, маршруты и обновления доступны прямо в этом виджете.';
 
-		var statusBadges = [ buildStatusBadge(state) ];
+		var statusTopBadges = [ buildStatusBadge(state) ];
+		var statusMetricBadges = [];
 		var serverBadges = buildServerBadges(state.current_server);
-		for (var i = 0; i < serverBadges.length; i++)
-			statusBadges.push(serverBadges[i]);
+		if (serverBadges.length > 0)
+			statusTopBadges.push(serverBadges[0]);
+		for (var i = 1; i < serverBadges.length; i++)
+			statusMetricBadges.push(serverBadges[i]);
+		var statusRows = [
+			E('div', { 'class': 'shpun-status-row shpun-status-row--top' }, statusTopBadges)
+		];
+		if (statusMetricBadges.length)
+			statusRows.push(E('div', { 'class': 'shpun-status-row shpun-status-row--metrics' }, statusMetricBadges));
 
 		return E('div', { 'class': 'shpun-widget-card' }, [
 			E('div', { 'class': 'shpun-widget-inner' }, [
@@ -635,7 +644,7 @@ return view.extend({
 							? 'Статус, серверы, маршруты и обновления'
 							: 'Подготовка роутера к привязке через ShpunApp')
 					]),
-					E('div', { 'class': 'shpun-status-group' }, statusBadges)
+					E('div', { 'class': 'shpun-status-group' }, statusRows)
 				]),
 
 				E('div', { 'class': 'shpun-hint-box' }, hintText),
