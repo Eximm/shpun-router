@@ -26,6 +26,7 @@ SUB_CHECK_INTERVAL_DEFAULT=21600
 MIN_UPTIME_DEFAULT=120
 NET_FAIL_TIMEOUT_DEFAULT=180
 MAIN_LOOP_SLEEP_DEFAULT=30
+DISABLE_LAN_IPV6_DEFAULT=1
 
 ROUTES_DIR="$STATE_DIR/routes"
 ROUTES_CIDRS_FILE="$ROUTES_DIR/ru.cidrs"
@@ -37,6 +38,12 @@ PRESETS_DIR="$ROUTES_DIR/presets"
 SMART_RU_DOMAINS_FILE="$PRESETS_DIR/smart_ru.domains"
 SMART_RU_DOMAINS_VER_FILE="$PRESETS_DIR/smart_ru.domains.version"
 SMART_RU_DOMAINS_SHA_FILE="$PRESETS_DIR/smart_ru.domains.sha256"
+ALWAYS_VPN_DOMAINS_FILE="$PRESETS_DIR/always_vpn.domains"
+ALWAYS_VPN_CIDRS_FILE="$PRESETS_DIR/always_vpn.cidrs"
+ALWAYS_VPN_DOMAINS_VER_FILE="$PRESETS_DIR/always_vpn.domains.version"
+ALWAYS_VPN_DOMAINS_SHA_FILE="$PRESETS_DIR/always_vpn.domains.sha256"
+ALWAYS_VPN_CIDRS_VER_FILE="$PRESETS_DIR/always_vpn.cidrs.version"
+ALWAYS_VPN_CIDRS_SHA_FILE="$PRESETS_DIR/always_vpn.cidrs.sha256"
 
 ROUTES_URL_BASE_DEFAULT="https://spb.shpyn.online/files/routes"
 ROUTES_CHECK_INTERVAL_DEFAULT=43200
@@ -71,6 +78,43 @@ ensure_routes_dir() {
 	[ -f "$SMART_RU_DOMAINS_VER_FILE" ] || echo "0" > "$SMART_RU_DOMAINS_VER_FILE"
 	[ -f "$SMART_RU_DOMAINS_SHA_FILE" ] || : > "$SMART_RU_DOMAINS_SHA_FILE"
 	[ -f "$SMART_RU_DOMAINS_FILE" ]     || : > "$SMART_RU_DOMAINS_FILE"
+	[ -f "$ALWAYS_VPN_CIDRS_FILE" ]     || : > "$ALWAYS_VPN_CIDRS_FILE"
+	[ -f "$ALWAYS_VPN_DOMAINS_VER_FILE" ] || echo "0" > "$ALWAYS_VPN_DOMAINS_VER_FILE"
+	[ -f "$ALWAYS_VPN_DOMAINS_SHA_FILE" ] || : > "$ALWAYS_VPN_DOMAINS_SHA_FILE"
+	[ -f "$ALWAYS_VPN_CIDRS_VER_FILE" ]   || echo "0" > "$ALWAYS_VPN_CIDRS_VER_FILE"
+	[ -f "$ALWAYS_VPN_CIDRS_SHA_FILE" ]   || : > "$ALWAYS_VPN_CIDRS_SHA_FILE"
+	if [ ! -f "$ALWAYS_VPN_DOMAINS_FILE" ]; then
+		cat > "$ALWAYS_VPN_DOMAINS_FILE" <<'EOF'
+telegram.org
+*.telegram.org
+t.me
+*.t.me
+telegram.me
+*.telegram.me
+telegram-cdn.org
+*.telegram-cdn.org
+telegra.ph
+*.telegra.ph
+tdesktop.com
+*.tdesktop.com
+discord.com
+*.discord.com
+discord.gg
+*.discord.gg
+discordapp.com
+*.discordapp.com
+discordapp.net
+*.discordapp.net
+signal.org
+*.signal.org
+signal.me
+*.signal.me
+whatsapp.com
+*.whatsapp.com
+whatsapp.net
+*.whatsapp.net
+EOF
+	fi
 }
 
 ensure_router_code() {
@@ -243,6 +287,7 @@ load_conf() {
 	[ -z "$MIN_UPTIME" ]            && MIN_UPTIME="$MIN_UPTIME_DEFAULT"
 	[ -z "$NET_FAIL_TIMEOUT" ]      && NET_FAIL_TIMEOUT="$NET_FAIL_TIMEOUT_DEFAULT"
 	[ -z "$MAIN_LOOP_SLEEP" ]       && MAIN_LOOP_SLEEP="$MAIN_LOOP_SLEEP_DEFAULT"
+	[ -z "$DISABLE_LAN_IPV6" ]      && DISABLE_LAN_IPV6="$DISABLE_LAN_IPV6_DEFAULT"
 
 	[ -z "$ROUTES_URL_BASE" ]       && ROUTES_URL_BASE="$ROUTES_URL_BASE_DEFAULT"
 	[ -z "$ROUTES_CHECK_INTERVAL" ] && ROUTES_CHECK_INTERVAL="$ROUTES_CHECK_INTERVAL_DEFAULT"
@@ -258,6 +303,40 @@ load_conf() {
 	if [ -z "$ENGINE_URL" ]; then
 		ENGINE_URL="$(build_engine_url)"
 	fi
+}
+
+ensure_lan_ipv6_disabled() {
+	[ "$DISABLE_LAN_IPV6" = "1" ] || return 0
+	command -v uci >/dev/null 2>&1 || return 0
+
+	changed=0
+
+	ra="$(uci -q get dhcp.lan.ra 2>/dev/null || true)"
+	dhcpv6="$(uci -q get dhcp.lan.dhcpv6 2>/dev/null || true)"
+	ndp="$(uci -q get dhcp.lan.ndp 2>/dev/null || true)"
+	ip6assign="$(uci -q get network.lan.ip6assign 2>/dev/null || true)"
+
+	if [ "$ra" != "disabled" ]; then
+		uci -q set dhcp.lan.ra='disabled' && changed=1
+	fi
+	if [ "$dhcpv6" != "disabled" ]; then
+		uci -q set dhcp.lan.dhcpv6='disabled' && changed=1
+	fi
+	if [ "$ndp" != "disabled" ]; then
+		uci -q set dhcp.lan.ndp='disabled' && changed=1
+	fi
+	if [ -n "$ip6assign" ] && [ "$ip6assign" != "0" ]; then
+		uci -q set network.lan.ip6assign='0' && changed=1
+	fi
+
+	[ "$changed" -eq 1 ] || return 0
+
+	uci -q commit dhcp 2>/dev/null || true
+	uci -q commit network 2>/dev/null || true
+	/etc/init.d/odhcpd restart 2>/dev/null || true
+	/etc/init.d/network reload 2>/dev/null || true
+
+	log "LAN IPv6 disabled to prevent VPN bypass"
 }
 
 get_code() {
@@ -908,6 +987,98 @@ fetch_smart_ru_once() {
 	return 0
 }
 
+fetch_always_vpn_file_once() {
+	local suffix target_file version_file sha_file label
+	local remote_ver local_ver remote_sha local_sha
+	local tmp_file tmp_sha
+
+	suffix="$1"
+	target_file="$2"
+	version_file="$3"
+	sha_file="$4"
+	label="always_vpn.$suffix"
+
+	ensure_routes_dir
+	detect_http_client
+
+	if [ -z "$HTTP_BIN" ]; then
+		log "$label: no HTTP client"
+		return 1
+	fi
+
+	remote_ver="$(http_get_stdout "$ROUTES_URL_BASE/presets/always_vpn.$suffix.version" 2>/dev/null | tr -d '\r\n ' || true)"
+	local_ver="$(cat "$version_file" 2>/dev/null | tr -d '\r\n ' || echo "0")"
+
+	if [ -z "$remote_ver" ]; then
+		log "$label: empty remote version"
+		return 1
+	fi
+
+	if [ "$remote_ver" = "$local_ver" ] && [ -s "$target_file" ]; then
+		log "$label: already up-to-date (v=$local_ver)"
+		return 0
+	fi
+
+	log "$label: updating local=$local_ver remote=$remote_ver"
+
+	tmp_file="${target_file}.tmp"
+	tmp_sha="${sha_file}.tmp"
+
+	rm -f "$tmp_file" "$tmp_sha"
+
+	if ! http_get_to_file "$ROUTES_URL_BASE/presets/always_vpn.$suffix" "$tmp_file" 2>/dev/null; then
+		log "$label: failed to download file"
+		rm -f "$tmp_file" "$tmp_sha"
+		return 1
+	fi
+
+	if [ ! -s "$tmp_file" ]; then
+		log "$label: downloaded file is empty"
+		rm -f "$tmp_file" "$tmp_sha"
+		return 1
+	fi
+
+	if ! http_get_to_file "$ROUTES_URL_BASE/presets/always_vpn.$suffix.sha256" "$tmp_sha" 2>/dev/null; then
+		log "$label: failed to download sha256"
+		rm -f "$tmp_file" "$tmp_sha"
+		return 1
+	fi
+
+	remote_sha="$(tr -d '\r\n ' < "$tmp_sha" 2>/dev/null)"
+	local_sha="$(calc_sha256_file "$tmp_file" 2>/dev/null || true)"
+
+	if [ -z "$remote_sha" ] || [ -z "$local_sha" ] || [ "$local_sha" != "$remote_sha" ]; then
+		log "$label: sha256 mismatch local=$local_sha remote=$remote_sha"
+		rm -f "$tmp_file" "$tmp_sha"
+		return 1
+	fi
+
+	mv "$tmp_file" "$target_file"
+	echo "$remote_sha" > "$sha_file"
+	echo "$remote_ver" > "$version_file"
+	rm -f "$tmp_sha"
+
+	log "$label: updated to version $remote_ver"
+	return 2
+}
+
+fetch_always_vpn_once() {
+	local changed=0 rc
+
+	fetch_always_vpn_file_once domains "$ALWAYS_VPN_DOMAINS_FILE" "$ALWAYS_VPN_DOMAINS_VER_FILE" "$ALWAYS_VPN_DOMAINS_SHA_FILE"
+	rc=$?
+	[ "$rc" -eq 2 ] && changed=1
+
+	fetch_always_vpn_file_once cidrs "$ALWAYS_VPN_CIDRS_FILE" "$ALWAYS_VPN_CIDRS_VER_FILE" "$ALWAYS_VPN_CIDRS_SHA_FILE"
+	rc=$?
+	[ "$rc" -eq 2 ] && changed=1
+
+	[ "$changed" -eq 1 ] || return 0
+	log "always_vpn: protected routes changed, rebuilding VPN config"
+	ensure_vpn_from_subscription || true
+	return 0
+}
+
 check_routes_update() {
 	local now_ts last_ts
 
@@ -924,6 +1095,7 @@ check_routes_update() {
 		return 0
 	fi
 
+	fetch_always_vpn_once
 	fetch_smart_ru_once
 	if [ "$(get_routing_mode)" = "split_ru" ]; then
 		fetch_routes_once
@@ -1506,6 +1678,7 @@ main_loop() {
 	load_conf
 	ensure_state_dir
 	ensure_routes_dir
+	ensure_lan_ipv6_disabled
 
 	if ! ensure_router_code; then
 		log "initial ensure_router_code failed, will retry in loop"
@@ -1517,6 +1690,7 @@ main_loop() {
 
 	while :; do
 		load_conf
+		ensure_lan_ipv6_disabled
 
 		if [ ! -s "$CODE_FILE" ]; then
 			if ! ensure_router_code; then

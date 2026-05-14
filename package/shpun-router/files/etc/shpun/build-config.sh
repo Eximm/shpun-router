@@ -7,6 +7,7 @@ CONF="/etc/shpun/agent.conf"
 SELECTED_LINK_FILE="/etc/shpun/selected_link_index"
 ROUTES_MODE_FILE="/etc/shpun/routes/mode"
 SMART_RU_DOMAINS_FILE="/etc/shpun/routes/presets/smart_ru.domains"
+ALWAYS_VPN_DOMAINS_FILE="/etc/shpun/routes/presets/always_vpn.domains"
 CUSTOM_ROUTES_FILE="/etc/shpun/routes/custom.json"
 
 [ -f "$CONF" ] && . "$CONF"
@@ -305,6 +306,51 @@ EOF
 
 SMART_RU_RULE="$(build_smart_ru_domain_rule)"
 
+build_file_domain_rule() {
+    file="$1"
+    outbound="$2"
+    label="$3"
+    [ -s "$file" ] || return 0
+
+    first=1
+    domains=""
+    count=0
+
+    while IFS= read -r entry; do
+        entry="$(printf '%s' "$entry" | tr -d ' \t\r\n')"
+        [ -z "$entry" ] && continue
+        case "$entry" in \#*) continue ;; esac
+        is_domain_entry "$entry" || continue
+
+        xray_domain="$(domain_to_xray "$entry")"
+        escaped="$(json_escape "$xray_domain")"
+        if [ "$first" -eq 1 ]; then
+            domains="\"$escaped\""
+            first=0
+        else
+            domains="$domains,
+          \"$escaped\""
+        fi
+        count=$((count + 1))
+    done < "$file"
+
+    [ "$count" -gt 0 ] || return 0
+
+    cat <<EOF
+      {
+        "type": "field",
+        "outboundTag": "$outbound",
+        "domain": [
+          $domains
+        ]
+      },
+EOF
+
+    logger -t shpun-build "$label domains enabled: $count outbound=$outbound"
+}
+
+ALWAYS_VPN_RULE="$(build_file_domain_rule "$ALWAYS_VPN_DOMAINS_FILE" proxy always_vpn)"
+
 build_custom_domain_rule() {
     key="$1"
     outbound="$2"
@@ -510,9 +556,10 @@ case "$ROUTER_PROTO" in
           "$SERVER"
         ]
       },
+$ALWAYS_VPN_RULE
+$CUSTOM_VPN_RULE
 $CUSTOM_DIRECT_RULE
 $SMART_RU_RULE
-$CUSTOM_VPN_RULE
       {
         "type": "field",
         "network": "tcp",
@@ -753,9 +800,10 @@ $STREAM_SETTINGS
           "$SERVER"
         ]
       },
+$ALWAYS_VPN_RULE
+$CUSTOM_VPN_RULE
 $CUSTOM_DIRECT_RULE
 $SMART_RU_RULE
-$CUSTOM_VPN_RULE
       {
         "type": "field",
         "network": "tcp",

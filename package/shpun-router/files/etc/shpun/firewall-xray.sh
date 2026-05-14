@@ -6,6 +6,7 @@ LOGTAG="shpun-firewall"
 ROUTES_DIR="/etc/shpun/routes"
 MODE_FILE="$ROUTES_DIR/mode"
 CIDRS_FILE="$ROUTES_DIR/ru.cidrs"
+ALWAYS_VPN_CIDRS_FILE="$ROUTES_DIR/presets/always_vpn.cidrs"
 CUSTOM_SCRIPT="/etc/shpun/apply-custom-routes.sh"
 
 LOCKDIR="/tmp/shpun-firewall.lock"
@@ -129,6 +130,7 @@ nft_create_base() {
         nft add set inet shpun ru_dst '{ type ipv4_addr; flags interval; }' || return 1
     fi
 
+    nft add set inet shpun always_vpn '{ type ipv4_addr; flags interval; }' || return 1
     nft add set inet shpun custom_direct '{ type ipv4_addr; flags interval; }' || return 1
     nft add set inet shpun custom_vpn '{ type ipv4_addr; flags interval; }' || return 1
 
@@ -137,13 +139,16 @@ nft_create_base() {
     return 0
 }
 
-nft_fill_ru_dst() {
-    [ -s "$CIDRS_FILE" ] || return 0
+nft_fill_cidr_set() {
+    set_name="$1"
+    file="$2"
+    label="$3"
+    [ -s "$file" ] || return 0
 
-    tmp="/tmp/shpun_ru_dst_$$.nft"
+    tmp="/tmp/shpun_${set_name}_$$.nft"
     start_ts="$(date +%s 2>/dev/null || echo 0)"
 
-    log "ru_dst: loading started chunk=$CHUNK_SIZE batch=$tmp"
+    log "$label: loading started chunk=$CHUNK_SIZE batch=$tmp"
 
     chunk=""
     count=0
@@ -212,33 +217,45 @@ nft_fill_ru_dst() {
         total=$((total + 1))
 
         if [ "$count" -ge "$CHUNK_SIZE" ]; then
-            printf 'add element inet shpun ru_dst { %s }\n' "$chunk" >> "$tmp"
+            printf 'add element inet shpun %s { %s }\n' "$set_name" "$chunk" >> "$tmp"
             chunk=""
             count=0
         fi
-    done < "$CIDRS_FILE"
+    done < "$file"
 
     if [ -n "$chunk" ]; then
-        printf 'add element inet shpun ru_dst { %s }\n' "$chunk" >> "$tmp"
+        printf 'add element inet shpun %s { %s }\n' "$set_name" "$chunk" >> "$tmp"
     fi
 
     if [ "$total" -eq 0 ]; then
         rm -f "$tmp"
-        log "ru_dst: no valid CIDR entries found (skipped=$skipped)"
+        log "$label: no valid CIDR entries found (skipped=$skipped)"
         return 1
     fi
 
     if ! nft -f "$tmp" >/dev/null 2>&1; then
         rm -f "$tmp"
-        log "ru_dst: batch load failed total=$total skipped=$skipped"
+        log "$label: batch load failed total=$total skipped=$skipped"
         return 1
     fi
 
     rm -f "$tmp"
     end_ts="$(date +%s 2>/dev/null || echo 0)"
     duration=$((end_ts - start_ts))
-    log "ru_dst: loaded $total CIDR entries (skipped=$skipped, duration=${duration}s)"
+    log "$label: loaded $total CIDR entries (skipped=$skipped, duration=${duration}s)"
     return 0
+}
+
+nft_fill_ru_dst() {
+    nft_fill_cidr_set ru_dst "$CIDRS_FILE" ru_dst
+}
+
+nft_fill_always_vpn() {
+    [ -s "$ALWAYS_VPN_CIDRS_FILE" ] || return 0
+    nft_fill_cidr_set always_vpn "$ALWAYS_VPN_CIDRS_FILE" always_vpn || {
+        log "always_vpn: ignored invalid optional CIDR list"
+        return 0
+    }
 }
 
 nft_apply_tcp_rules() {
@@ -249,8 +266,9 @@ nft_apply_tcp_rules() {
     nft flush chain inet shpun prerouting || return 1
 
     nft add rule inet shpun prerouting iifname "$LAN_IF" ip daddr "$LAN_IP" return || return 1
-    nft add rule inet shpun prerouting iifname "$LAN_IF" ip daddr @custom_direct counter return || return 1
+    nft add rule inet shpun prerouting iifname "$LAN_IF" ip daddr @always_vpn ip protocol tcp counter redirect to :"$REDIR_PORT" || return 1
     nft add rule inet shpun prerouting iifname "$LAN_IF" ip daddr @custom_vpn ip protocol tcp counter redirect to :"$REDIR_PORT" || return 1
+    nft add rule inet shpun prerouting iifname "$LAN_IF" ip daddr @custom_direct counter return || return 1
 
     if [ "$MODE" = "split_ru" ]; then
         nft add rule inet shpun prerouting iifname "$LAN_IF" ip daddr @ru_dst return || return 1
@@ -270,11 +288,12 @@ nft_apply_udp_rules() {
     nft flush chain inet shpun prerouting_mangle || return 1
 
     nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" ip daddr "$LAN_IP" return || return 1
-    nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" ip daddr @custom_direct counter return || return 1
     nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" ip daddr 224.0.0.0/4 return || return 1
     nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" ip daddr 255.255.255.255 return || return 1
 
+    nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" meta l4proto udp ip daddr @always_vpn counter tproxy ip to :"$TPROXY_PORT" meta mark set "0x${TPROXY_MARK}" || return 1
     nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" meta l4proto udp ip daddr @custom_vpn counter tproxy ip to :"$TPROXY_PORT" meta mark set "0x${TPROXY_MARK}" || return 1
+    nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" ip daddr @custom_direct counter return || return 1
 
     if [ "$MODE" = "split_ru" ]; then
         nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" ip daddr @ru_dst return || return 1
@@ -321,6 +340,8 @@ nft_init() {
         tproxy_routes_del
         return 1
     fi
+
+    nft_fill_always_vpn
 
     if [ "$MODE" = "split_ru" ]; then
         if ! nft_fill_ru_dst; then
