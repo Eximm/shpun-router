@@ -49,6 +49,10 @@ PRESET_DOMAINS: dict[str, list[str]] = {
         "*.telegram.me",
         "telegram-cdn.org",
         "*.telegram-cdn.org",
+        "cdn-telegram.org",
+        "*.cdn-telegram.org",
+        "telesco.pe",
+        "*.telesco.pe",
         "telegra.ph",
         "*.telegra.ph",
         "tdesktop.com",
@@ -167,7 +171,7 @@ PRESET_CIDRS: dict[str, list[str]] = {
 # Telegram often uses direct MTProto/CDN IPs. Keep this list dynamic by ASN,
 # with a small conservative fallback so one failed RIPEstat request does not
 # publish an empty protected CIDR preset.
-ALWAYS_VPN_ASNS = [62041, 44907]
+ALWAYS_VPN_ASNS = [62041, 44907, 59930, 62014, 211157]
 ALWAYS_VPN_FALLBACK_CIDRS = [
     "91.108.4.0/22",
     "91.108.8.0/22",
