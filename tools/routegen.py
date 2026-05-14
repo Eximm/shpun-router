@@ -10,6 +10,7 @@ import time
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 WORKDIR = Path(os.environ.get("SHPUN_ROUTEGEN_WORKDIR", "/opt/shpun-routegen"))
 PUBDIR = Path(os.environ.get("SHPUN_ROUTEGEN_PUBDIR", "/var/www/files/routes"))
@@ -34,9 +35,41 @@ SOURCES = [
 
 TARGET_CC = "RU"
 
+PROTECTED_ASN_SOURCE = "https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS{asn}"
+
 # Keep these curated and boring. The router can consume domains in Xray direct
 # rules, while cidrs stay available for nft-based direct presets later.
 PRESET_DOMAINS: dict[str, list[str]] = {
+    "always_vpn": [
+        "telegram.org",
+        "*.telegram.org",
+        "t.me",
+        "*.t.me",
+        "telegram.me",
+        "*.telegram.me",
+        "telegram-cdn.org",
+        "*.telegram-cdn.org",
+        "telegra.ph",
+        "*.telegra.ph",
+        "tdesktop.com",
+        "*.tdesktop.com",
+        "discord.com",
+        "*.discord.com",
+        "discord.gg",
+        "*.discord.gg",
+        "discordapp.com",
+        "*.discordapp.com",
+        "discordapp.net",
+        "*.discordapp.net",
+        "signal.org",
+        "*.signal.org",
+        "signal.me",
+        "*.signal.me",
+        "whatsapp.com",
+        "*.whatsapp.com",
+        "whatsapp.net",
+        "*.whatsapp.net",
+    ],
     "ru_core": [
         "gosuslugi.ru",
         "*.gosuslugi.ru",
@@ -122,6 +155,7 @@ PRESET_BUNDLES: dict[str, list[str]] = {
 # planned smart direct mode. These files are still published for future router
 # versions that want nft/ipset-based presets.
 PRESET_CIDRS: dict[str, list[str]] = {
+    "always_vpn": [],
     "ru_core": [],
     "ru_banks": [],
     "ru_market": [],
@@ -129,6 +163,20 @@ PRESET_CIDRS: dict[str, list[str]] = {
     "smart_ru": [],
     "smart_ru_min": [],
 }
+
+# Telegram often uses direct MTProto/CDN IPs. Keep this list dynamic by ASN,
+# with a small conservative fallback so one failed RIPEstat request does not
+# publish an empty protected CIDR preset.
+ALWAYS_VPN_ASNS = [62041, 44907]
+ALWAYS_VPN_FALLBACK_CIDRS = [
+    "91.108.4.0/22",
+    "91.108.8.0/22",
+    "91.108.12.0/22",
+    "91.108.16.0/22",
+    "91.108.20.0/22",
+    "91.108.56.0/22",
+    "149.154.160.0/20",
+]
 
 
 @dataclass(frozen=True)
@@ -148,6 +196,10 @@ def fetch_text(url: str) -> str:
     with urllib.request.urlopen(req, timeout=60) as resp:
         data = resp.read()
     return data.decode("utf-8", errors="replace")
+
+
+def fetch_json(url: str) -> Any:
+    return json.loads(fetch_text(url))
 
 
 def ip_count_to_prefixes(start_ip: str, count_str: str) -> list[ipaddress.IPv4Network]:
@@ -225,6 +277,48 @@ def normalize_cidrs(cidrs: list[str]) -> list[str]:
             continue
 
     return collapse_and_sort(nets)
+
+
+def fetch_asn_ipv4_prefixes(asn: int) -> list[str]:
+    url = PROTECTED_ASN_SOURCE.format(asn=asn)
+    data = fetch_json(url)
+    prefixes = data.get("data", {}).get("prefixes", [])
+    result: list[str] = []
+
+    for item in prefixes:
+        prefix = str(item.get("prefix", "")).strip()
+        if not prefix:
+            continue
+        try:
+            net = ipaddress.ip_network(prefix, strict=False)
+        except Exception:
+            continue
+        if isinstance(net, ipaddress.IPv4Network):
+            result.append(str(net))
+
+    return result
+
+
+def build_always_vpn_cidrs() -> list[str]:
+    cidrs = list(PRESET_CIDRS.get("always_vpn", []))
+    fetched = 0
+
+    for asn in ALWAYS_VPN_ASNS:
+        try:
+            prefixes = fetch_asn_ipv4_prefixes(asn)
+        except Exception as exc:
+            print(f"  warning: failed to fetch protected ASN AS{asn}: {exc}")
+            continue
+
+        fetched += len(prefixes)
+        cidrs.extend(prefixes)
+        print(f"  protected ASN AS{asn}: {len(prefixes)} IPv4 prefixes")
+
+    if fetched == 0:
+        print("  warning: protected ASN fetch produced no CIDRs, using fallback Telegram CIDRs")
+        cidrs.extend(ALWAYS_VPN_FALLBACK_CIDRS)
+
+    return normalize_cidrs(cidrs)
 
 
 def sha256_text(text: str) -> str:
@@ -324,6 +418,14 @@ def build_bundle_cidrs(bundle_name: str) -> list[str]:
     return normalize_cidrs(cidrs)
 
 
+def build_preset_cidrs(name: str) -> list[str]:
+    if name == "always_vpn":
+        return build_always_vpn_cidrs()
+    if name in PRESET_BUNDLES:
+        return build_bundle_cidrs(name)
+    return normalize_cidrs(PRESET_CIDRS.get(name, []))
+
+
 def publish_presets() -> dict[str, dict[str, PublishedFile]]:
     published: dict[str, dict[str, PublishedFile]] = {}
 
@@ -332,10 +434,10 @@ def publish_presets() -> dict[str, dict[str, PublishedFile]]:
     for name in sorted(all_names):
         if name in PRESET_BUNDLES:
             domains = build_bundle_domains(name)
-            cidrs = build_bundle_cidrs(name)
         else:
             domains = normalize_domains(PRESET_DOMAINS.get(name, []))
-            cidrs = normalize_cidrs(PRESET_CIDRS.get(name, []))
+
+        cidrs = build_preset_cidrs(name)
 
         domain_text = "\n".join(domains) + ("\n" if domains else "")
         cidr_text = "\n".join(cidrs) + ("\n" if cidrs else "")
@@ -387,6 +489,13 @@ def write_manifest(legacy_ru: PublishedFile, presets: dict[str, dict[str, Publis
             "split_ru": {
                 "description": "Legacy heavy mode: all Russian IPv4 ranges direct.",
                 "cidrs": legacy_ru.path,
+            },
+        },
+        "protected": {
+            "always_vpn": {
+                "description": "Domains and IPv4 ranges that must stay inside VPN before any direct routing preset.",
+                "domains": presets["always_vpn"]["domains"].path,
+                "cidrs": presets["always_vpn"]["cidrs"].path,
             },
         },
     }
