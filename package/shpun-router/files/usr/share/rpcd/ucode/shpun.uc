@@ -8,6 +8,7 @@ const SUB       = DIR + "/subscription.json";
 const READY     = DIR + "/vpn_ready";
 const VERROR    = DIR + "/vpn_error";
 const SELECTED_LINK = DIR + "/selected_link_index";
+const CONFIG_PENDING = DIR + "/xray_config_pending";
 const HTTP_PROXY_PORT = 10809;
 
 const FW_CUR_NEW   = DIR + "/fw_current";
@@ -600,11 +601,19 @@ return {
 
 					if (needs_rebuild) {
 						let rp = popen(
-							"rm -f " + DIR + "/xray.json " + READY + " " + VERROR + " >/dev/null 2>&1; " +
-							"/etc/init.d/shpun-vpn stop >/dev/null 2>&1 || true; " +
-							"/etc/init.d/shpun-agent restart >/dev/null 2>&1 &"
+							"sh -c '" +
+								"/etc/shpun/build-config.sh >/dev/null 2>&1 && " +
+								"{ if command -v sha256sum >/dev/null 2>&1; then " +
+									"sha256sum " + DIR + "/xray.json 2>/dev/null | cut -d\" \" -f1 > " + CONFIG_PENDING + "; " +
+								"else " +
+									"date +%s > " + CONFIG_PENDING + "; " +
+								"fi; " +
+								"logger -t shpun-uc \"custom route domains saved; xray reload deferred\"; }; " +
+								"rm -f " + VERROR + " >/dev/null 2>&1" +
+							"' >/dev/null 2>&1 &"
 						);
 						if (rp) rp.close();
+						warning = "domain routes saved; xray config rebuild deferred to avoid dropping active VPN sessions";
 					}
 
 					return {
@@ -612,7 +621,8 @@ return {
 						vpn_count:    length(vpn_ok),
 						direct_count: length(direct_ok),
 						applied:      applied,
-						restarted:    needs_rebuild,
+						restarted:    false,
+						pending_rebuild: needs_rebuild,
 						apply_output: apply_output,
 						warning:      warning
 					};
