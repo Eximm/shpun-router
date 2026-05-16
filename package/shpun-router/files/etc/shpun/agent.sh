@@ -17,6 +17,8 @@ LAST_CHECK_FILE="$STATE_DIR/last_sub_check"
 CONF="$STATE_DIR/agent.conf"
 
 VERROR_FILE="$STATE_DIR/vpn_error"
+CONFIG_ACTIVE_FILE="$STATE_DIR/xray_config_active"
+CONFIG_PENDING_FILE="$STATE_DIR/xray_config_pending"
 
 LOG_TAG="shpun-agent"
 
@@ -1408,6 +1410,8 @@ refresh_subscription_from_url() {
 }
 
 ensure_vpn_from_subscription() {
+	local old_config_sha active_config_sha new_config_sha vpn_was_running
+
 	if [ ! -s "$SUB_FILE" ]; then
 		log "ensure_vpn_from_subscription: $SUB_FILE not found"
 		return 1
@@ -1435,6 +1439,18 @@ ensure_vpn_from_subscription() {
 
 	ensure_tproxy_modules || true
 
+	old_config_sha=""
+	[ -s "$ENGINE_CONFIG" ] && old_config_sha="$(calc_sha256_file "$ENGINE_CONFIG" 2>/dev/null || true)"
+	active_config_sha="$(cat "$CONFIG_ACTIVE_FILE" 2>/dev/null | tr -d '\r\n ' || true)"
+	case "$active_config_sha" in
+		''|*[!0-9a-fA-F]*) active_config_sha="$old_config_sha" ;;
+	esac
+
+	vpn_was_running=0
+	if [ -s "$VPN_READY_FILE" ] && is_vpn_process_running; then
+		vpn_was_running=1
+	fi
+
 	log "building xray config from subscription.json"
 
 	if ! /etc/shpun/build-config.sh; then
@@ -1442,6 +1458,29 @@ ensure_vpn_from_subscription() {
 		echo "build_config_failed" > "$VERROR_FILE"
 		rm -f "$VPN_READY_FILE"
 		return 1
+	fi
+
+	new_config_sha=""
+	[ -s "$ENGINE_CONFIG" ] && new_config_sha="$(calc_sha256_file "$ENGINE_CONFIG" 2>/dev/null || true)"
+
+	if [ "$vpn_was_running" = "1" ] &&
+		[ -n "$active_config_sha" ] &&
+		[ -n "$new_config_sha" ] &&
+		[ "$active_config_sha" = "$new_config_sha" ]; then
+		echo "ok" > "$VPN_READY_FILE"
+		echo "$new_config_sha" > "$CONFIG_ACTIVE_FILE"
+		rm -f "$VERROR_FILE"
+		rm -f "$CONFIG_PENDING_FILE"
+		log "xray config unchanged after subscription refresh, keeping running shpun-vpn"
+		return 0
+	fi
+
+	if [ "$vpn_was_running" = "1" ] && [ -n "$active_config_sha" ] && [ -n "$new_config_sha" ]; then
+		echo "$new_config_sha" > "$CONFIG_PENDING_FILE"
+		echo "ok" > "$VPN_READY_FILE"
+		rm -f "$VERROR_FILE"
+		log "xray config changed after subscription refresh, deferring shpun-vpn restart to avoid dropping active sessions"
+		return 0
 	fi
 
 	if ! restart_vpn; then
@@ -1459,7 +1498,9 @@ ensure_vpn_from_subscription() {
 	fi
 
 	echo "ok" > "$VPN_READY_FILE"
+	[ -n "$new_config_sha" ] && echo "$new_config_sha" > "$CONFIG_ACTIVE_FILE"
 	rm -f "$VERROR_FILE"
+	rm -f "$CONFIG_PENDING_FILE"
 	log "vpn_ready marked in $VPN_READY_FILE"
 
 	return 0
@@ -1591,8 +1632,7 @@ check_subscription_alive() {
 		if [ -s "$tmp_sub" ] && [ "$new_sha" != "$old_sha" ]; then
 			mv "$tmp_sub" "$SUB_FILE"
 			ensure_selected_link_valid
-			log "subscription_alive: ok=1, subscription.json changed, rebuilding VPN"
-			rm -f "$VPN_READY_FILE"
+			log "subscription_alive: ok=1, subscription.json changed, refreshing effective xray config"
 			ensure_vpn_from_subscription || true
 		else
 			rm -f "$tmp_sub"
@@ -1633,6 +1673,7 @@ vpn_sanity_check() {
 	local fail_count=0
 	local fail_file="/etc/shpun/vpn_sanity_fail_count"
 	local fail_limit=3
+	local current_config_sha
 
 	if [ -d "/tmp/shpun-firewall.lock" ]; then
 		log "vpn_sanity_check: firewall apply in progress, skipping"
@@ -1653,6 +1694,10 @@ vpn_sanity_check() {
 
 	if is_vpn_process_running; then
 		rm -f "$fail_file"
+		if [ ! -s "$CONFIG_PENDING_FILE" ] && [ -s "$ENGINE_CONFIG" ]; then
+			current_config_sha="$(calc_sha256_file "$ENGINE_CONFIG" 2>/dev/null || true)"
+			[ -n "$current_config_sha" ] && echo "$current_config_sha" > "$CONFIG_ACTIVE_FILE"
+		fi
 		return
 	fi
 
