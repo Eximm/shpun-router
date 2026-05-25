@@ -168,9 +168,9 @@ PRESET_CIDRS: dict[str, list[str]] = {
     "smart_ru_min": [],
 }
 
-# Telegram often uses direct MTProto/CDN IPs. Keep this list dynamic by ASN,
-# with a small conservative fallback so one failed RIPEstat request does not
-# publish an empty protected CIDR preset.
+# Telegram often uses direct MTProto/CDN IPs. Always publish this known
+# MTProto baseline, then extend it with current prefixes learned by ASN.
+# Partial RIPEstat failures must not remove live DC networks.
 ALWAYS_VPN_ASNS = [62041, 44907, 59930, 62014, 211157]
 ALWAYS_VPN_FALLBACK_CIDRS = [
     "91.108.4.0/22",
@@ -304,7 +304,9 @@ def fetch_asn_ipv4_prefixes(asn: int) -> list[str]:
 
 
 def build_always_vpn_cidrs() -> list[str]:
-    cidrs = list(PRESET_CIDRS.get("always_vpn", []))
+    # Telegram clients commonly connect to MTProto DC IPs directly, without DNS.
+    # Keep the known DC baseline even when one of the dynamic ASN lookups fails.
+    cidrs = list(PRESET_CIDRS.get("always_vpn", [])) + ALWAYS_VPN_FALLBACK_CIDRS
     fetched = 0
 
     for asn in ALWAYS_VPN_ASNS:
@@ -319,8 +321,7 @@ def build_always_vpn_cidrs() -> list[str]:
         print(f"  protected ASN AS{asn}: {len(prefixes)} IPv4 prefixes")
 
     if fetched == 0:
-        print("  warning: protected ASN fetch produced no CIDRs, using fallback Telegram CIDRs")
-        cidrs.extend(ALWAYS_VPN_FALLBACK_CIDRS)
+        print("  warning: protected ASN fetch produced no CIDRs, using baseline Telegram CIDRs only")
 
     return normalize_cidrs(cidrs)
 

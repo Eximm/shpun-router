@@ -121,6 +121,17 @@ whatsapp.net
 *.whatsapp.net
 EOF
 	fi
+	if [ ! -s "$ALWAYS_VPN_CIDRS_FILE" ]; then
+		cat > "$ALWAYS_VPN_CIDRS_FILE" <<'EOF'
+91.108.4.0/22
+91.108.8.0/22
+91.108.12.0/22
+91.108.16.0/22
+91.108.20.0/22
+91.108.56.0/22
+149.154.160.0/20
+EOF
+	fi
 }
 
 ensure_router_code() {
@@ -803,13 +814,15 @@ restart_vpn() {
 }
 
 apply_routes_rules() {
-	log "routes: CIDR changed while mode=split_ru, restarting shpun-vpn safely"
+	log "routes: CIDR changed while mode=split_ru, applying live rules without VPN restart"
 
-	# Нельзя дергать firewall-xray.sh напрямую при работающем Xray.
-	# shpun-vpn restart сначала останавливает Xray, затем применяет firewall,
-	# затем запускает Xray обратно. Это защищает слабые роутеры от OOM.
-	restart_vpn || {
-		log "routes: failed to restart shpun-vpn after route update"
+	if [ ! -x /etc/shpun/firewall-xray.sh ]; then
+		log "routes: firewall-xray.sh not found, updated CIDRs will apply on next VPN start"
+		return 1
+	fi
+
+	/etc/shpun/firewall-xray.sh reload-ru || {
+		log "routes: live CIDR apply failed, updated CIDRs will apply on next VPN start"
 		return 1
 	}
 
@@ -1069,20 +1082,41 @@ fetch_always_vpn_file_once() {
 }
 
 fetch_always_vpn_once() {
-	local changed=0 rc
+	local domains_changed=0 cidrs_changed=0 rc
 
 	fetch_always_vpn_file_once domains "$ALWAYS_VPN_DOMAINS_FILE" "$ALWAYS_VPN_DOMAINS_VER_FILE" "$ALWAYS_VPN_DOMAINS_SHA_FILE"
 	rc=$?
-	[ "$rc" -eq 2 ] && changed=1
+	[ "$rc" -eq 2 ] && domains_changed=1
 
 	fetch_always_vpn_file_once cidrs "$ALWAYS_VPN_CIDRS_FILE" "$ALWAYS_VPN_CIDRS_VER_FILE" "$ALWAYS_VPN_CIDRS_SHA_FILE"
 	rc=$?
-	[ "$rc" -eq 2 ] && changed=1
+	[ "$rc" -eq 2 ] && cidrs_changed=1
 
-	[ "$changed" -eq 1 ] || return 0
-	log "always_vpn: protected routes changed, rebuilding VPN config"
-	ensure_vpn_from_subscription || true
+	if [ "$cidrs_changed" -eq 1 ]; then
+		log "always_vpn: protected CIDRs changed, applying live rules without VPN restart"
+		if [ -x /etc/shpun/firewall-xray.sh ]; then
+			/etc/shpun/firewall-xray.sh reload-always-vpn || \
+				log "always_vpn: live CIDR apply failed, updated CIDRs will apply on next VPN start"
+		else
+			log "always_vpn: firewall-xray.sh not found, updated CIDRs will apply on next VPN start"
+		fi
+	fi
+
+	if [ "$domains_changed" -eq 1 ]; then
+		log "always_vpn: protected domains changed, rebuilding deferred xray config"
+		ensure_vpn_from_subscription || true
+	fi
+
 	return 0
+}
+
+apply_always_vpn_live_rules() {
+	[ -s "$ALWAYS_VPN_CIDRS_FILE" ] || return 0
+	[ -x /etc/shpun/firewall-xray.sh ] || return 0
+
+	log "always_vpn: synchronizing protected CIDRs into live rules"
+	/etc/shpun/firewall-xray.sh reload-always-vpn || \
+		log "always_vpn: live CIDR sync deferred until next VPN start"
 }
 
 check_routes_update() {
@@ -1728,6 +1762,7 @@ main_loop() {
 	ensure_state_dir
 	ensure_routes_dir
 	ensure_lan_ipv6_disabled
+	apply_always_vpn_live_rules
 
 	if ! ensure_router_code; then
 		log "initial ensure_router_code failed, will retry in loop"

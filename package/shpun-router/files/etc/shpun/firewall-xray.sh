@@ -143,6 +143,7 @@ nft_fill_cidr_set() {
     set_name="$1"
     file="$2"
     label="$3"
+    replace_existing="${4:-0}"
     [ -s "$file" ] || return 0
 
     tmp="/tmp/shpun_${set_name}_$$.nft"
@@ -156,6 +157,9 @@ nft_fill_cidr_set() {
     skipped=0
 
     rm -f "$tmp"
+    if [ "$replace_existing" = "1" ]; then
+        printf 'flush set inet shpun %s\n' "$set_name" > "$tmp"
+    fi
 
     while IFS= read -r cidr; do
         cidr="$(printf '%s' "$cidr" | tr -d ' \t\r')"
@@ -256,6 +260,30 @@ nft_fill_always_vpn() {
         log "always_vpn: ignored invalid optional CIDR list"
         return 0
     }
+}
+
+nft_replace_cidr_set() {
+    set_name="$1"
+    file="$2"
+    label="$3"
+
+    if ! nft list table inet shpun >/dev/null 2>&1; then
+        log "$label: live nft table absent, current file will be loaded on next VPN start"
+        return 0
+    fi
+
+    if ! nft list set inet shpun "$set_name" >/dev/null 2>&1; then
+        log "$label: live set $set_name absent, current file will be loaded on next applicable VPN start"
+        return 0
+    fi
+
+    if ! nft_fill_cidr_set "$set_name" "$file" "$label" 1; then
+        log "$label: keeping current live set after failed transactional load"
+        return 1
+    fi
+
+    log "$label: live nft set updated in one transaction without VPN restart"
+    return 0
 }
 
 nft_apply_tcp_rules() {
@@ -402,6 +430,18 @@ case "$1" in
         command -v nft >/dev/null 2>&1 && { nft_init && exit 0; }
         exit 1
         ;;
+    reload-always-vpn)
+        load_conf
+        lock_acquire || exit 1
+        command -v nft >/dev/null 2>&1 && { nft_replace_cidr_set always_vpn "$ALWAYS_VPN_CIDRS_FILE" always_vpn && exit 0; }
+        exit 1
+        ;;
+    reload-ru)
+        load_conf
+        lock_acquire || exit 1
+        command -v nft >/dev/null 2>&1 && { nft_replace_cidr_set ru_dst "$CIDRS_FILE" ru_dst && exit 0; }
+        exit 1
+        ;;
     stop)
         load_conf
         lock_acquire || exit 1
@@ -413,7 +453,7 @@ case "$1" in
         exit $?
         ;;
     *)
-        echo "Usage: $0 [start|init|apply-mode|stop|restart]" >&2
+        echo "Usage: $0 [start|init|apply-mode|reload-always-vpn|reload-ru|stop|restart]" >&2
         exit 1
         ;;
 esac
