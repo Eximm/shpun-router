@@ -19,6 +19,8 @@ CONF="$STATE_DIR/agent.conf"
 VERROR_FILE="$STATE_DIR/vpn_error"
 CONFIG_ACTIVE_FILE="$STATE_DIR/xray_config_active"
 CONFIG_PENDING_FILE="$STATE_DIR/xray_config_pending"
+DNS_PROXY_READY_FILE="$STATE_DIR/dns_proxy_ready"
+UDP_READY_FILE="$STATE_DIR/udp_ready"
 
 LOG_TAG="shpun-agent"
 
@@ -29,7 +31,11 @@ MIN_UPTIME_DEFAULT=120
 NET_FAIL_TIMEOUT_DEFAULT=180
 MAIN_LOOP_SLEEP_DEFAULT=30
 DISABLE_LAN_IPV6_DEFAULT=1
+REDIR_PORT_DEFAULT=12345
+TPROXY_PORT_DEFAULT=12346
+TPROXY_MARK_DEFAULT=233
 HTTP_PROXY_PORT_DEFAULT=10809
+DNS_PROXY_PORT_DEFAULT=1053
 TUNNEL_PROBE_INTERVAL_DEFAULT=60
 TUNNEL_FAIL_TIMEOUT_DEFAULT=180
 TUNNEL_PROBE_URL_DEFAULT="http://api.ipify.org"
@@ -165,6 +171,12 @@ EOF
 149.154.160.0/20
 EOF
 	fi
+}
+
+apply_protected_dns_forwarding() {
+	[ -s "$DNS_PROXY_READY_FILE" ] || return 0
+	[ -x /etc/shpun/dns-xray.sh ] || return 0
+	/etc/shpun/dns-xray.sh apply || log "failed to synchronize DNS forwarding through Xray"
 }
 
 ensure_router_code() {
@@ -338,16 +350,38 @@ load_conf() {
 	[ -z "$NET_FAIL_TIMEOUT" ]      && NET_FAIL_TIMEOUT="$NET_FAIL_TIMEOUT_DEFAULT"
 	[ -z "$MAIN_LOOP_SLEEP" ]       && MAIN_LOOP_SLEEP="$MAIN_LOOP_SLEEP_DEFAULT"
 	[ -z "$DISABLE_LAN_IPV6" ]      && DISABLE_LAN_IPV6="$DISABLE_LAN_IPV6_DEFAULT"
+	[ -z "$REDIR_PORT" ]            && REDIR_PORT="$REDIR_PORT_DEFAULT"
+	[ -z "$TPROXY_PORT" ]           && TPROXY_PORT="$TPROXY_PORT_DEFAULT"
+	[ -z "$TPROXY_MARK" ]           && TPROXY_MARK="$TPROXY_MARK_DEFAULT"
 	[ -z "$HTTP_PROXY_PORT" ]       && HTTP_PROXY_PORT="$HTTP_PROXY_PORT_DEFAULT"
+	[ -z "$DNS_PROXY_PORT" ]        && DNS_PROXY_PORT="$DNS_PROXY_PORT_DEFAULT"
 	[ -z "$TUNNEL_PROBE_INTERVAL" ] && TUNNEL_PROBE_INTERVAL="$TUNNEL_PROBE_INTERVAL_DEFAULT"
 	[ -z "$TUNNEL_FAIL_TIMEOUT" ]   && TUNNEL_FAIL_TIMEOUT="$TUNNEL_FAIL_TIMEOUT_DEFAULT"
 	[ -z "$TUNNEL_PROBE_URL" ]      && TUNNEL_PROBE_URL="${KEEPALIVE_URL:-$TUNNEL_PROBE_URL_DEFAULT}"
 
+	case "$REDIR_PORT" in
+		''|*[!0-9]*) REDIR_PORT="$REDIR_PORT_DEFAULT" ;;
+	esac
+	[ "$REDIR_PORT" -gt 0 ] 2>/dev/null && [ "$REDIR_PORT" -le 65535 ] 2>/dev/null || \
+		REDIR_PORT="$REDIR_PORT_DEFAULT"
+	case "$TPROXY_PORT" in
+		''|*[!0-9]*) TPROXY_PORT="$TPROXY_PORT_DEFAULT" ;;
+	esac
+	[ "$TPROXY_PORT" -gt 0 ] 2>/dev/null && [ "$TPROXY_PORT" -le 65535 ] 2>/dev/null || \
+		TPROXY_PORT="$TPROXY_PORT_DEFAULT"
+	case "$TPROXY_MARK" in
+		''|*[!0-9]*) TPROXY_MARK="$TPROXY_MARK_DEFAULT" ;;
+	esac
 	case "$HTTP_PROXY_PORT" in
 		''|*[!0-9]*) HTTP_PROXY_PORT="$HTTP_PROXY_PORT_DEFAULT" ;;
 	esac
 	[ "$HTTP_PROXY_PORT" -gt 0 ] 2>/dev/null && [ "$HTTP_PROXY_PORT" -le 65535 ] 2>/dev/null || \
 		HTTP_PROXY_PORT="$HTTP_PROXY_PORT_DEFAULT"
+	case "$DNS_PROXY_PORT" in
+		''|*[!0-9]*) DNS_PROXY_PORT="$DNS_PROXY_PORT_DEFAULT" ;;
+	esac
+	[ "$DNS_PROXY_PORT" -gt 0 ] 2>/dev/null && [ "$DNS_PROXY_PORT" -le 65535 ] 2>/dev/null || \
+		DNS_PROXY_PORT="$DNS_PROXY_PORT_DEFAULT"
 	case "$TUNNEL_PROBE_INTERVAL" in
 		''|*[!0-9]*) TUNNEL_PROBE_INTERVAL="$TUNNEL_PROBE_INTERVAL_DEFAULT" ;;
 	esac
@@ -1157,6 +1191,7 @@ fetch_always_vpn_once() {
 	if [ "$domains_changed" -eq 1 ]; then
 		log "always_vpn: protected domains changed, rebuilding deferred xray config"
 		ensure_vpn_from_subscription || true
+		apply_protected_dns_forwarding
 	fi
 
 	return 0
@@ -1335,6 +1370,31 @@ check_tunnel_connectivity() {
 		probe_url_through_tunnel "$TUNNEL_PROBE_URL_DEFAULT" && return 0
 	fi
 
+	return 1
+}
+
+ensure_transparent_rules() {
+	local repair=0
+
+	[ -x /etc/shpun/firewall-xray.sh ] || return 0
+	command -v nft >/dev/null 2>&1 || return 0
+
+	nft list chain inet shpun prerouting 2>/dev/null | grep -q "redirect to :${REDIR_PORT}" || repair=1
+
+	if [ -s "$UDP_READY_FILE" ]; then
+		nft list chain inet shpun prerouting_mangle 2>/dev/null | grep -q "tproxy.*:${TPROXY_PORT}" || repair=1
+		ip rule show 2>/dev/null | grep -q "fwmark 0x${TPROXY_MARK}" || repair=1
+	fi
+
+	[ "$repair" -eq 0 ] && return 0
+
+	log "transparent VPN rules are missing, restoring firewall path without restarting xray"
+	if /etc/shpun/firewall-xray.sh init; then
+		apply_protected_dns_forwarding
+		return 0
+	fi
+
+	log "failed to restore transparent VPN rules"
 	return 1
 }
 
@@ -1626,6 +1686,8 @@ ensure_vpn_from_subscription() {
 
 	if ! wait_vpn_started; then
 		log "xray did not start successfully, not marking vpn_ready"
+		rm -f "$DNS_PROXY_READY_FILE"
+		[ -x /etc/shpun/dns-xray.sh ] && /etc/shpun/dns-xray.sh clear || true
 		echo "xray_failed_to_start" > "$VERROR_FILE"
 		rm -f "$VPN_READY_FILE"
 		return 1
@@ -1635,6 +1697,8 @@ ensure_vpn_from_subscription() {
 	[ -n "$new_config_sha" ] && echo "$new_config_sha" > "$CONFIG_ACTIVE_FILE"
 	rm -f "$VERROR_FILE"
 	rm -f "$CONFIG_PENDING_FILE"
+	echo "ok" > "$DNS_PROXY_READY_FILE"
+	apply_protected_dns_forwarding
 	log "vpn_ready marked in $VPN_READY_FILE"
 
 	return 0
@@ -1896,6 +1960,10 @@ main_loop() {
 		vpn_sanity_check
 
 		if [ -s "$VPN_READY_FILE" ]; then
+			if is_vpn_process_running; then
+				apply_protected_dns_forwarding
+				ensure_transparent_rules || true
+			fi
 			if check_internet; then
 				[ "$NET_FAIL_SECONDS" -gt 0 ] && log "internet is back, resetting fail counter (was ${NET_FAIL_SECONDS}s)"
 				NET_FAIL_SECONDS=0

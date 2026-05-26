@@ -156,6 +156,31 @@ REDIR_PORT="${REDIR_PORT:-12345}"
 TPROXY_PORT="${TPROXY_PORT:-12346}"
 TPROXY_MARK="${TPROXY_MARK:-233}"
 HTTP_PROXY_PORT="${HTTP_PROXY_PORT:-10809}"
+DNS_PROXY_PORT="${DNS_PROXY_PORT:-1053}"
+DNS_UPSTREAM="${DNS_ADDR1:-9.9.9.9}"
+
+valid_ipv4_address() {
+    local ip="$1" octet oldifs
+
+    case "$ip" in
+        ''|*[!0-9.]*) return 1 ;;
+    esac
+
+    oldifs="$IFS"
+    IFS='.'
+    set -- $ip
+    IFS="$oldifs"
+    [ "$#" -eq 4 ] || return 1
+
+    for octet in "$@"; do
+        case "$octet" in ''|*[!0-9]*) return 1 ;; esac
+        [ "$octet" -le 255 ] 2>/dev/null || return 1
+    done
+
+    return 0
+}
+
+valid_ipv4_address "$DNS_UPSTREAM" || DNS_UPSTREAM="9.9.9.9"
 
 mask_host() {
     host="$(printf '%s' "$1" | tr -d ' \t\r\n')"
@@ -484,6 +509,17 @@ case "$ROUTER_PROTO" in
       "settings": {}
     },
     {
+      "tag": "dns-in",
+      "listen": "127.0.0.1",
+      "port": $DNS_PROXY_PORT,
+      "protocol": "dokodemo-door",
+      "settings": {
+        "address": "$DNS_UPSTREAM",
+        "port": 53,
+        "network": "tcp,udp"
+      }
+    },
+    {
       "tag": "redir-in",
       "listen": "0.0.0.0",
       "port": $REDIR_PORT,
@@ -543,6 +579,11 @@ case "$ROUTER_PROTO" in
   "routing": {
     "domainStrategy": "IPIfNonMatch",
     "rules": [
+      {
+        "type": "field",
+        "inboundTag": ["dns-in"],
+        "outboundTag": "proxy"
+      },
       {
         "type": "field",
         "outboundTag": "direct",
@@ -724,6 +765,17 @@ EOF
       "settings": {}
     },
     {
+      "tag": "dns-in",
+      "listen": "127.0.0.1",
+      "port": $DNS_PROXY_PORT,
+      "protocol": "dokodemo-door",
+      "settings": {
+        "address": "$DNS_UPSTREAM",
+        "port": 53,
+        "network": "tcp,udp"
+      }
+    },
+    {
       "tag": "redir-in",
       "listen": "0.0.0.0",
       "port": $REDIR_PORT,
@@ -787,6 +839,11 @@ $STREAM_SETTINGS
   "routing": {
     "domainStrategy": "IPIfNonMatch",
     "rules": [
+      {
+        "type": "field",
+        "inboundTag": ["dns-in"],
+        "outboundTag": "proxy"
+      },
       {
         "type": "field",
         "outboundTag": "direct",

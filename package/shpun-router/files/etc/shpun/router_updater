@@ -300,7 +300,7 @@ log "restart services; shpun-agent will start vpn after effective config validat
 
 /etc/init.d/shpun-agent stop  2>/dev/null || true
 /etc/init.d/shpun-vpn stop    2>/dev/null || true
-rm -f "$CONF_DIR/vpn_ready" "$CONF_DIR/xray_config_pending" 2>/dev/null || true
+rm -f "$CONF_DIR/vpn_ready" "$CONF_DIR/xray_config_pending" "$CONF_DIR/dns_proxy_ready" 2>/dev/null || true
 
 /etc/init.d/shpun-agent start 2>/dev/null || true
 

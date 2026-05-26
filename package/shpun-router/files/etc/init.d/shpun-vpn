@@ -10,6 +10,8 @@ LOG_TAG="shpun-vpn"
 
 ENGINE_BIN="/tmp/xray"
 ENGINE_CONFIG="/etc/shpun/xray.json"
+DNS_SCRIPT="/etc/shpun/dns-xray.sh"
+DNS_PROXY_READY_FILE="/etc/shpun/dns_proxy_ready"
 
 TPROXY_MARK_DEFAULT=233
 TPROXY_TABLE_DEFAULT=233
@@ -58,11 +60,21 @@ start_service() {
     procd_set_param stdout 1
     procd_set_param stderr 1
     procd_close_instance
+
+    echo "ok" > "$DNS_PROXY_READY_FILE"
+    if [ -x "$DNS_SCRIPT" ]; then
+        "$DNS_SCRIPT" apply || logger -t "$LOG_TAG" "dns-xray.sh apply failed"
+    fi
 }
 
 stop_service() {
     load_conf
     logger -t "$LOG_TAG" "stopping xray"
+    rm -f "$DNS_PROXY_READY_FILE"
+
+    if [ -x "$DNS_SCRIPT" ]; then
+        "$DNS_SCRIPT" clear || logger -t "$LOG_TAG" "dns-xray.sh clear failed"
+    fi
 
     if [ -x /etc/shpun/firewall-xray.sh ]; then
         /etc/shpun/firewall-xray.sh stop

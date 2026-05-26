@@ -629,6 +629,12 @@ return view.extend({
 			statusTopBadges.push(serverBadges[0]);
 		for (var i = 1; i < serverBadges.length; i++)
 			statusMetricBadges.push(serverBadges[i]);
+		if (vpnReady)
+			statusMetricBadges.push(makeBadge(
+				state.udp_ready ? 'shpun-badge--ok' : 'shpun-badge--warn',
+				state.udp_ready ? 'Звонки и игры: работают' : 'Звонки и игры: ограничены',
+				state.udp_ready ? 'UDP-трафик проходит через VPN.' : 'Роутер работает без UDP-туннеля; звонки и игры могут работать нестабильно.'
+			));
 		var statusRows = [
 			E('div', { 'class': 'shpun-status-row shpun-status-row--top' }, statusTopBadges)
 		];

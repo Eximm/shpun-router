@@ -8,6 +8,7 @@ MODE_FILE="$ROUTES_DIR/mode"
 CIDRS_FILE="$ROUTES_DIR/ru.cidrs"
 ALWAYS_VPN_CIDRS_FILE="$ROUTES_DIR/presets/always_vpn.cidrs"
 CUSTOM_SCRIPT="/etc/shpun/apply-custom-routes.sh"
+UDP_READY_FILE="/etc/shpun/udp_ready"
 
 LOCKDIR="/tmp/shpun-firewall.lock"
 
@@ -350,6 +351,7 @@ nft_init() {
         return 1
     fi
 
+    rm -f "$UDP_READY_FILE"
     WITH_TPROXY="no"
     if check_tproxy; then
         WITH_TPROXY="yes"
@@ -393,6 +395,8 @@ nft_init() {
             nft delete chain inet shpun prerouting_mangle 2>/dev/null
             tproxy_routes_del
             WITH_TPROXY="no"
+        else
+            echo "ok" > "$UDP_READY_FILE"
         fi
     fi
 
@@ -406,6 +410,7 @@ nft_init() {
 
 nft_stop() {
     log "removing table inet shpun"
+    rm -f "$UDP_READY_FILE"
     nft delete table inet shpun 2>/dev/null
     tproxy_routes_del
 }

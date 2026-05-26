@@ -7,7 +7,6 @@ USE_PROCD=1
 SERVICE_DAEMONIZE=0
 
 PROG="/etc/shpun/agent.sh"
-CONF="/etc/shpun/agent.conf"
 
 start_service() {
 	# Не стартуем, если нет скрипта агента
@@ -28,10 +27,6 @@ start_service() {
 
 	# Понижаем приоритет, чтобы агент не мешал маршрутизации/свитчу
 	procd_set_param nice 10
-
-	# На будущее: можно использовать в agent.sh, если захочешь
-	#   [ -n "$SHPUN_CONF" ] && . "$SHPUN_CONF"
-	procd_set_param env SHPUN_CONF="$CONF"
 
 	procd_close_instance
 }

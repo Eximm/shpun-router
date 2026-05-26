@@ -19,7 +19,7 @@ if [ "$(uci -q get network.vpn.ifname)" = "tun0" ] && \
 fi
 
 # В новой Xray-схеме мы не создаём tun0 и network.vpn — работаем через
-# прозрачный dokodemo-door + nft/iptables REDIRECT.
+# прозрачный dokodemo-door + nftables REDIRECT.
 
 # ==========================
 # 3. Отключить IPv6 на LAN/WAN + DHCPv6/RA

@@ -9,6 +9,7 @@ const READY     = DIR + "/vpn_ready";
 const VERROR    = DIR + "/vpn_error";
 const SELECTED_LINK = DIR + "/selected_link_index";
 const CONFIG_PENDING = DIR + "/xray_config_pending";
+const UDP_READY = DIR + "/udp_ready";
 const HTTP_PROXY_PORT = 10809;
 
 const FW_CUR_NEW   = DIR + "/fw_current";
@@ -400,6 +401,7 @@ return {
 						has_sub:          (sub_raw != ""),
 						subscription_url: "",
 						vpn_ready:        exists(READY),
+						udp_ready:        exists(UDP_READY),
 						vpn_error:        err_raw || ""
 					};
 					let current_server = get_current_server();

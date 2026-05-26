@@ -56,6 +56,7 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_BIN) ./files/etc/shpun/build-config.sh          $(1)/etc/shpun/build-config.sh
 	$(INSTALL_BIN) ./files/etc/shpun/gen_code.sh              $(1)/etc/shpun/gen_code.sh
 	$(INSTALL_BIN) ./files/etc/shpun/firewall-xray.sh         $(1)/etc/shpun/firewall-xray.sh
+	$(INSTALL_BIN) ./files/etc/shpun/dns-xray.sh              $(1)/etc/shpun/dns-xray.sh
 	$(INSTALL_BIN) ./files/etc/shpun/router_updater           $(1)/etc/shpun/router_updater
 	$(INSTALL_BIN) ./files/etc/shpun/set-routing-mode.sh      $(1)/etc/shpun/set-routing-mode.sh
 	$(INSTALL_BIN) ./files/etc/shpun/apply-custom-routes.sh   $(1)/etc/shpun/apply-custom-routes.sh
