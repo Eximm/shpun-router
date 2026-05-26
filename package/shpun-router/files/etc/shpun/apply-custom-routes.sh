@@ -71,6 +71,7 @@ apply_set() {
     set_name="$1"
     key="$2"
     tmp="/tmp/shpun_custom_${set_name}_$$.tmp"
+    batch="/tmp/shpun_custom_${set_name}_batch_$$.nft"
 
     nft list table inet shpun >/dev/null 2>&1 || {
         log "table inet shpun not found — skipping $set_name"
@@ -84,69 +85,61 @@ apply_set() {
         }
     }
 
-    nft flush set inet shpun "$set_name" 2>/dev/null || {
-        log "failed to flush set $set_name"
-        return 1
-    }
-
-    rm -f "$tmp"
+    rm -f "$tmp" "$batch"
 
     if [ -f "$CUSTOM_FILE" ] && [ -s "$CUSTOM_FILE" ] && command -v jsonfilter >/dev/null 2>&1; then
         jsonfilter -i "$CUSTOM_FILE" -e "@.${key}[*]" 2>/dev/null | tr -d '"' > "$tmp" 2>/dev/null
     fi
 
-    if [ ! -s "$tmp" ]; then
-        rm -f "$tmp"
-        log "$set_name: empty, nothing to apply"
-        return 0
-    fi
+    printf 'flush set inet shpun %s\n' "$set_name" > "$batch"
 
     chunk=""
     count=0
     added=0
     skipped=0
-    failed=0
 
-    while IFS= read -r entry; do
-        entry="$(printf '%s' "$entry" | tr -d ' \t\r\n')"
-        [ -z "$entry" ] && continue
+    if [ -s "$tmp" ]; then
+        while IFS= read -r entry; do
+            entry="$(printf '%s' "$entry" | tr -d ' \t\r\n')"
+            [ -z "$entry" ] && continue
 
-        if ! validate_entry "$entry"; then
-            if validate_domain "$entry"; then
+            if ! validate_entry "$entry"; then
+                if validate_domain "$entry"; then
+                    skipped=$((skipped + 1))
+                    continue
+                fi
+                log "invalid entry skipped: '$entry'"
                 skipped=$((skipped + 1))
                 continue
             fi
-            log "invalid entry skipped: '$entry'"
-            skipped=$((skipped + 1))
-            continue
-        fi
 
-        chunk="${chunk:+$chunk, }$entry"
-        count=$((count + 1))
-        added=$((added + 1))
+            chunk="${chunk:+$chunk, }$entry"
+            count=$((count + 1))
+            added=$((added + 1))
 
-        if [ "$count" -ge "$CHUNK_SIZE" ]; then
-            nft add element inet shpun "$set_name" "{ $chunk }" 2>/dev/null || {
-                log "failed to add elements to $set_name"
-                failed=1
-            }
-            chunk=""
-            count=0
-        fi
-    done < "$tmp"
+            if [ "$count" -ge "$CHUNK_SIZE" ]; then
+                printf 'add element inet shpun %s { %s }\n' "$set_name" "$chunk" >> "$batch"
+                chunk=""
+                count=0
+            fi
+        done < "$tmp"
+    fi
 
     rm -f "$tmp"
 
     if [ -n "$chunk" ]; then
-        nft add element inet shpun "$set_name" "{ $chunk }" 2>/dev/null || {
-            log "failed to add final elements to $set_name"
-            failed=1
-        }
+        printf 'add element inet shpun %s { %s }\n' "$set_name" "$chunk" >> "$batch"
     fi
 
-    log "$set_name: applied $added entries, skipped $skipped"
+    if ! nft -f "$batch" 2>/dev/null; then
+        rm -f "$batch"
+        log "$set_name: atomic apply failed, keeping current live routes"
+        return 1
+    fi
 
-    [ "$failed" -eq 0 ]
+    rm -f "$batch"
+    log "$set_name: applied $added entries, skipped $skipped"
+    return 0
 }
 
 case "${1:-apply}" in

@@ -296,13 +296,13 @@ if [ -n "$REMOTE_VER" ]; then
 	log "local version updated to $REMOTE_VER"
 fi
 
-log "restart services"
+log "restart services; shpun-agent will start vpn after effective config validation"
 
 /etc/init.d/shpun-agent stop  2>/dev/null || true
 /etc/init.d/shpun-vpn stop    2>/dev/null || true
+rm -f "$CONF_DIR/vpn_ready" "$CONF_DIR/xray_config_pending" 2>/dev/null || true
 
 /etc/init.d/shpun-agent start 2>/dev/null || true
-/etc/init.d/shpun-vpn start   2>/dev/null || true
 
 # rpcd reload is safe
 /etc/init.d/rpcd restart 2>/dev/null || true

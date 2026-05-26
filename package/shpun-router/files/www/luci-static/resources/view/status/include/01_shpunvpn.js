@@ -429,9 +429,11 @@ function openCustomRoutesModal() {
 							callShpunCustomRoutesSet(vpnList.slice(), directList.slice()).then(function(res) {
 								res = res || {};
 								ui.hideModal();
-								if (res.ok)
+								if (res.ok) {
 									ui.addNotification(null, E('p', {}, 'Маршруты сохранены: ' + res.vpn_count + ' через VPN, ' + res.direct_count + ' напрямую.'), 'info');
-								else
+									if (res.pending_rebuild)
+										ui.addNotification(null, E('p', {}, 'Доменные маршруты сохранены без разрыва соединения и будут полностью применены при следующем безопасном переподключении VPN.'), 'warning');
+								} else
 									ui.addNotification(null, E('p', {}, 'Ошибка: ' + (res.error || 'неизвестная ошибка')), 'error');
 							}).catch(function(err) {
 								ui.hideModal();

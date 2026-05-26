@@ -29,6 +29,10 @@ MIN_UPTIME_DEFAULT=120
 NET_FAIL_TIMEOUT_DEFAULT=180
 MAIN_LOOP_SLEEP_DEFAULT=30
 DISABLE_LAN_IPV6_DEFAULT=1
+HTTP_PROXY_PORT_DEFAULT=10809
+TUNNEL_PROBE_INTERVAL_DEFAULT=60
+TUNNEL_FAIL_TIMEOUT_DEFAULT=180
+TUNNEL_PROBE_URL_DEFAULT="http://api.ipify.org"
 
 ROUTES_DIR="$STATE_DIR/routes"
 ROUTES_CIDRS_FILE="$ROUTES_DIR/ru.cidrs"
@@ -111,16 +115,45 @@ discordapp.com
 *.discordapp.com
 discordapp.net
 *.discordapp.net
+discord.media
+*.discord.media
+discordcdn.com
+*.discordcdn.com
 signal.org
 *.signal.org
 signal.me
 *.signal.me
+signal.art
+*.signal.art
 whatsapp.com
 *.whatsapp.com
 whatsapp.net
 *.whatsapp.net
+wa.me
+*.wa.me
+viber.com
+*.viber.com
+viber.co
+*.viber.co
+viber.me
+*.viber.me
+facetime.apple.com
+*.facetime.apple.com
+snapchat.com
+*.snapchat.com
+sc-cdn.net
+*.sc-cdn.net
 EOF
 	fi
+	for protected_domain in \
+		discord.media '*.discord.media' discordcdn.com '*.discordcdn.com' \
+		signal.art '*.signal.art' wa.me '*.wa.me' \
+		viber.com '*.viber.com' viber.co '*.viber.co' viber.me '*.viber.me' \
+		facetime.apple.com '*.facetime.apple.com' \
+		snapchat.com '*.snapchat.com' sc-cdn.net '*.sc-cdn.net'; do
+		grep -Fqx "$protected_domain" "$ALWAYS_VPN_DOMAINS_FILE" 2>/dev/null || \
+			printf '%s\n' "$protected_domain" >> "$ALWAYS_VPN_DOMAINS_FILE"
+	done
 	if [ ! -s "$ALWAYS_VPN_CIDRS_FILE" ]; then
 		cat > "$ALWAYS_VPN_CIDRS_FILE" <<'EOF'
 91.108.4.0/22
@@ -305,6 +338,25 @@ load_conf() {
 	[ -z "$NET_FAIL_TIMEOUT" ]      && NET_FAIL_TIMEOUT="$NET_FAIL_TIMEOUT_DEFAULT"
 	[ -z "$MAIN_LOOP_SLEEP" ]       && MAIN_LOOP_SLEEP="$MAIN_LOOP_SLEEP_DEFAULT"
 	[ -z "$DISABLE_LAN_IPV6" ]      && DISABLE_LAN_IPV6="$DISABLE_LAN_IPV6_DEFAULT"
+	[ -z "$HTTP_PROXY_PORT" ]       && HTTP_PROXY_PORT="$HTTP_PROXY_PORT_DEFAULT"
+	[ -z "$TUNNEL_PROBE_INTERVAL" ] && TUNNEL_PROBE_INTERVAL="$TUNNEL_PROBE_INTERVAL_DEFAULT"
+	[ -z "$TUNNEL_FAIL_TIMEOUT" ]   && TUNNEL_FAIL_TIMEOUT="$TUNNEL_FAIL_TIMEOUT_DEFAULT"
+	[ -z "$TUNNEL_PROBE_URL" ]      && TUNNEL_PROBE_URL="${KEEPALIVE_URL:-$TUNNEL_PROBE_URL_DEFAULT}"
+
+	case "$HTTP_PROXY_PORT" in
+		''|*[!0-9]*) HTTP_PROXY_PORT="$HTTP_PROXY_PORT_DEFAULT" ;;
+	esac
+	[ "$HTTP_PROXY_PORT" -gt 0 ] 2>/dev/null && [ "$HTTP_PROXY_PORT" -le 65535 ] 2>/dev/null || \
+		HTTP_PROXY_PORT="$HTTP_PROXY_PORT_DEFAULT"
+	case "$TUNNEL_PROBE_INTERVAL" in
+		''|*[!0-9]*) TUNNEL_PROBE_INTERVAL="$TUNNEL_PROBE_INTERVAL_DEFAULT" ;;
+	esac
+	[ "$TUNNEL_PROBE_INTERVAL" -gt 0 ] 2>/dev/null || TUNNEL_PROBE_INTERVAL="$TUNNEL_PROBE_INTERVAL_DEFAULT"
+	case "$TUNNEL_FAIL_TIMEOUT" in
+		''|*[!0-9]*) TUNNEL_FAIL_TIMEOUT="$TUNNEL_FAIL_TIMEOUT_DEFAULT" ;;
+	esac
+	[ "$TUNNEL_FAIL_TIMEOUT" -ge "$TUNNEL_PROBE_INTERVAL" ] 2>/dev/null || \
+		TUNNEL_FAIL_TIMEOUT="$TUNNEL_PROBE_INTERVAL"
 
 	[ -z "$ROUTES_URL_BASE" ]       && ROUTES_URL_BASE="$ROUTES_URL_BASE_DEFAULT"
 	[ -z "$ROUTES_CHECK_INTERVAL" ] && ROUTES_CHECK_INTERVAL="$ROUTES_CHECK_INTERVAL_DEFAULT"
@@ -1251,6 +1303,54 @@ check_internet() {
 	return 1
 }
 
+probe_url_through_tunnel() {
+	local url="$1"
+	local proxy="http://127.0.0.1:${HTTP_PROXY_PORT}"
+
+	case "$HTTP_BIN" in
+		curl)
+			curl -fsS -m 8 -x "$proxy" "$url" >/dev/null 2>&1
+			;;
+		wget)
+			env http_proxy="$proxy" HTTP_PROXY="$proxy" \
+				wget -q -T 8 -O /dev/null "$url" >/dev/null 2>&1
+			;;
+		uclient-fetch)
+			env http_proxy="$proxy" HTTP_PROXY="$proxy" \
+				uclient-fetch -q -T 8 -Y on -O /dev/null "$url" >/dev/null 2>&1
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
+check_tunnel_connectivity() {
+	detect_http_client
+	[ -n "$HTTP_BIN" ] || return 1
+
+	probe_url_through_tunnel "$TUNNEL_PROBE_URL" && return 0
+
+	if [ "$TUNNEL_PROBE_URL" != "$TUNNEL_PROBE_URL_DEFAULT" ]; then
+		probe_url_through_tunnel "$TUNNEL_PROBE_URL_DEFAULT" && return 0
+	fi
+
+	return 1
+}
+
+recover_failed_tunnel() {
+	log "tunnel probe failure confirmed, restarting shpun-vpn to apply current effective config"
+	rm -f "$VPN_READY_FILE"
+
+	if ensure_vpn_from_subscription; then
+		log "tunnel recovery completed"
+		return 0
+	fi
+
+	log "tunnel recovery failed; agent will retry"
+	return 1
+}
+
 wait_for_default_route() {
 	log "waiting for default IPv4 route..."
 
@@ -1771,6 +1871,8 @@ main_loop() {
 	log "shpun-agent started (API_URL=$API_URL, ENGINE_BIN=$ENGINE_BIN, ENGINE_URL=$ENGINE_URL, ROUTES_URL_BASE=$ROUTES_URL_BASE, MIN_UPTIME=$MIN_UPTIME, NET_FAIL_TIMEOUT=$NET_FAIL_TIMEOUT, PING_HOST=$PING_HOST)"
 
 	NET_FAIL_SECONDS=0
+	TUNNEL_FAIL_SECONDS=0
+	LAST_TUNNEL_PROBE=0
 
 	while :; do
 		load_conf
@@ -1797,9 +1899,36 @@ main_loop() {
 			if check_internet; then
 				[ "$NET_FAIL_SECONDS" -gt 0 ] && log "internet is back, resetting fail counter (was ${NET_FAIL_SECONDS}s)"
 				NET_FAIL_SECONDS=0
+
+				NOW_TS="$(date +%s 2>/dev/null || echo 0)"
+				case "$NOW_TS" in
+					''|*[!0-9]*) NOW_TS=0 ;;
+				esac
+				case "$LAST_TUNNEL_PROBE" in
+					''|*[!0-9]*) LAST_TUNNEL_PROBE=0 ;;
+				esac
+
+				if is_vpn_process_running &&
+					[ "$((NOW_TS - LAST_TUNNEL_PROBE))" -ge "$TUNNEL_PROBE_INTERVAL" ]; then
+					LAST_TUNNEL_PROBE="$NOW_TS"
+
+					if check_tunnel_connectivity; then
+						[ "$TUNNEL_FAIL_SECONDS" -gt 0 ] && log "tunnel probe recovered after ${TUNNEL_FAIL_SECONDS}s"
+						TUNNEL_FAIL_SECONDS=0
+					else
+						TUNNEL_FAIL_SECONDS=$((TUNNEL_FAIL_SECONDS + TUNNEL_PROBE_INTERVAL))
+						log "tunnel proxy probe failed for ${TUNNEL_FAIL_SECONDS}s while WAN is reachable"
+
+						if [ "$TUNNEL_FAIL_SECONDS" -ge "$TUNNEL_FAIL_TIMEOUT" ]; then
+							recover_failed_tunnel || true
+							TUNNEL_FAIL_SECONDS=0
+						fi
+					fi
+				fi
 			else
 				NET_FAIL_SECONDS=$((NET_FAIL_SECONDS + MAIN_LOOP_SLEEP))
 				log "no internet detected for ${NET_FAIL_SECONDS}s while VPN is active"
+				TUNNEL_FAIL_SECONDS=0
 
 				if [ "$NET_FAIL_SECONDS" -ge "$NET_FAIL_TIMEOUT" ]; then
 					log "internet probe failed for ${NET_FAIL_SECONDS}s, keeping tunnel running"
@@ -1808,6 +1937,7 @@ main_loop() {
 			fi
 		else
 			NET_FAIL_SECONDS=0
+			TUNNEL_FAIL_SECONDS=0
 		fi
 
 		if [ ! -s "$SUB_FILE" ]; then
