@@ -21,6 +21,7 @@ CONFIG_ACTIVE_FILE="$STATE_DIR/xray_config_active"
 CONFIG_PENDING_FILE="$STATE_DIR/xray_config_pending"
 DNS_PROXY_READY_FILE="$STATE_DIR/dns_proxy_ready"
 UDP_READY_FILE="$STATE_DIR/udp_ready"
+CONFIG_LOCKDIR="/tmp/shpun-config.lock"
 
 LOG_TAG="shpun-agent"
 
@@ -34,11 +35,14 @@ DISABLE_LAN_IPV6_DEFAULT=1
 REDIR_PORT_DEFAULT=12345
 TPROXY_PORT_DEFAULT=12346
 TPROXY_MARK_DEFAULT=233
+TPROXY_TABLE_DEFAULT=233
 HTTP_PROXY_PORT_DEFAULT=10809
 DNS_PROXY_PORT_DEFAULT=1053
 TUNNEL_PROBE_INTERVAL_DEFAULT=60
 TUNNEL_FAIL_TIMEOUT_DEFAULT=180
 TUNNEL_PROBE_URL_DEFAULT="http://api.ipify.org"
+TUNNEL_PROBE_FALLBACK_URL_DEFAULT="http://cp.cloudflare.com/generate_204"
+TUNNEL_PROBE_SECONDARY_URL_DEFAULT="http://connectivitycheck.gstatic.com/generate_204"
 
 ROUTES_DIR="$STATE_DIR/routes"
 ROUTES_CIDRS_FILE="$ROUTES_DIR/ru.cidrs"
@@ -64,6 +68,50 @@ HTTP_BIN=""
 
 log() {
 	logger -t "$LOG_TAG" "$*"
+}
+
+config_lock_acquire() {
+	local i=0
+
+	while ! mkdir "$CONFIG_LOCKDIR" 2>/dev/null; do
+		lock_pid="$(cat "$CONFIG_LOCKDIR/pid" 2>/dev/null || true)"
+		case "$lock_pid" in
+			''|*[!0-9]*)
+				if [ "$i" -ge 2 ]; then
+					rm -f "$CONFIG_LOCKDIR/pid" 2>/dev/null
+					rmdir "$CONFIG_LOCKDIR" 2>/dev/null || true
+					continue
+				fi
+				;;
+			*)
+				if ! kill -0 "$lock_pid" 2>/dev/null; then
+					rm -f "$CONFIG_LOCKDIR/pid" 2>/dev/null
+					rmdir "$CONFIG_LOCKDIR" 2>/dev/null || true
+					continue
+				fi
+				;;
+		esac
+		i=$((i + 1))
+		[ "$i" -gt 60 ] && {
+			log "timed out waiting for xray config lock"
+			return 1
+		}
+		sleep 1
+	done
+
+	echo "$$" > "$CONFIG_LOCKDIR/pid"
+	trap 'rm -f "$CONFIG_LOCKDIR/pid" 2>/dev/null; rmdir "$CONFIG_LOCKDIR" 2>/dev/null; exit 0' EXIT INT TERM
+	return 0
+}
+
+config_lock_release() {
+	rm -f "$CONFIG_LOCKDIR/pid" 2>/dev/null || true
+	rmdir "$CONFIG_LOCKDIR" 2>/dev/null || true
+	trap - EXIT INT TERM
+}
+
+config_lock_release_if_owned() {
+	[ "$1" = "1" ] && config_lock_release
 }
 
 get_routing_mode() {
@@ -152,31 +200,57 @@ sc-cdn.net
 EOF
 	fi
 	for protected_domain in \
+		telegram.org '*.telegram.org' t.me '*.t.me' telegram.me '*.telegram.me' \
+		telegram-cdn.org '*.telegram-cdn.org' cdn-telegram.org '*.cdn-telegram.org' \
+		telesco.pe '*.telesco.pe' telegra.ph '*.telegra.ph' tdesktop.com '*.tdesktop.com' \
+		discord.com '*.discord.com' discord.gg '*.discord.gg' \
+		discordapp.com '*.discordapp.com' discordapp.net '*.discordapp.net' \
 		discord.media '*.discord.media' discordcdn.com '*.discordcdn.com' \
-		signal.art '*.signal.art' wa.me '*.wa.me' \
+		signal.org '*.signal.org' signal.me '*.signal.me' signal.art '*.signal.art' \
+		whatsapp.com '*.whatsapp.com' whatsapp.net '*.whatsapp.net' wa.me '*.wa.me' \
 		viber.com '*.viber.com' viber.co '*.viber.co' viber.me '*.viber.me' \
 		facetime.apple.com '*.facetime.apple.com' \
 		snapchat.com '*.snapchat.com' sc-cdn.net '*.sc-cdn.net'; do
 		grep -Fqx "$protected_domain" "$ALWAYS_VPN_DOMAINS_FILE" 2>/dev/null || \
 			printf '%s\n' "$protected_domain" >> "$ALWAYS_VPN_DOMAINS_FILE"
 	done
-	if [ ! -s "$ALWAYS_VPN_CIDRS_FILE" ]; then
-		cat > "$ALWAYS_VPN_CIDRS_FILE" <<'EOF'
-91.108.4.0/22
-91.108.8.0/22
-91.108.12.0/22
-91.108.16.0/22
-91.108.20.0/22
-91.108.56.0/22
-149.154.160.0/20
-EOF
-	fi
+	for protected_cidr in \
+		91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 \
+		91.108.20.0/22 91.108.56.0/22 149.154.160.0/20; do
+		grep -Fqx "$protected_cidr" "$ALWAYS_VPN_CIDRS_FILE" 2>/dev/null || \
+			printf '%s\n' "$protected_cidr" >> "$ALWAYS_VPN_CIDRS_FILE"
+	done
 }
 
 apply_protected_dns_forwarding() {
 	[ -s "$DNS_PROXY_READY_FILE" ] || return 0
 	[ -x /etc/shpun/dns-xray.sh ] || return 0
 	/etc/shpun/dns-xray.sh apply || log "failed to synchronize DNS forwarding through Xray"
+}
+
+enable_protected_dns_forwarding() {
+	[ -s "$ENGINE_CONFIG" ] || return 0
+	grep -q '"tag": "dns-in"' "$ENGINE_CONFIG" 2>/dev/null || return 0
+
+	echo "ok" > "$DNS_PROXY_READY_FILE"
+	apply_protected_dns_forwarding
+}
+
+disable_protected_dns_forwarding() {
+	rm -f "$DNS_PROXY_READY_FILE"
+	[ -x /etc/shpun/dns-xray.sh ] && /etc/shpun/dns-xray.sh clear || true
+}
+
+disable_dead_vpn_path() {
+	disable_protected_dns_forwarding
+
+	if [ -x /etc/init.d/shpun-vpn ]; then
+		/etc/init.d/shpun-vpn stop >/dev/null 2>&1 || true
+	elif [ -x /etc/shpun/firewall-xray.sh ]; then
+		/etc/shpun/firewall-xray.sh stop >/dev/null 2>&1 || true
+	fi
+
+	rm -f "$VPN_READY_FILE" "$UDP_READY_FILE"
 }
 
 ensure_router_code() {
@@ -353,11 +427,14 @@ load_conf() {
 	[ -z "$REDIR_PORT" ]            && REDIR_PORT="$REDIR_PORT_DEFAULT"
 	[ -z "$TPROXY_PORT" ]           && TPROXY_PORT="$TPROXY_PORT_DEFAULT"
 	[ -z "$TPROXY_MARK" ]           && TPROXY_MARK="$TPROXY_MARK_DEFAULT"
+	[ -z "$TPROXY_TABLE" ]          && TPROXY_TABLE="$TPROXY_TABLE_DEFAULT"
 	[ -z "$HTTP_PROXY_PORT" ]       && HTTP_PROXY_PORT="$HTTP_PROXY_PORT_DEFAULT"
 	[ -z "$DNS_PROXY_PORT" ]        && DNS_PROXY_PORT="$DNS_PROXY_PORT_DEFAULT"
 	[ -z "$TUNNEL_PROBE_INTERVAL" ] && TUNNEL_PROBE_INTERVAL="$TUNNEL_PROBE_INTERVAL_DEFAULT"
 	[ -z "$TUNNEL_FAIL_TIMEOUT" ]   && TUNNEL_FAIL_TIMEOUT="$TUNNEL_FAIL_TIMEOUT_DEFAULT"
 	[ -z "$TUNNEL_PROBE_URL" ]      && TUNNEL_PROBE_URL="${KEEPALIVE_URL:-$TUNNEL_PROBE_URL_DEFAULT}"
+	[ -z "$TUNNEL_PROBE_FALLBACK_URL" ] && TUNNEL_PROBE_FALLBACK_URL="$TUNNEL_PROBE_FALLBACK_URL_DEFAULT"
+	[ -z "$TUNNEL_PROBE_SECONDARY_URL" ] && TUNNEL_PROBE_SECONDARY_URL="$TUNNEL_PROBE_SECONDARY_URL_DEFAULT"
 
 	case "$REDIR_PORT" in
 		''|*[!0-9]*) REDIR_PORT="$REDIR_PORT_DEFAULT" ;;
@@ -371,6 +448,9 @@ load_conf() {
 		TPROXY_PORT="$TPROXY_PORT_DEFAULT"
 	case "$TPROXY_MARK" in
 		''|*[!0-9]*) TPROXY_MARK="$TPROXY_MARK_DEFAULT" ;;
+	esac
+	case "$TPROXY_TABLE" in
+		''|*[!0-9]*) TPROXY_TABLE="$TPROXY_TABLE_DEFAULT" ;;
 	esac
 	case "$HTTP_PROXY_PORT" in
 		''|*[!0-9]*) HTTP_PROXY_PORT="$HTTP_PROXY_PORT_DEFAULT" ;;
@@ -883,6 +963,65 @@ ensure_selected_link_valid() {
 	fi
 }
 
+install_updated_subscription_candidate() {
+	local candidate="$1"
+	local label="$2"
+	local backup selected_before
+
+	[ -s "$candidate" ] || return 1
+	[ -s "$SUB_FILE" ] || return 1
+
+	if ! config_lock_acquire; then
+		log "$label: timed out waiting for xray config lock"
+		rm -f "$candidate"
+		echo "config_busy" > "$VERROR_FILE"
+		return 1
+	fi
+
+	backup="${SUB_FILE}.previous.$$"
+	selected_before="$(cat "$STATE_DIR/selected_link_index" 2>/dev/null | tr -d '\r\n ' || true)"
+	case "$selected_before" in
+		''|*[!0-9]*) selected_before=0 ;;
+	esac
+
+	rm -f "$backup"
+	if ! cp "$SUB_FILE" "$backup" 2>/dev/null; then
+		log "$label: failed to back up active subscription"
+		rm -f "$candidate"
+		echo "subscription_backup_failed" > "$VERROR_FILE"
+		config_lock_release
+		return 1
+	fi
+
+	if ! mv "$candidate" "$SUB_FILE"; then
+		rm -f "$backup" "$candidate"
+		log "$label: failed to install candidate subscription"
+		echo "subscription_install_failed" > "$VERROR_FILE"
+		config_lock_release
+		return 1
+	fi
+
+	ensure_selected_link_valid
+
+	SHPUN_CONFIG_LOCK_HELD=1
+	ensure_vpn_from_subscription
+	ensure_rc=$?
+	SHPUN_CONFIG_LOCK_HELD=0
+
+	if [ "$ensure_rc" -eq 0 ]; then
+		rm -f "$backup"
+		log "$label: candidate accepted"
+		config_lock_release
+		return 0
+	fi
+
+	mv "$backup" "$SUB_FILE"
+	printf '%s\n' "$selected_before" > "$STATE_DIR/selected_link_index"
+	log "$label: candidate rejected, active subscription restored"
+	config_lock_release
+	return 1
+}
+
 restart_vpn() {
 	if [ ! -x /etc/init.d/shpun-vpn ]; then
 		log "shpun-vpn init script not found"
@@ -1162,6 +1301,7 @@ fetch_always_vpn_file_once() {
 	echo "$remote_sha" > "$sha_file"
 	echo "$remote_ver" > "$version_file"
 	rm -f "$tmp_sha"
+	ensure_routes_dir
 
 	log "$label: updated to version $remote_ver"
 	return 2
@@ -1312,6 +1452,12 @@ wait_vpn_started() {
 	return 1
 }
 
+validate_engine_config() {
+	[ -x "$ENGINE_BIN" ] || return 1
+	[ -s "$ENGINE_CONFIG" ] || return 1
+	"$ENGINE_BIN" run -test -config "$ENGINE_CONFIG" >/dev/null 2>&1
+}
+
 is_vpn_process_running() {
 	local engine_base
 	local config_base
@@ -1335,7 +1481,31 @@ check_internet() {
 	[ "$PING_HOST" != "1.1.1.1" ] && ping -c1 -W1 1.1.1.1 >/dev/null 2>&1 && return 0
 	[ "$PING_HOST" != "8.8.8.8" ] && ping -c1 -W1 8.8.8.8 >/dev/null 2>&1 && return 0
 
+	detect_http_client
+	[ -n "$HTTP_BIN" ] || return 1
+	probe_url_direct "$TUNNEL_PROBE_FALLBACK_URL" && return 0
+	probe_url_direct "$TUNNEL_PROBE_SECONDARY_URL" && return 0
+
 	return 1
+}
+
+probe_url_direct() {
+	local url="$1"
+
+	case "$HTTP_BIN" in
+		curl)
+			curl -fsS -m 5 -o /dev/null "$url" >/dev/null 2>&1
+			;;
+		wget)
+			wget -q -T 5 -O /dev/null "$url" >/dev/null 2>&1
+			;;
+		uclient-fetch)
+			uclient-fetch -q -T 5 -O /dev/null "$url" >/dev/null 2>&1
+			;;
+		*)
+			return 1
+			;;
+	esac
 }
 
 probe_url_through_tunnel() {
@@ -1366,24 +1536,38 @@ check_tunnel_connectivity() {
 
 	probe_url_through_tunnel "$TUNNEL_PROBE_URL" && return 0
 
-	if [ "$TUNNEL_PROBE_URL" != "$TUNNEL_PROBE_URL_DEFAULT" ]; then
-		probe_url_through_tunnel "$TUNNEL_PROBE_URL_DEFAULT" && return 0
+	if [ "$TUNNEL_PROBE_FALLBACK_URL" != "$TUNNEL_PROBE_URL" ]; then
+		probe_url_through_tunnel "$TUNNEL_PROBE_FALLBACK_URL" && return 0
+	fi
+
+	if [ "$TUNNEL_PROBE_SECONDARY_URL" != "$TUNNEL_PROBE_URL" ] &&
+		[ "$TUNNEL_PROBE_SECONDARY_URL" != "$TUNNEL_PROBE_FALLBACK_URL" ]; then
+		probe_url_through_tunnel "$TUNNEL_PROBE_SECONDARY_URL" && return 0
 	fi
 
 	return 1
 }
 
 ensure_transparent_rules() {
-	local repair=0
+	local repair=0 mode tcp_rules udp_rules
 
 	[ -x /etc/shpun/firewall-xray.sh ] || return 0
 	command -v nft >/dev/null 2>&1 || return 0
 
-	nft list chain inet shpun prerouting 2>/dev/null | grep -q "redirect to :${REDIR_PORT}" || repair=1
+	mode="$(get_routing_mode)"
+	tcp_rules="$(nft list chain inet shpun prerouting 2>/dev/null || true)"
+	printf '%s\n' "$tcp_rules" | grep -q "@always_vpn.*redirect to :${REDIR_PORT}" || repair=1
+	printf '%s\n' "$tcp_rules" | grep -q "tcp dport != ${REDIR_PORT}.*redirect to :${REDIR_PORT}" || repair=1
+	if [ "$mode" = "split_ru" ]; then
+		printf '%s\n' "$tcp_rules" | grep -q "@ru_dst.*return" || repair=1
+	fi
 
 	if [ -s "$UDP_READY_FILE" ]; then
-		nft list chain inet shpun prerouting_mangle 2>/dev/null | grep -q "tproxy.*:${TPROXY_PORT}" || repair=1
+		udp_rules="$(nft list chain inet shpun prerouting_mangle 2>/dev/null || true)"
+		printf '%s\n' "$udp_rules" | grep -q "@always_vpn.*tproxy.*:${TPROXY_PORT}" || repair=1
+		printf '%s\n' "$udp_rules" | grep -q "meta l4proto udp tproxy.*:${TPROXY_PORT}" || repair=1
 		ip rule show 2>/dev/null | grep -q "fwmark 0x${TPROXY_MARK}" || repair=1
+		ip route show table "$TPROXY_TABLE" 2>/dev/null | grep -q "local default dev lo" || repair=1
 	fi
 
 	[ "$repair" -eq 0 ] && return 0
@@ -1593,18 +1777,18 @@ refresh_subscription_from_url() {
 		return 0
 	fi
 
-	mv "$tmp_sub" "$SUB_FILE"
-	ensure_selected_link_valid
-	log "subscription refresh: updated"
 	date +%s > "$LAST_CHECK_FILE"
-	rm -f "$VERROR_FILE"
+	if install_updated_subscription_candidate "$tmp_sub" "subscription refresh"; then
+		log "subscription refresh: updated"
+		return 0
+	fi
 
-	ensure_vpn_from_subscription || true
-	return 0
+	log "subscription refresh: update rejected, keeping active subscription"
+	return 1
 }
 
 ensure_vpn_from_subscription() {
-	local old_config_sha active_config_sha new_config_sha vpn_was_running
+	local old_config_sha active_config_sha new_config_sha vpn_was_running config_backup config_lock_owned=0
 
 	if [ ! -s "$SUB_FILE" ]; then
 		log "ensure_vpn_from_subscription: $SUB_FILE not found"
@@ -1617,21 +1801,35 @@ ensure_vpn_from_subscription() {
 
 	ensure_routes_ready
 
+	vpn_was_running=0
+	if [ -s "$VPN_READY_FILE" ] && is_vpn_process_running; then
+		vpn_was_running=1
+	fi
+
 	if ! engine_download; then
 		log "engine_download failed in ensure_vpn_from_subscription"
 		echo "engine_download_failed" > "$VERROR_FILE"
-		rm -f "$VPN_READY_FILE"
+		[ "$vpn_was_running" = "1" ] || rm -f "$VPN_READY_FILE"
 		return 1
 	fi
 
 	if [ ! -x /etc/shpun/build-config.sh ]; then
 		log "/etc/shpun/build-config.sh not found or not executable"
 		echo "build_script_missing" > "$VERROR_FILE"
-		rm -f "$VPN_READY_FILE"
+		[ "$vpn_was_running" = "1" ] || rm -f "$VPN_READY_FILE"
 		return 1
 	fi
 
 	ensure_tproxy_modules || true
+
+	if [ "$SHPUN_CONFIG_LOCK_HELD" != "1" ]; then
+		if ! config_lock_acquire; then
+			echo "config_busy" > "$VERROR_FILE"
+			[ "$vpn_was_running" = "1" ] || rm -f "$VPN_READY_FILE"
+			return 1
+		fi
+		config_lock_owned=1
+	fi
 
 	old_config_sha=""
 	[ -s "$ENGINE_CONFIG" ] && old_config_sha="$(calc_sha256_file "$ENGINE_CONFIG" 2>/dev/null || true)"
@@ -1640,19 +1838,44 @@ ensure_vpn_from_subscription() {
 		''|*[!0-9a-fA-F]*) active_config_sha="$old_config_sha" ;;
 	esac
 
-	vpn_was_running=0
-	if [ -s "$VPN_READY_FILE" ] && is_vpn_process_running; then
-		vpn_was_running=1
+	config_backup="${ENGINE_CONFIG}.previous.$$"
+	rm -f "$config_backup"
+	if [ -s "$ENGINE_CONFIG" ] && ! cp "$ENGINE_CONFIG" "$config_backup" 2>/dev/null; then
+		log "failed to back up current xray config before rebuild"
+		echo "config_backup_failed" > "$VERROR_FILE"
+		[ "$vpn_was_running" = "1" ] || rm -f "$VPN_READY_FILE"
+		config_lock_release_if_owned "$config_lock_owned"
+		return 1
 	fi
 
 	log "building xray config from subscription.json"
 
 	if ! /etc/shpun/build-config.sh; then
 		log "build-config.sh failed"
+		if [ -s "$config_backup" ]; then
+			mv "$config_backup" "$ENGINE_CONFIG"
+		else
+			rm -f "$ENGINE_CONFIG" "$config_backup"
+		fi
 		echo "build_config_failed" > "$VERROR_FILE"
-		rm -f "$VPN_READY_FILE"
+		[ "$vpn_was_running" = "1" ] || rm -f "$VPN_READY_FILE"
+		config_lock_release_if_owned "$config_lock_owned"
 		return 1
 	fi
+
+	if ! validate_engine_config; then
+		log "generated xray config failed xray validation, restoring previous config"
+		if [ -s "$config_backup" ]; then
+			mv "$config_backup" "$ENGINE_CONFIG"
+		else
+			rm -f "$ENGINE_CONFIG" "$config_backup"
+		fi
+		echo "xray_config_invalid" > "$VERROR_FILE"
+		[ "$vpn_was_running" = "1" ] || rm -f "$VPN_READY_FILE"
+		config_lock_release_if_owned "$config_lock_owned"
+		return 1
+	fi
+	rm -f "$config_backup"
 
 	new_config_sha=""
 	[ -s "$ENGINE_CONFIG" ] && new_config_sha="$(calc_sha256_file "$ENGINE_CONFIG" 2>/dev/null || true)"
@@ -1666,6 +1889,7 @@ ensure_vpn_from_subscription() {
 		rm -f "$VERROR_FILE"
 		rm -f "$CONFIG_PENDING_FILE"
 		log "xray config unchanged after subscription refresh, keeping running shpun-vpn"
+		config_lock_release_if_owned "$config_lock_owned"
 		return 0
 	fi
 
@@ -1674,6 +1898,7 @@ ensure_vpn_from_subscription() {
 		echo "ok" > "$VPN_READY_FILE"
 		rm -f "$VERROR_FILE"
 		log "xray config changed after subscription refresh, deferring shpun-vpn restart to avoid dropping active sessions"
+		config_lock_release_if_owned "$config_lock_owned"
 		return 0
 	fi
 
@@ -1681,15 +1906,16 @@ ensure_vpn_from_subscription() {
 		log "restart_vpn failed, not marking vpn_ready"
 		echo "restart_vpn_failed" > "$VERROR_FILE"
 		rm -f "$VPN_READY_FILE"
+		config_lock_release_if_owned "$config_lock_owned"
 		return 1
 	fi
 
 	if ! wait_vpn_started; then
 		log "xray did not start successfully, not marking vpn_ready"
-		rm -f "$DNS_PROXY_READY_FILE"
-		[ -x /etc/shpun/dns-xray.sh ] && /etc/shpun/dns-xray.sh clear || true
+		disable_protected_dns_forwarding
 		echo "xray_failed_to_start" > "$VERROR_FILE"
 		rm -f "$VPN_READY_FILE"
+		config_lock_release_if_owned "$config_lock_owned"
 		return 1
 	fi
 
@@ -1697,10 +1923,10 @@ ensure_vpn_from_subscription() {
 	[ -n "$new_config_sha" ] && echo "$new_config_sha" > "$CONFIG_ACTIVE_FILE"
 	rm -f "$VERROR_FILE"
 	rm -f "$CONFIG_PENDING_FILE"
-	echo "ok" > "$DNS_PROXY_READY_FILE"
-	apply_protected_dns_forwarding
+	enable_protected_dns_forwarding
 	log "vpn_ready marked in $VPN_READY_FILE"
 
+	config_lock_release_if_owned "$config_lock_owned"
 	return 0
 }
 
@@ -1828,17 +2054,17 @@ check_subscription_alive() {
 		new_sha="$(calc_sha256_file "$tmp_sub")"
 
 		if [ -s "$tmp_sub" ] && [ "$new_sha" != "$old_sha" ]; then
-			mv "$tmp_sub" "$SUB_FILE"
-			ensure_selected_link_valid
 			log "subscription_alive: ok=1, subscription.json changed, refreshing effective xray config"
-			ensure_vpn_from_subscription || true
+			if ! install_updated_subscription_candidate "$tmp_sub" "subscription_alive"; then
+				log "subscription_alive: invalid update rejected, current subscription kept"
+			fi
 		else
 			rm -f "$tmp_sub"
 			ensure_selected_link_valid
 			log "subscription_alive: ok=1, subscription.json unchanged"
+			rm -f "$VERROR_FILE"
 		fi
 		echo "$now_ts" > "$LAST_CHECK_FILE"
-		rm -f "$VERROR_FILE"
 		return 0
 	fi
 
@@ -1884,20 +2110,25 @@ vpn_sanity_check() {
 	fi
 
 	if [ ! -x "$ENGINE_BIN" ] || [ ! -s "$ENGINE_CONFIG" ]; then
-		log "vpn_sanity_check: engine or config missing → reset vpn_ready"
-		rm -f "$VPN_READY_FILE"
+		log "vpn_sanity_check: engine or config missing; removing dead transparent path"
+		disable_dead_vpn_path
 		rm -f "$fail_file"
 		return
 	fi
 
 	if is_vpn_process_running; then
 		rm -f "$fail_file"
+		if [ ! -s "$CONFIG_PENDING_FILE" ] && [ ! -s "$DNS_PROXY_READY_FILE" ]; then
+			enable_protected_dns_forwarding
+		fi
 		if [ ! -s "$CONFIG_PENDING_FILE" ] && [ -s "$ENGINE_CONFIG" ]; then
 			current_config_sha="$(calc_sha256_file "$ENGINE_CONFIG" 2>/dev/null || true)"
 			[ -n "$current_config_sha" ] && echo "$current_config_sha" > "$CONFIG_ACTIVE_FILE"
 		fi
 		return
 	fi
+
+	disable_protected_dns_forwarding
 
 	if [ -f "$fail_file" ]; then
 		fail_count="$(cat "$fail_file" 2>/dev/null || echo 0)"
@@ -1916,8 +2147,8 @@ vpn_sanity_check() {
 		return
 	fi
 
-	log "vpn_sanity_check: FAIL LIMIT reached → reset vpn_ready"
-	rm -f "$VPN_READY_FILE"
+	log "vpn_sanity_check: FAIL LIMIT reached; removing dead transparent path before recovery"
+	disable_dead_vpn_path
 	rm -f "$fail_file"
 }
 
@@ -1950,6 +2181,14 @@ main_loop() {
 			fi
 		fi
 
+		if [ -s "$VPN_READY_FILE" ] && is_vpn_process_running; then
+			if [ ! -s "$CONFIG_PENDING_FILE" ] && [ ! -s "$DNS_PROXY_READY_FILE" ]; then
+				enable_protected_dns_forwarding
+			fi
+			apply_protected_dns_forwarding
+			ensure_transparent_rules || true
+		fi
+
 		UPTIME_SECS="$(get_uptime_secs)"
 		if [ "$UPTIME_SECS" -lt "$MIN_UPTIME" ]; then
 			log "uptime ${UPTIME_SECS}s < ${MIN_UPTIME}s, waiting before managing VPN"
@@ -1960,10 +2199,6 @@ main_loop() {
 		vpn_sanity_check
 
 		if [ -s "$VPN_READY_FILE" ]; then
-			if is_vpn_process_running; then
-				apply_protected_dns_forwarding
-				ensure_transparent_rules || true
-			fi
 			if check_internet; then
 				[ "$NET_FAIL_SECONDS" -gt 0 ] && log "internet is back, resetting fail counter (was ${NET_FAIL_SECONDS}s)"
 				NET_FAIL_SECONDS=0

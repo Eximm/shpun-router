@@ -479,6 +479,10 @@ case "$ROUTER_PROTO" in
                 ;;
         esac
 
+        METHOD_JSON="$(json_escape "$METHOD")"
+        PASSWORD_JSON="$(json_escape "$PASSWORD")"
+        SERVER_JSON="$(json_escape "$SERVER")"
+
         cat >"$OUT_CFG" <<EOF
 {
   "log": {
@@ -530,7 +534,8 @@ case "$ROUTER_PROTO" in
       },
       "sniffing": {
         "enabled": true,
-        "destOverride": ["http", "tls"]
+        "destOverride": ["http", "tls"],
+        "routeOnly": true
       }
     },
     {
@@ -548,7 +553,9 @@ case "$ROUTER_PROTO" in
         }
       },
       "sniffing": {
-        "enabled": false
+        "enabled": true,
+        "destOverride": ["quic"],
+        "routeOnly": true
       }
     }
   ],
@@ -560,10 +567,10 @@ case "$ROUTER_PROTO" in
       "settings": {
         "servers": [
           {
-            "address": "$SERVER",
+            "address": "$SERVER_JSON",
             "port": $PORT,
-            "method": "$METHOD",
-            "password": "$PASSWORD",
+            "method": "$METHOD_JSON",
+            "password": "$PASSWORD_JSON",
             "udp": true
           }
         ]
@@ -590,11 +597,14 @@ case "$ROUTER_PROTO" in
         "ip": [
           "127.0.0.0/8",
           "10.0.0.0/8",
+          "169.254.0.0/16",
           "172.16.0.0/12",
-          "192.168.0.0/16"
+          "192.168.0.0/16",
+          "224.0.0.0/4",
+          "255.255.255.255/32"
         ],
         "domain": [
-          "$SERVER"
+          "$SERVER_JSON"
         ]
       },
 $ALWAYS_VPN_RULE
@@ -672,8 +682,19 @@ EOF
                 ;;
         esac
 
+        UUID_JSON="$(json_escape "$UUID")"
+        SERVER_JSON="$(json_escape "$SERVER")"
+        TYPE_JSON="$(json_escape "$TYPE")"
+        FP_JSON="$(json_escape "$FP")"
+        PBK_JSON="$(json_escape "$PBK")"
+        SID_JSON="$(json_escape "$SID")"
+        FLOW_JSON="$(json_escape "$FLOW")"
+        SNI_JSON="$(json_escape "$SNI")"
+        ENCRYPTION_JSON="$(json_escape "$ENCRYPTION")"
+        HEADER_TYPE_JSON="$(json_escape "$HEADER_TYPE")"
+
         if [ -n "$FLOW" ]; then
-            USER_FLOW_LINE=",\n                \"flow\": \"$FLOW\""
+            USER_FLOW_LINE=",\n                \"flow\": \"$FLOW_JSON\""
         else
             USER_FLOW_LINE=""
         fi
@@ -683,7 +704,7 @@ EOF
             TCP_HEADER_BLOCK=$(cat <<EOF
         "tcpSettings": {
           "header": {
-            "type": "$HEADER_TYPE"
+            "type": "$HEADER_TYPE_JSON"
           }
         },
 EOF
@@ -697,14 +718,14 @@ EOF
             }
             STREAM_SETTINGS=$(cat <<EOF
       "streamSettings": {
-        "network": "$TYPE",
+        "network": "$TYPE_JSON",
         "security": "reality",
 $TCP_HEADER_BLOCK        "realitySettings": {
           "show": false,
-          "fingerprint": "$FP",
-          "serverName": "$SNI",
-          "publicKey": "$PBK",
-          "shortId": "$SID",
+          "fingerprint": "$FP_JSON",
+          "serverName": "$SNI_JSON",
+          "publicKey": "$PBK_JSON",
+          "shortId": "$SID_JSON",
           "spiderX": "/"
         }
       }
@@ -713,11 +734,11 @@ EOF
         elif [ "$SECURITY" = "tls" ]; then
             STREAM_SETTINGS=$(cat <<EOF
       "streamSettings": {
-        "network": "$TYPE",
+        "network": "$TYPE_JSON",
         "security": "tls",
 $TCP_HEADER_BLOCK        "tlsSettings": {
-          "serverName": "$SNI",
-          "fingerprint": "$FP",
+          "serverName": "$SNI_JSON",
+          "fingerprint": "$FP_JSON",
           "allowInsecure": false
         }
       }
@@ -726,7 +747,7 @@ EOF
         else
             STREAM_SETTINGS=$(cat <<EOF
       "streamSettings": {
-        "network": "$TYPE",
+        "network": "$TYPE_JSON",
         "security": "none"
       }
 EOF
@@ -786,7 +807,8 @@ EOF
       },
       "sniffing": {
         "enabled": true,
-        "destOverride": ["http", "tls"]
+        "destOverride": ["http", "tls"],
+        "routeOnly": true
       }
     },
     {
@@ -804,7 +826,9 @@ EOF
         }
       },
       "sniffing": {
-        "enabled": false
+        "enabled": true,
+        "destOverride": ["quic"],
+        "routeOnly": true
       }
     }
   ],
@@ -816,12 +840,12 @@ EOF
       "settings": {
         "vnext": [
           {
-            "address": "$SERVER",
+            "address": "$SERVER_JSON",
             "port": $PORT,
             "users": [
               {
-                "id": "$UUID",
-                "encryption": "$ENCRYPTION"$USER_FLOW_LINE
+                "id": "$UUID_JSON",
+                "encryption": "$ENCRYPTION_JSON"$USER_FLOW_LINE
               }
             ]
           }
@@ -850,11 +874,14 @@ $STREAM_SETTINGS
         "ip": [
           "127.0.0.0/8",
           "10.0.0.0/8",
+          "169.254.0.0/16",
           "172.16.0.0/12",
-          "192.168.0.0/16"
+          "192.168.0.0/16",
+          "224.0.0.0/4",
+          "255.255.255.255/32"
         ],
         "domain": [
-          "$SERVER"
+          "$SERVER_JSON"
         ]
       },
 $ALWAYS_VPN_RULE

@@ -2,7 +2,8 @@
 
 CONF="/etc/shpun/agent.conf"
 DOMAINS_FILE="/etc/shpun/routes/presets/always_vpn.domains"
-TRACK_FILE="/etc/shpun/routes/presets/always_vpn.dnsmasq"
+CUSTOM_ROUTES_FILE="/etc/shpun/routes/custom.json"
+TRACK_FILE="/tmp/shpun-always-vpn.dnsmasq"
 LOGTAG="shpun-dns"
 
 DNS_PROXY_PORT_DEFAULT=1053
@@ -28,7 +29,6 @@ dnsmasq_available() {
 }
 
 reload_dnsmasq() {
-	uci commit dhcp
 	/etc/init.d/dnsmasq reload >/dev/null 2>&1 || /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
 }
 
@@ -60,17 +60,45 @@ apply_forwarding() {
 	tmp="${TRACK_FILE}.tmp.$$"
 	rm -f "$tmp"
 
-	while IFS= read -r raw_domain; do
+	append_domain_forwarding() {
+		local oldifs octet numeric_labels=1
+		raw_domain="$1"
 		domain="$(printf '%s' "$raw_domain" | tr -d ' \t\r\n')"
 		case "$domain" in
-			''|\#*) continue ;;
+			''|\#*) return ;;
 			\*.*) domain="${domain#*.}" ;;
 		esac
-		case "$domain" in *.*) ;; *) continue ;; esac
+		case "$domain" in *[!A-Za-z0-9.-]*) return ;; esac
+		case "$domain" in *.*) ;; *) return ;; esac
+
+		oldifs="$IFS"
+		IFS='.'
+		set -- $domain
+		IFS="$oldifs"
+		if [ "$#" -eq 4 ]; then
+			for octet in "$@"; do
+				case "$octet" in
+					''|*[!0-9]*) numeric_labels=0 ;;
+				esac
+				[ "$octet" -le 255 ] 2>/dev/null || numeric_labels=0
+			done
+			[ "$numeric_labels" -eq 1 ] && return
+		fi
 
 		forwarding="/$domain/127.0.0.1#$DNS_PROXY_PORT"
 		grep -Fqx "$forwarding" "$tmp" 2>/dev/null || printf '%s\n' "$forwarding" >> "$tmp"
+	}
+
+	while IFS= read -r raw_domain; do
+		append_domain_forwarding "$raw_domain"
 	done < "$DOMAINS_FILE"
+
+	if [ -s "$CUSTOM_ROUTES_FILE" ] && command -v jsonfilter >/dev/null 2>&1; then
+		jsonfilter -i "$CUSTOM_ROUTES_FILE" -e '@.vpn[*]' 2>/dev/null | tr -d '"' | \
+		while IFS= read -r raw_domain; do
+			append_domain_forwarding "$raw_domain"
+		done
+	fi
 
 	[ -s "$tmp" ] || {
 		rm -f "$tmp"
@@ -99,7 +127,7 @@ apply_forwarding() {
 
 	if [ "$changed" -eq 1 ]; then
 		reload_dnsmasq
-		log "protected DNS now uses Xray on 127.0.0.1:$DNS_PROXY_PORT"
+		log "VPN domain DNS now uses Xray on 127.0.0.1:$DNS_PROXY_PORT"
 	fi
 }
 

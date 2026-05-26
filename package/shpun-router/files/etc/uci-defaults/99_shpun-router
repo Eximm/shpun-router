@@ -12,42 +12,19 @@ uci commit rpcd
 # ==========================
 # 2. Почистить старый интерфейс network.vpn (tun0) от старых версий пакета
 # ==========================
+NETWORK_CHANGED=0
 if [ "$(uci -q get network.vpn.ifname)" = "tun0" ] && \
    [ "$(uci -q get network.vpn.proto)" = "none" ]; then
     uci -q delete network.vpn
     uci commit network
+    NETWORK_CHANGED=1
 fi
 
 # В новой Xray-схеме мы не создаём tun0 и network.vpn — работаем через
 # прозрачный dokodemo-door + nftables REDIRECT.
 
 # ==========================
-# 3. Отключить IPv6 на LAN/WAN + DHCPv6/RA
-# ==========================
-if uci -q get network.lan >/dev/null 2>&1; then
-    uci set network.lan.ipv6='0'
-fi
-if uci -q get network.wan >/dev/null 2>&1; then
-    uci set network.wan.ipv6='0'
-fi
-
-if uci -q get dhcp.lan >/dev/null 2>&1; then
-    uci set dhcp.lan.dhcpv6='disabled'
-    uci set dhcp.lan.ra='disabled'
-    uci set dhcp.lan.ndp='disabled'
-fi
-
-if uci -q get dhcp.wan >/dev/null 2>&1; then
-    uci set dhcp.wan.dhcpv6='disabled'
-    uci set dhcp.wan.ra='disabled'
-    uci set dhcp.wan.ndp='disabled'
-fi
-
-uci commit dhcp
-uci commit network
-
-# ==========================
-# 4. Инициализация routing state
+# 3. Инициализация routing state
 # ==========================
 mkdir -p /etc/shpun/routes 2>/dev/null || true
 [ -f /etc/shpun/routes/mode ] || echo "full" > /etc/shpun/routes/mode
@@ -57,18 +34,16 @@ mkdir -p /etc/shpun/routes 2>/dev/null || true
 [ -f /etc/shpun/routes/ru.cidrs ] || : > /etc/shpun/routes/ru.cidrs
 
 # ==========================
-# 5. Отложенные рестарты
+# 4. Отложенная активация rpcd и очистки старой сети
 # ==========================
 (
     sleep 5
     /etc/init.d/rpcd restart >/dev/null 2>&1 || true
-    /etc/init.d/network restart >/dev/null 2>&1 || true
-    /etc/init.d/firewall restart >/dev/null 2>&1 || true
-    /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
+    [ "$NETWORK_CHANGED" = "1" ] && /etc/init.d/network reload >/dev/null 2>&1 || true
 ) &
 
 # ==========================
-# 6. Удаляем себя
+# 5. Удаляем себя
 # ==========================
 rm -f /etc/uci-defaults/99_shpun-router
 

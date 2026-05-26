@@ -25,6 +25,23 @@ log() {
 lock_acquire() {
     i=0
     while ! mkdir "$LOCKDIR" 2>/dev/null; do
+        lock_pid="$(cat "$LOCKDIR/pid" 2>/dev/null || true)"
+        case "$lock_pid" in
+            ''|*[!0-9]*)
+                if [ "$i" -ge 2 ]; then
+                    rm -f "$LOCKDIR/pid" 2>/dev/null
+                    rmdir "$LOCKDIR" 2>/dev/null || true
+                    continue
+                fi
+                ;;
+            *)
+                if ! kill -0 "$lock_pid" 2>/dev/null; then
+                    rm -f "$LOCKDIR/pid" 2>/dev/null
+                    rmdir "$LOCKDIR" 2>/dev/null || true
+                    continue
+                fi
+                ;;
+        esac
         i=$((i + 1))
         [ "$i" -gt 120 ] && {
             log "failed to acquire firewall lock"
@@ -33,7 +50,8 @@ lock_acquire() {
         sleep 1
     done
 
-    trap 'rmdir "$LOCKDIR" 2>/dev/null' EXIT INT TERM
+    echo "$$" > "$LOCKDIR/pid"
+    trap 'rm -f "$LOCKDIR/pid" 2>/dev/null; rmdir "$LOCKDIR" 2>/dev/null' EXIT INT TERM
     return 0
 }
 
@@ -295,6 +313,14 @@ nft_apply_tcp_rules() {
     nft flush chain inet shpun prerouting || return 1
 
     nft add rule inet shpun prerouting iifname "$LAN_IF" ip daddr "$LAN_IP" return || return 1
+    nft add rule inet shpun prerouting iifname "$LAN_IF" ip daddr 0.0.0.0/8 return || return 1
+    nft add rule inet shpun prerouting iifname "$LAN_IF" ip daddr 10.0.0.0/8 return || return 1
+    nft add rule inet shpun prerouting iifname "$LAN_IF" ip daddr 127.0.0.0/8 return || return 1
+    nft add rule inet shpun prerouting iifname "$LAN_IF" ip daddr 169.254.0.0/16 return || return 1
+    nft add rule inet shpun prerouting iifname "$LAN_IF" ip daddr 172.16.0.0/12 return || return 1
+    nft add rule inet shpun prerouting iifname "$LAN_IF" ip daddr 192.168.0.0/16 return || return 1
+    nft add rule inet shpun prerouting iifname "$LAN_IF" ip daddr 224.0.0.0/4 return || return 1
+    nft add rule inet shpun prerouting iifname "$LAN_IF" ip daddr 255.255.255.255 return || return 1
     nft add rule inet shpun prerouting iifname "$LAN_IF" ip daddr @always_vpn ip protocol tcp counter redirect to :"$REDIR_PORT" || return 1
     nft add rule inet shpun prerouting iifname "$LAN_IF" ip daddr @custom_vpn ip protocol tcp counter redirect to :"$REDIR_PORT" || return 1
     nft add rule inet shpun prerouting iifname "$LAN_IF" ip daddr @custom_direct counter return || return 1
@@ -317,6 +343,12 @@ nft_apply_udp_rules() {
     nft flush chain inet shpun prerouting_mangle || return 1
 
     nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" ip daddr "$LAN_IP" return || return 1
+    nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" ip daddr 0.0.0.0/8 return || return 1
+    nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" ip daddr 10.0.0.0/8 return || return 1
+    nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" ip daddr 127.0.0.0/8 return || return 1
+    nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" ip daddr 169.254.0.0/16 return || return 1
+    nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" ip daddr 172.16.0.0/12 return || return 1
+    nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" ip daddr 192.168.0.0/16 return || return 1
     nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" ip daddr 224.0.0.0/4 return || return 1
     nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" ip daddr 255.255.255.255 return || return 1
 
@@ -324,19 +356,23 @@ nft_apply_udp_rules() {
     nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" meta l4proto udp ip daddr @custom_vpn counter tproxy ip to :"$TPROXY_PORT" meta mark set "0x${TPROXY_MARK}" || return 1
     nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" ip daddr @custom_direct counter return || return 1
 
-    if [ "$MODE" = "split_ru" ]; then
-        nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" ip daddr @ru_dst return || return 1
-    fi
-
     nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" meta l4proto udp tproxy ip to :"$TPROXY_PORT" meta mark set "0x${TPROXY_MARK}" || return 1
 
     return 0
 }
 
 nft_apply_custom() {
-    if [ -x "$CUSTOM_SCRIPT" ]; then
-        "$CUSTOM_SCRIPT" apply || log "custom routes apply failed"
-    fi
+    [ -x "$CUSTOM_SCRIPT" ] || {
+        log "custom routes helper not found"
+        return 1
+    }
+
+    SHPUN_FIREWALL_LOCK_HELD=1 "$CUSTOM_SCRIPT" apply || {
+        log "custom routes apply failed"
+        return 1
+    }
+
+    return 0
 }
 
 nft_init() {
@@ -400,7 +436,13 @@ nft_init() {
         fi
     fi
 
-    nft_apply_custom
+    if ! nft_apply_custom; then
+        log "nft init: failed to apply custom routes"
+        rm -f "$UDP_READY_FILE"
+        nft delete table inet shpun 2>/dev/null
+        tproxy_routes_del
+        return 1
+    fi
 
     end_ts="$(date +%s 2>/dev/null || echo 0)"
     duration=$((end_ts - start_ts))

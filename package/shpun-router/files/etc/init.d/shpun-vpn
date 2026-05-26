@@ -61,10 +61,6 @@ start_service() {
     procd_set_param stderr 1
     procd_close_instance
 
-    echo "ok" > "$DNS_PROXY_READY_FILE"
-    if [ -x "$DNS_SCRIPT" ]; then
-        "$DNS_SCRIPT" apply || logger -t "$LOG_TAG" "dns-xray.sh apply failed"
-    fi
 }
 
 stop_service() {

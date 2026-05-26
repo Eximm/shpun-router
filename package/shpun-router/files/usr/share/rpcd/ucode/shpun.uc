@@ -30,6 +30,7 @@ const ROUTING_SETTER  = DIR + "/set-routing-mode.sh";
 
 const CUSTOM_FILE     = ROUTES_DIR + "/custom.json";
 const CUSTOM_SCRIPT   = DIR + "/apply-custom-routes.sh";
+const SERVER_SETTER   = DIR + "/switch-server.sh";
 
 function readfile(path) {
 	try {
@@ -89,7 +90,13 @@ function validate_ip_cidr(entry) {
 
 	if (slash >= 0) {
 		ip     = substr(entry, 0, slash);
-		prefix = int(substr(entry, slash + 1));
+		let prefix_raw = substr(entry, slash + 1);
+		if (!prefix_raw || length(prefix_raw) == 0) return false;
+		for (let i = 0; i < length(prefix_raw); i++) {
+			if (index("0123456789", substr(prefix_raw, i, 1)) < 0)
+				return false;
+		}
+		prefix = int(prefix_raw);
 		if (prefix < 0 || prefix > 32) return false;
 	} else {
 		ip     = entry;
@@ -586,14 +593,16 @@ return {
 					let warning = null;
 
 					if (exists(CUSTOM_SCRIPT)) {
-						let p = popen(CUSTOM_SCRIPT + " apply 2>&1");
+						let p = popen(CUSTOM_SCRIPT + " apply >/dev/null 2>&1 && echo ok || echo failed");
 						if (p) {
 							apply_output = p.read("all") || "";
 							p.close();
 						}
-						applied = true;
+						applied = trim(norm(apply_output)) == "ok";
+						if (!applied)
+							warning = "routes saved; live firewall apply is pending until VPN rules are available";
 					} else {
-						warning = "apply-custom-routes.sh not found — routes saved but not applied to firewall";
+						warning = "apply-custom-routes.sh not found; routes saved but not applied to firewall";
 					}
 
 					let needs_rebuild =
@@ -603,19 +612,12 @@ return {
 
 					if (needs_rebuild) {
 						let rp = popen(
-							"sh -c '" +
-								"/etc/shpun/build-config.sh >/dev/null 2>&1 && " +
-								"{ if command -v sha256sum >/dev/null 2>&1; then " +
-									"sha256sum " + DIR + "/xray.json 2>/dev/null | cut -d\" \" -f1 > " + CONFIG_PENDING + "; " +
-								"else " +
-									"date +%s > " + CONFIG_PENDING + "; " +
-								"fi; " +
-								"logger -t shpun-uc \"custom route domains saved; xray reload deferred\"; }; " +
-								"rm -f " + VERROR + " >/dev/null 2>&1" +
-							"' >/dev/null 2>&1 &"
+							"/etc/shpun/rebuild-config-deferred.sh >/dev/null 2>&1 &"
 						);
 						if (rp) rp.close();
-						warning = "domain routes saved; xray config rebuild deferred to avoid dropping active VPN sessions";
+						warning = applied
+							? "domain routes saved; xray config rebuild deferred to avoid dropping active VPN sessions"
+							: "routes saved; live firewall apply and xray config activation are pending";
 					}
 
 					return {
@@ -707,18 +709,15 @@ return {
 					if (idx == current)
 						return { ok: 1, selected: idx, unchanged: true };
 
-					let f = open(SELECTED_LINK, "w");
-					if (!f)
-						return { ok: 0, error: "cannot write selected link" };
-					f.write("" + idx + "\n");
-					f.close();
+					if (!exists(SERVER_SETTER))
+						return { ok: 0, error: "switch-server.sh not found" };
 
-					let p = popen(
-						"rm -f " + DIR + "/xray.json " + READY + " " + VERROR + " >/dev/null 2>&1; " +
-						"/etc/init.d/shpun-vpn stop >/dev/null 2>&1 || true; " +
-						"/etc/init.d/shpun-agent restart >/dev/null 2>&1 &"
-					);
-					if (p) p.close();
+					let p = popen(SERVER_SETTER + " " + idx + " 2>/dev/null");
+					let out = "";
+					if (p) { out = p.read("all") || ""; p.close(); }
+
+					if (trim(out) != "ok")
+						return { ok: 0, error: "server profile validation failed", output: out };
 
 					return { ok: 1, selected: idx };
 				} catch(e) {
@@ -807,7 +806,9 @@ return {
 
 					let p3 = popen(
 						"rm -f " + CODE + " " + SUB + " " +
-						DIR + "/xray.json " + READY + " " + VERROR + " " + LASTCHK +
+						DIR + "/xray.json " + READY + " " + VERROR + " " + LASTCHK + " " +
+						CONFIG_PENDING + " " + DIR + "/xray_config_active " +
+						DIR + "/dns_proxy_ready " + UDP_READY +
 						" >/dev/null 2>&1"
 					);
 					if (p3) p3.close();

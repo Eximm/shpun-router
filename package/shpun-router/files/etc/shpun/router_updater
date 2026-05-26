@@ -278,7 +278,7 @@ fi
 
 log "installing update from $TMP_IPK"
 
-if ! opkg install --force-reinstall "$TMP_IPK"; then
+if ! SHPUN_MANAGED_UPDATE=1 opkg install --force-reinstall "$TMP_IPK"; then
 	log "opkg failed"
 	rm -f "$TMP_IPK"
 	exit 1

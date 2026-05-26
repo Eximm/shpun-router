@@ -4,6 +4,17 @@ MODE="$1"
 MODE_FILE="/etc/shpun/routes/mode"
 LOGTAG="shpun-routing-mode"
 CONF="/etc/shpun/agent.conf"
+BUILD_SCRIPT="/etc/shpun/build-config.sh"
+FIREWALL_SCRIPT="/etc/shpun/firewall-xray.sh"
+DNS_SCRIPT="/etc/shpun/dns-xray.sh"
+ENGINE_BIN_DEFAULT="/tmp/xray"
+ENGINE_CONFIG_DEFAULT="/etc/shpun/xray.json"
+CONFIG_PENDING_FILE="/etc/shpun/xray_config_pending"
+CONFIG_ACTIVE_FILE="/etc/shpun/xray_config_active"
+VPN_READY_FILE="/etc/shpun/vpn_ready"
+DNS_PROXY_READY_FILE="/etc/shpun/dns_proxy_ready"
+VERROR_FILE="/etc/shpun/vpn_error"
+CONFIG_LOCKDIR="/tmp/shpun-config.lock"
 
 ROUTES_DIR="/etc/shpun/routes"
 ROUTES_CIDRS_FILE="$ROUTES_DIR/ru.cidrs"
@@ -23,11 +34,46 @@ log() {
     logger -t "$LOGTAG" "$*"
 }
 
+lock_config() {
+    i=0
+    while ! mkdir "$CONFIG_LOCKDIR" 2>/dev/null; do
+        lock_pid="$(cat "$CONFIG_LOCKDIR/pid" 2>/dev/null || true)"
+        case "$lock_pid" in
+            ''|*[!0-9]*)
+                if [ "$i" -ge 2 ]; then
+                    rm -f "$CONFIG_LOCKDIR/pid" 2>/dev/null
+                    rmdir "$CONFIG_LOCKDIR" 2>/dev/null || true
+                    continue
+                fi
+                ;;
+            *)
+                if ! kill -0 "$lock_pid" 2>/dev/null; then
+                    rm -f "$CONFIG_LOCKDIR/pid" 2>/dev/null
+                    rmdir "$CONFIG_LOCKDIR" 2>/dev/null || true
+                    continue
+                fi
+                ;;
+        esac
+        i=$((i + 1))
+        [ "$i" -gt 60 ] && {
+            log "cannot switch routing mode: config lock timeout"
+            return 1
+        }
+        sleep 1
+    done
+
+    echo "$$" > "$CONFIG_LOCKDIR/pid"
+    trap 'rm -f "$CONFIG_LOCKDIR/pid" 2>/dev/null; rmdir "$CONFIG_LOCKDIR" 2>/dev/null' EXIT INT TERM
+    return 0
+}
+
 load_conf() {
     [ -f "$CONF" ] && . "$CONF"
     [ -z "$ROUTES_URL_BASE" ] && ROUTES_URL_BASE="$ROUTES_URL_BASE_DEFAULT"
     [ -z "$SPLIT_RU_MIN_MEM_KB" ] && SPLIT_RU_MIN_MEM_KB="$SPLIT_RU_MIN_MEM_KB_DEFAULT"
     [ -z "$SPLIT_RU_WARN_MEM_KB" ] && SPLIT_RU_WARN_MEM_KB="$SPLIT_RU_WARN_MEM_KB_DEFAULT"
+    [ -z "$ENGINE_BIN" ] && ENGINE_BIN="$ENGINE_BIN_DEFAULT"
+    [ -z "$ENGINE_CONFIG" ] && ENGINE_CONFIG="$ENGINE_CONFIG_DEFAULT"
 
     case "$SPLIT_RU_MIN_MEM_KB" in
         ''|*[!0-9]*) SPLIT_RU_MIN_MEM_KB="$SPLIT_RU_MIN_MEM_KB_DEFAULT" ;;
@@ -84,6 +130,27 @@ calc_sha256_file() {
         openssl dgst -sha256 "$file" 2>/dev/null | awk '{print $NF}'
         return 0
     fi
+
+    return 1
+}
+
+is_vpn_process_running() {
+    engine_base="$(basename "$ENGINE_BIN" 2>/dev/null || echo xray)"
+    config_base="$(basename "$ENGINE_CONFIG" 2>/dev/null || echo xray.json)"
+
+    pgrep -f "$ENGINE_BIN.*run.*-config.*$ENGINE_CONFIG" >/dev/null 2>&1 && return 0
+    pgrep -f "$engine_base.*run.*-config.*$config_base" >/dev/null 2>&1 && return 0
+
+    return 1
+}
+
+wait_vpn_started() {
+    i=0
+    while [ "$i" -lt 20 ]; do
+        is_vpn_process_running && return 0
+        sleep 1
+        i=$((i + 1))
+    done
 
     return 1
 }
@@ -279,7 +346,7 @@ case "$MODE" in
     full|smart_ru|split_ru)
         ;;
     *)
-        echo "Usage: $0 [full|split_ru]" >&2
+        echo "Usage: $0 [full|smart_ru|split_ru]" >&2
         log "invalid mode: $MODE"
         exit 1
         ;;
@@ -340,17 +407,117 @@ if [ "$MODE" = "$OLD_MODE" ]; then
     exit 0
 fi
 
+if [ ! -x "$BUILD_SCRIPT" ]; then
+    log "cannot switch to mode=$MODE: xray config builder is missing"
+    echo "config_build_failed"
+    exit 1
+fi
+
+if ! lock_config; then
+    echo "config_busy"
+    exit 1
+fi
+
+CONFIG_BACKUP="${ENGINE_CONFIG}.mode-backup.$$"
+OLD_CONFIG_SHA=""
+NEW_CONFIG_SHA=""
+rm -f "$CONFIG_BACKUP"
+if [ -s "$ENGINE_CONFIG" ]; then
+    OLD_CONFIG_SHA="$(calc_sha256_file "$ENGINE_CONFIG" 2>/dev/null || true)"
+    if ! cp "$ENGINE_CONFIG" "$CONFIG_BACKUP" 2>/dev/null; then
+        log "cannot switch to mode=$MODE: failed to back up current xray config"
+        echo "config_backup_failed"
+        exit 1
+    fi
+fi
+
 printf '%s\n' "$MODE" > "${MODE_FILE}.tmp" || exit 1
 mv "${MODE_FILE}.tmp" "$MODE_FILE" || exit 1
 
-log "mode set to $MODE, restarting shpun-vpn"
+if ! "$BUILD_SCRIPT"; then
+    log "failed to build xray config for mode=$MODE, rolling back to $OLD_MODE"
+    printf '%s\n' "$OLD_MODE" > "$MODE_FILE"
+    if [ -s "$CONFIG_BACKUP" ]; then
+        mv "$CONFIG_BACKUP" "$ENGINE_CONFIG"
+    else
+        rm -f "$ENGINE_CONFIG" "$CONFIG_BACKUP"
+    fi
+    echo "config_build_failed"
+    exit 1
+fi
+
+if [ -x "$ENGINE_BIN" ] && ! "$ENGINE_BIN" run -test -config "$ENGINE_CONFIG" >/dev/null 2>&1; then
+    log "invalid xray config for mode=$MODE, rolling back to $OLD_MODE"
+    printf '%s\n' "$OLD_MODE" > "$MODE_FILE"
+    if [ -s "$CONFIG_BACKUP" ]; then
+        mv "$CONFIG_BACKUP" "$ENGINE_CONFIG"
+    else
+        rm -f "$ENGINE_CONFIG" "$CONFIG_BACKUP"
+    fi
+    echo "config_invalid"
+    exit 1
+fi
+
+if [ -s "$ENGINE_CONFIG" ]; then
+    NEW_CONFIG_SHA="$(calc_sha256_file "$ENGINE_CONFIG" 2>/dev/null || true)"
+fi
+
+if [ -s "$VPN_READY_FILE" ] && is_vpn_process_running &&
+    [ -n "$OLD_CONFIG_SHA" ] && [ "$OLD_CONFIG_SHA" = "$NEW_CONFIG_SHA" ]; then
+    if [ -x "$FIREWALL_SCRIPT" ] && "$FIREWALL_SCRIPT" apply-mode; then
+        rm -f "$CONFIG_BACKUP"
+        log "mode set to $MODE, live firewall rules applied without restarting shpun-vpn"
+        echo "ok"
+        exit 0
+    fi
+
+    log "failed to apply live firewall rules for mode=$MODE, rolling back to $OLD_MODE"
+    printf '%s\n' "$OLD_MODE" > "$MODE_FILE"
+    if [ -s "$CONFIG_BACKUP" ]; then
+        mv "$CONFIG_BACKUP" "$ENGINE_CONFIG"
+    else
+        rm -f "$ENGINE_CONFIG" "$CONFIG_BACKUP"
+    fi
+    [ -x "$FIREWALL_SCRIPT" ] && "$FIREWALL_SCRIPT" apply-mode >/dev/null 2>&1 || true
+    echo "firewall_apply_failed"
+    exit 1
+fi
+
+log "mode set to $MODE, restarting shpun-vpn with rebuilt config"
 
 /etc/init.d/shpun-vpn restart || {
     log "failed to restart shpun-vpn after mode=$MODE, rolling back to $OLD_MODE"
     printf '%s\n' "$OLD_MODE" > "$MODE_FILE"
+    if [ -s "$CONFIG_BACKUP" ]; then
+        mv "$CONFIG_BACKUP" "$ENGINE_CONFIG"
+    else
+        rm -f "$ENGINE_CONFIG" "$CONFIG_BACKUP"
+    fi
     /etc/init.d/shpun-vpn restart >/dev/null 2>&1 || true
     exit 1
 }
 
+if ! wait_vpn_started; then
+    log "xray did not start after mode=$MODE, rolling back to $OLD_MODE"
+    printf '%s\n' "$OLD_MODE" > "$MODE_FILE"
+    if [ -s "$CONFIG_BACKUP" ]; then
+        mv "$CONFIG_BACKUP" "$ENGINE_CONFIG"
+    else
+        rm -f "$ENGINE_CONFIG" "$CONFIG_BACKUP"
+    fi
+    /etc/init.d/shpun-vpn restart >/dev/null 2>&1 || true
+    echo "vpn_start_failed"
+    exit 1
+fi
+
+rm -f "$CONFIG_BACKUP"
+rm -f "$CONFIG_PENDING_FILE"
+[ -n "$NEW_CONFIG_SHA" ] && printf '%s\n' "$NEW_CONFIG_SHA" > "$CONFIG_ACTIVE_FILE"
+echo "ok" > "$VPN_READY_FILE"
+rm -f "$VERROR_FILE"
+if grep -q '"tag": "dns-in"' "$ENGINE_CONFIG" 2>/dev/null; then
+    echo "ok" > "$DNS_PROXY_READY_FILE"
+    [ -x "$DNS_SCRIPT" ] && "$DNS_SCRIPT" apply >/dev/null 2>&1 || true
+fi
 echo "ok"
 exit 0

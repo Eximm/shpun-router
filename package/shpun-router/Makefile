@@ -15,7 +15,7 @@ define Package/shpun-router
   SUBMENU:=VPN
   TITLE:=Shpun Router integration (ucode backend)
   PKGARCH:=all
-  DEPENDS:=+luci-base +jsonfilter +ucode +ucode-mod-fs +ucode-mod-uci +rpcd-mod-ucode
+  DEPENDS:=+luci-base +jsonfilter +ucode +ucode-mod-fs +ucode-mod-uci +rpcd-mod-ucode +kmod-nft-tproxy
 endef
 
 define Package/$(PKG_NAME)/description
@@ -29,7 +29,7 @@ Shpun Router Integration:
  - route feed update for split routing and smart RU presets
  - routing mode switch: full / smart_ru / split_ru
  - custom routing rules: force VPN / direct for IP, CIDR and domains
- - optional UDP tunneling via nft TPROXY
+ - UDP tunneling via nft TPROXY for calls and realtime apps
 endef
 
 define Build/Compile
@@ -44,6 +44,7 @@ endef
 define Package/$(PKG_NAME)/install
 	$(INSTALL_DIR) $(1)/etc/shpun
 	$(INSTALL_DIR) $(1)/etc/shpun/routes
+	$(INSTALL_DIR) $(1)/etc/shpun/routes/presets
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_DIR) $(1)/usr/share/rpcd/ucode
 	$(INSTALL_DIR) $(1)/usr/share/rpcd/acl.d
@@ -54,6 +55,8 @@ define Package/$(PKG_NAME)/install
 	# --- core scripts ---
 	$(INSTALL_BIN) ./files/etc/shpun/agent.sh                 $(1)/etc/shpun/agent.sh
 	$(INSTALL_BIN) ./files/etc/shpun/build-config.sh          $(1)/etc/shpun/build-config.sh
+	$(INSTALL_BIN) ./files/etc/shpun/rebuild-config-deferred.sh $(1)/etc/shpun/rebuild-config-deferred.sh
+	$(INSTALL_BIN) ./files/etc/shpun/switch-server.sh         $(1)/etc/shpun/switch-server.sh
 	$(INSTALL_BIN) ./files/etc/shpun/gen_code.sh              $(1)/etc/shpun/gen_code.sh
 	$(INSTALL_BIN) ./files/etc/shpun/firewall-xray.sh         $(1)/etc/shpun/firewall-xray.sh
 	$(INSTALL_BIN) ./files/etc/shpun/dns-xray.sh              $(1)/etc/shpun/dns-xray.sh
@@ -63,6 +66,10 @@ define Package/$(PKG_NAME)/install
 
 	# default config
 	$(INSTALL_CONF) ./files/etc/shpun/agent.conf              $(1)/etc/shpun/agent.conf
+	$(INSTALL_DATA) ./files/etc/shpun/routes/presets/always_vpn.domains \
+		$(1)/etc/shpun/routes/presets/always_vpn.domains
+	$(INSTALL_DATA) ./files/etc/shpun/routes/presets/always_vpn.cidrs \
+		$(1)/etc/shpun/routes/presets/always_vpn.cidrs
 
 	# --- init scripts ---
 	$(INSTALL_BIN) ./files/etc/init.d/shpun-agent             $(1)/etc/init.d/shpun-agent
@@ -115,7 +122,12 @@ define Package/$(PKG_NAME)/postinst
 	/etc/init.d/uhttpd reload 2>/dev/null || \
 	/etc/init.d/uhttpd restart 2>/dev/null || true
 
-	/etc/init.d/shpun-agent restart 2>/dev/null || true
+	if [ "$$SHPUN_MANAGED_UPDATE" != "1" ]; then
+		/etc/init.d/shpun-agent stop 2>/dev/null || true
+		/etc/init.d/shpun-vpn stop 2>/dev/null || true
+		rm -f /etc/shpun/vpn_ready /etc/shpun/xray_config_pending /etc/shpun/dns_proxy_ready 2>/dev/null || true
+		/etc/init.d/shpun-agent start 2>/dev/null || true
+	fi
 }
 exit 0
 endef
@@ -127,6 +139,8 @@ endef
 
 define Package/$(PKG_NAME)/conffiles
 /etc/shpun/agent.conf
+/etc/shpun/routes/presets/always_vpn.domains
+/etc/shpun/routes/presets/always_vpn.cidrs
 endef
 
 #######################################

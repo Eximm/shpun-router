@@ -512,7 +512,7 @@ def write_manifest(legacy_ru: PublishedFile, presets: dict[str, dict[str, Publis
                 "cidrs": presets["smart_ru_min"]["cidrs"].path,
             },
             "split_ru": {
-                "description": "Legacy heavy mode: all Russian IPv4 ranges direct.",
+                "description": "Heavy mode: Russian TCP destinations direct; realtime UDP stays inside VPN.",
                 "cidrs": legacy_ru.path,
             },
         },

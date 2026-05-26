@@ -230,7 +230,7 @@ function getRoutingModeLabel(mode) {
 	if (String(mode || 'full').trim() === 'smart_ru')
 		return 'Популярные РФ сервисы напрямую';
 	return String(mode || 'full').trim() === 'split_ru'
-		? 'Весь РФ трафик напрямую'
+		? 'РФ сайты напрямую, звонки через VPN'
 		: 'Весь трафик через VPN';
 }
 
@@ -239,7 +239,7 @@ function getRoutingModeDescription(mode) {
 	if (mode === 'smart_ru')
 		return 'Основной рекомендуемый режим: весь трафик идет через VPN, а популярные российские сервисы открываются напрямую.';
 	if (mode === 'split_ru')
-		return 'Тяжелый режим: весь российский IPv4 идет напрямую. Используйте только на мощных роутерах, если умного режима недостаточно.';
+		return 'Тяжелый режим: российский веб-трафик идет напрямую, а UDP-звонки остаются через VPN для стабильной связи. Используйте только на мощных роутерах.';
 	return 'Максимальная приватность: весь клиентский трафик идет через VPN. Российские сервисы тоже будут открываться через туннель.';
 }
 
@@ -410,7 +410,7 @@ function openCustomRoutesModal() {
 					E('code', {}, '1.2.3.4'),
 					' IP, ',
 					E('code', {}, '10.0.0.0/8'),
-					' сеть.'
+					' сеть. Для UDP-звонков и игр надежнее указывать IP или CIDR.'
 				]),
 				E('div', { 'class': 'shpun-modal-cols' }, [
 					buildCol('vpn',    'Принудительно через VPN', vpnList),
@@ -431,6 +431,8 @@ function openCustomRoutesModal() {
 								ui.hideModal();
 								if (res.ok) {
 									ui.addNotification(null, E('p', {}, 'Маршруты сохранены: ' + res.vpn_count + ' через VPN, ' + res.direct_count + ' напрямую.'), 'info');
+									if (!res.applied && !res.unchanged)
+										ui.addNotification(null, E('p', {}, 'Правила будут применены автоматически, когда VPN-туннель и его маршрутизация будут активны.'), 'warning');
 									if (res.pending_rebuild)
 										ui.addNotification(null, E('p', {}, 'Доменные маршруты сохранены без разрыва соединения и будут полностью применены при следующем безопасном переподключении VPN.'), 'warning');
 								} else
@@ -632,8 +634,8 @@ return view.extend({
 		if (vpnReady)
 			statusMetricBadges.push(makeBadge(
 				state.udp_ready ? 'shpun-badge--ok' : 'shpun-badge--warn',
-				state.udp_ready ? 'Звонки и игры: работают' : 'Звонки и игры: ограничены',
-				state.udp_ready ? 'UDP-трафик проходит через VPN.' : 'Роутер работает без UDP-туннеля; звонки и игры могут работать нестабильно.'
+				state.udp_ready ? 'UDP через VPN: включен' : 'UDP через VPN: недоступен',
+				state.udp_ready ? 'UDP-трафик направляется через VPN.' : 'Роутер работает без UDP-туннеля; звонки и игры могут работать нестабильно.'
 			));
 		var statusRows = [
 			E('div', { 'class': 'shpun-status-row shpun-status-row--top' }, statusTopBadges)
@@ -706,7 +708,7 @@ return view.extend({
 								E('button', {
 									'class': 'shpun-btn ' + (routingMode === 'split_ru' ? 'shpun-btn--primary is-active' : 'shpun-btn--ghost'),
 									'click': function(ev) { return view.handleSetRoutingMode(ev, 'split_ru'); }
-								}, 'Весь РФ трафик напрямую')
+								}, 'РФ сайты напрямую')
 							])
 						]),
 

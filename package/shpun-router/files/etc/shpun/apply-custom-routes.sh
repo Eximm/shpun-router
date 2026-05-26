@@ -3,10 +3,52 @@
 LOGTAG="shpun-custom-routes"
 CUSTOM_FILE="/etc/shpun/routes/custom.json"
 CHUNK_SIZE="${CUSTOM_ROUTES_CHUNK_SIZE:-50}"
+LOCKDIR="/tmp/shpun-firewall.lock"
 
 log() {
     logger -t "$LOGTAG" "$*"
 }
+
+lock_acquire() {
+    [ "$SHPUN_FIREWALL_LOCK_HELD" = "1" ] && return 0
+
+    i=0
+    while ! mkdir "$LOCKDIR" 2>/dev/null; do
+        lock_pid="$(cat "$LOCKDIR/pid" 2>/dev/null || true)"
+        case "$lock_pid" in
+            ''|*[!0-9]*)
+                if [ "$i" -ge 2 ]; then
+                    rm -f "$LOCKDIR/pid" 2>/dev/null
+                    rmdir "$LOCKDIR" 2>/dev/null || true
+                    continue
+                fi
+                ;;
+            *)
+                if ! kill -0 "$lock_pid" 2>/dev/null; then
+                    rm -f "$LOCKDIR/pid" 2>/dev/null
+                    rmdir "$LOCKDIR" 2>/dev/null || true
+                    continue
+                fi
+                ;;
+        esac
+        i=$((i + 1))
+        [ "$i" -gt 120 ] && {
+            log "failed to acquire firewall lock"
+            return 1
+        }
+        sleep 1
+    done
+
+    echo "$$" > "$LOCKDIR/pid"
+    trap 'rm -f "$LOCKDIR/pid" 2>/dev/null; rmdir "$LOCKDIR" 2>/dev/null' EXIT INT TERM
+    return 0
+}
+
+case "$CHUNK_SIZE" in
+    ''|*[!0-9]*) CHUNK_SIZE=50 ;;
+esac
+[ "$CHUNK_SIZE" -lt 1 ] 2>/dev/null && CHUNK_SIZE=50
+[ "$CHUNK_SIZE" -gt 1000 ] 2>/dev/null && CHUNK_SIZE=1000
 
 validate_entry() {
     entry="$(printf '%s' "$1" | tr -d ' \t\r\n')"
@@ -67,31 +109,19 @@ validate_domain() {
     return 0
 }
 
-apply_set() {
+append_set_batch() {
     set_name="$1"
     key="$2"
+    batch="$3"
     tmp="/tmp/shpun_custom_${set_name}_$$.tmp"
-    batch="/tmp/shpun_custom_${set_name}_batch_$$.nft"
 
-    nft list table inet shpun >/dev/null 2>&1 || {
-        log "table inet shpun not found — skipping $set_name"
-        return 1
-    }
+    rm -f "$tmp"
 
-    nft list set inet shpun "$set_name" >/dev/null 2>&1 || {
-        nft add set inet shpun "$set_name" '{ type ipv4_addr; flags interval; }' 2>/dev/null || {
-            log "failed to create set $set_name"
-            return 1
-        }
-    }
-
-    rm -f "$tmp" "$batch"
-
-    if [ -f "$CUSTOM_FILE" ] && [ -s "$CUSTOM_FILE" ] && command -v jsonfilter >/dev/null 2>&1; then
+    if [ -s "$CUSTOM_FILE" ] && command -v jsonfilter >/dev/null 2>&1; then
         jsonfilter -i "$CUSTOM_FILE" -e "@.${key}[*]" 2>/dev/null | tr -d '"' > "$tmp" 2>/dev/null
     fi
 
-    printf 'flush set inet shpun %s\n' "$set_name" > "$batch"
+    printf 'flush set inet shpun %s\n' "$set_name" >> "$batch"
 
     chunk=""
     count=0
@@ -131,23 +161,51 @@ apply_set() {
         printf 'add element inet shpun %s { %s }\n' "$set_name" "$chunk" >> "$batch"
     fi
 
+    log "$set_name: prepared $added IP/CIDR entries, skipped $skipped domain/invalid entries"
+    return 0
+}
+
+apply_routes() {
+    batch="/tmp/shpun_custom_all_$$.nft"
+    rm -f "$batch"
+
+    nft list table inet shpun >/dev/null 2>&1 || {
+        log "table inet shpun not found; routes will apply on next VPN start"
+        return 1
+    }
+
+    for set_name in custom_vpn custom_direct; do
+        nft list set inet shpun "$set_name" >/dev/null 2>&1 || {
+            log "live set $set_name not found; keeping current live routes"
+            return 1
+        }
+    done
+
+    append_set_batch custom_vpn vpn "$batch" || {
+        rm -f "$batch"
+        return 1
+    }
+    append_set_batch custom_direct direct "$batch" || {
+        rm -f "$batch"
+        return 1
+    }
+
     if ! nft -f "$batch" 2>/dev/null; then
         rm -f "$batch"
-        log "$set_name: atomic apply failed, keeping current live routes"
+        log "atomic custom routes apply failed; keeping current live routes"
         return 1
     fi
 
     rm -f "$batch"
-    log "$set_name: applied $added entries, skipped $skipped"
+    log "custom VPN and direct routes applied in one transaction"
     return 0
 }
 
 case "${1:-apply}" in
     apply|"")
-        rc=0
-        apply_set "custom_vpn" "vpn" || rc=1
-        apply_set "custom_direct" "direct" || rc=1
-        exit "$rc"
+        lock_acquire || exit 1
+        apply_routes
+        exit $?
         ;;
     validate)
         while IFS= read -r line; do
