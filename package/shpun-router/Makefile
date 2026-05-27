@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=shpun-router
 PKG_VERSION:=1.1.0
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 PKG_MAINTAINER:=Shpun VPN
 PKG_LICENSE:=MIT
@@ -48,6 +48,7 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_DIR) $(1)/usr/share/rpcd/ucode
 	$(INSTALL_DIR) $(1)/usr/share/rpcd/acl.d
+	$(INSTALL_DIR) $(1)/usr/share/shpun/presets
 	$(INSTALL_DIR) $(1)/usr/share/luci/status/include
 	$(INSTALL_DIR) $(1)/www/luci-static/resources/view/status/include
 	$(INSTALL_DIR) $(1)/etc/uci-defaults
@@ -66,10 +67,11 @@ define Package/$(PKG_NAME)/install
 
 	# default config
 	$(INSTALL_CONF) ./files/etc/shpun/agent.conf              $(1)/etc/shpun/agent.conf
+	# Built-in baseline; the agent owns and extends the live copies under /etc/shpun/routes.
 	$(INSTALL_DATA) ./files/etc/shpun/routes/presets/always_vpn.domains \
-		$(1)/etc/shpun/routes/presets/always_vpn.domains
+		$(1)/usr/share/shpun/presets/always_vpn.domains
 	$(INSTALL_DATA) ./files/etc/shpun/routes/presets/always_vpn.cidrs \
-		$(1)/etc/shpun/routes/presets/always_vpn.cidrs
+		$(1)/usr/share/shpun/presets/always_vpn.cidrs
 
 	# --- init scripts ---
 	$(INSTALL_BIN) ./files/etc/init.d/shpun-agent             $(1)/etc/init.d/shpun-agent
@@ -110,6 +112,12 @@ define Package/$(PKG_NAME)/postinst
 	mkdir -p /etc/shpun
 	mkdir -p /etc/shpun/routes
 
+	# Remove obsolete candidates left by 1.1.0-r1; live route state stays agent-owned.
+	rm -f /etc/shpun/routes/presets/always_vpn.domains-opkg \
+		/etc/shpun/routes/presets/always_vpn.cidrs-opkg \
+		/etc/shpun/routes/presets/always_vpn.domains-opkg-new \
+		/etc/shpun/routes/presets/always_vpn.cidrs-opkg-new 2>/dev/null || true
+
 	chmod +x /etc/shpun/*.sh 2>/dev/null || true
 
 	/etc/init.d/shpun-agent enable 2>/dev/null || true
@@ -139,8 +147,6 @@ endef
 
 define Package/$(PKG_NAME)/conffiles
 /etc/shpun/agent.conf
-/etc/shpun/routes/presets/always_vpn.domains
-/etc/shpun/routes/presets/always_vpn.cidrs
 endef
 
 #######################################

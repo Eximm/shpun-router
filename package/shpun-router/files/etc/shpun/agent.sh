@@ -7,6 +7,7 @@ STATE_DIR="/etc/shpun"
 CODE_FILE="$STATE_DIR/router_code"
 SUB_FILE="$STATE_DIR/subscription.json"
 SUB_URL_FILE="$STATE_DIR/subscription_url"
+SUB_MIRROR_URL_FILE="$STATE_DIR/subscription_mirror_url"
 CONFIG_URL_FILE="$STATE_DIR/router_config_url"
 UPDATE_URL_FILE="$STATE_DIR/router_update_url"
 UPDATE_MIN_VERSION_FILE="$STATE_DIR/router_min_version"
@@ -25,8 +26,12 @@ CONFIG_LOCKDIR="/tmp/shpun-config.lock"
 
 LOG_TAG="shpun-agent"
 
-API_URL_DEFAULT="https://bill.shpyn.online/shm/v1/public/router_public"
+API_URL_DEFAULT="https://router.shpun.net/connect"
+API_URL_LEGACY_DEFAULT="https://bill.shpyn.online/shm/v1/public/router_public"
+CONFIG_API_URL_DEFAULT="https://router.shpun.net/profile"
+SUBSCRIPTION_MIRROR_BASE_URL_DEFAULT="https://mirepo.space"
 SUB_CHECK_INTERVAL_DEFAULT=21600
+HTTP_USER_AGENT_DEFAULT="Mozilla/5.0 (compatible; ShpunRouter/1.1)"
 
 MIN_UPTIME_DEFAULT=120
 NET_FAIL_TIMEOUT_DEFAULT=180
@@ -289,9 +294,9 @@ http_get_to_file() {
 	local out="$2"
 
 	case "$HTTP_BIN" in
-		curl) curl -fsS "$url" -o "$out" ;;
-		wget) wget -qO "$out" "$url" ;;
-		uclient-fetch) uclient-fetch -qO "$out" "$url" ;;
+		curl) curl -fsS -A "$HTTP_USER_AGENT" "$url" -o "$out" ;;
+		wget) wget -q -U "$HTTP_USER_AGENT" -O "$out" "$url" ;;
+		uclient-fetch) uclient-fetch -q -U "$HTTP_USER_AGENT" -O "$out" "$url" ;;
 		*) return 1 ;;
 	esac
 }
@@ -300,9 +305,9 @@ http_get_stdout() {
 	local url="$1"
 
 	case "$HTTP_BIN" in
-		curl) curl -fsS "$url" ;;
-		wget) wget -qO- "$url" ;;
-		uclient-fetch) uclient-fetch -qO- "$url" ;;
+		curl) curl -fsS -A "$HTTP_USER_AGENT" "$url" ;;
+		wget) wget -q -U "$HTTP_USER_AGENT" -O- "$url" ;;
+		uclient-fetch) uclient-fetch -q -U "$HTTP_USER_AGENT" -O- "$url" ;;
 		*) return 1 ;;
 	esac
 }
@@ -416,9 +421,17 @@ load_conf() {
 	[ -f "$CONF" ] && . "$CONF"
 
 	[ -z "$API_URL" ]               && API_URL="$API_URL_DEFAULT"
+	if [ "$API_URL" = "$API_URL_LEGACY_DEFAULT" ]; then
+		API_URL="$API_URL_DEFAULT"
+	fi
+	[ -z "$CONFIG_API_URL" ] && [ "$API_URL" = "$API_URL_DEFAULT" ] && \
+		CONFIG_API_URL="$CONFIG_API_URL_DEFAULT"
+	[ -z "$SUBSCRIPTION_MIRROR_BASE_URL" ] && \
+		SUBSCRIPTION_MIRROR_BASE_URL="$SUBSCRIPTION_MIRROR_BASE_URL_DEFAULT"
 	[ -z "$ENGINE_BIN" ]            && ENGINE_BIN="/tmp/xray"
 	[ -z "$ENGINE_CONFIG" ]         && ENGINE_CONFIG="/etc/shpun/xray.json"
 	[ -z "$SUB_CHECK_INTERVAL" ]    && SUB_CHECK_INTERVAL="$SUB_CHECK_INTERVAL_DEFAULT"
+	[ -z "$HTTP_USER_AGENT" ]       && HTTP_USER_AGENT="$HTTP_USER_AGENT_DEFAULT"
 
 	[ -z "$MIN_UPTIME" ]            && MIN_UPTIME="$MIN_UPTIME_DEFAULT"
 	[ -z "$NET_FAIL_TIMEOUT" ]      && NET_FAIL_TIMEOUT="$NET_FAIL_TIMEOUT_DEFAULT"
@@ -608,21 +621,77 @@ extract_subscription_url_from_json_text() {
 
 save_subscription_url() {
 	local url="$1"
+	local token_path token mirror_base
 
 	case "$url" in
+		http://*|https://*) ;;
+		*) return 1 ;;
+	esac
+
+	printf '%s\n' "$url" > "$SUB_URL_FILE"
+	log "subscription url saved"
+
+	rm -f "$SUB_MIRROR_URL_FILE"
+	mirror_base="${SUBSCRIPTION_MIRROR_BASE_URL%/}"
+	[ -n "$mirror_base" ] || return 0
+
+	token_path="${url%%\?*}"
+	token_path="${token_path%%\#*}"
+	token_path="${token_path%/}"
+	token="${token_path##*/}"
+	case "$token" in
+		''|*/*|*' '*|*'	'*|*'?'*|*'#'*|*'&'*) return 0 ;;
+	esac
+
+	printf '%s/%s\n' "$mirror_base" "$token" > "$SUB_MIRROR_URL_FILE"
+	log "subscription mirror url prepared"
+	return 0
+}
+
+migrate_legacy_gateway_state() {
+	[ -s "$SUB_URL_FILE" ] || return 0
+
+	save_subscription_url "$(cat "$SUB_URL_FILE" 2>/dev/null | tr -d '\r\n ' || true)" >/dev/null 2>&1 || true
+}
+
+public_config_url() {
+	local url="$1"
+	local query
+
+	case "$url" in
+		*"/shm/v1/public/router_config?"*)
+			query="${url#*\?}"
+			[ -n "$CONFIG_API_URL" ] && {
+				printf '%s?%s' "$CONFIG_API_URL" "$query"
+				return 0
+			}
+			;;
+		*"/shm/v1/public/router_config")
+			[ -n "$CONFIG_API_URL" ] && {
+				printf '%s' "$CONFIG_API_URL"
+				return 0
+			}
+			;;
 		http://*|https://*)
-			printf '%s\n' "$url" > "$SUB_URL_FILE"
-			log "subscription url saved"
+			printf '%s' "$url"
+			return 0
+			;;
+		/profile\?*)
+			printf '%s%s' "${API_URL%/connect}" "$url"
 			return 0
 			;;
 	esac
 
-	return 1
+	case "$url" in
+		http://*|https://*) printf '%s' "$url" ;;
+		*) printf '%s%s' "${API_URL%/connect}" "$url" ;;
+	esac
 }
 
 save_config_url() {
 	local url="$1"
 
+	url="$(public_config_url "$url")"
 	case "$url" in
 		http://*|https://*)
 			printf '%s\n' "$url" > "$CONFIG_URL_FILE"
@@ -1631,11 +1700,11 @@ fetch_subscription_once() {
 
 	URL="${API_URL}?code=${CLEAN_CODE}&format=json"
 
-	log "query router_public"
+	log "query router gateway"
 	BODY="$(http_get_stdout "$URL" 2>/dev/null || true)"
 
 	if [ -z "$BODY" ]; then
-		log "empty response from router_public"
+		log "empty response from router gateway"
 		return 1
 	fi
 
@@ -1644,7 +1713,7 @@ fetch_subscription_once() {
 	if [ "$OK" != "1" ]; then
 		ERR="$(printf '%s' "$BODY" | jsonfilter -e '@.error' 2>/dev/null || echo "")"
 		[ -z "$ERR" ] && ERR="unknown_error"
-		log "router_public error: ok=$OK, error=$ERR"
+		log "router gateway error: ok=$OK, error=$ERR"
 		return 1
 	fi
 	save_router_software_metadata_text "$BODY" >/dev/null 2>&1 || true
@@ -1653,32 +1722,19 @@ fetch_subscription_once() {
 	SUBSCRIPTION_URL="$(extract_subscription_url_from_json_text "$BODY" || echo "")"
 
 	if [ -z "$CONFIG_PATH" ] && [ -z "$SUBSCRIPTION_URL" ]; then
-		log "router_public ok=1 but config_url/subscription_url is empty"
+		log "router gateway ok=1 but config_url/subscription_url is empty"
 		return 1
 	fi
 
-	BASE_URL="${API_URL%/shm/v1/public/router_public}"
 	CONFIG_URL=""
 	if [ -n "$CONFIG_PATH" ]; then
-		case "$CONFIG_PATH" in
-			http://*|https://*) CONFIG_URL="$CONFIG_PATH" ;;
-			*) CONFIG_URL="${BASE_URL}${CONFIG_PATH}" ;;
-		esac
+		CONFIG_URL="$(public_config_url "$CONFIG_PATH")"
 		save_config_url "$CONFIG_URL" >/dev/null 2>&1 || true
 	fi
 
-	if [ -n "$SUBSCRIPTION_URL" ]; then
-		save_subscription_url "$SUBSCRIPTION_URL" >/dev/null 2>&1 || true
-		DOWNLOAD_URL="$SUBSCRIPTION_URL"
-	else
-		if [ -z "$CONFIG_URL" ]; then
-			log "router_public ok=1 but usable config_url is empty"
-			return 1
-		fi
-		DOWNLOAD_URL="${CONFIG_URL}&format=json"
-	fi
+	[ -n "$SUBSCRIPTION_URL" ] && save_subscription_url "$SUBSCRIPTION_URL" >/dev/null 2>&1 || true
 
-	log "fetching subscription"
+	log "fetching subscription by preferred source order: direct, mirror, profile gateway"
 
 	TMP_SUB="${SUB_FILE}.tmp"
 	PUBLIC_META="${TMP_SUB}.public"
@@ -1686,33 +1742,35 @@ fetch_subscription_once() {
 	rm -f "$PUBLIC_META" "$CONFIG_META"
 	printf '%s' "$BODY" > "$PUBLIC_META"
 
-	if [ -n "$CONFIG_URL" ]; then
-		if http_get_to_file "$(append_format_json "$CONFIG_URL")" "$CONFIG_META" >/dev/null 2>&1; then
-			save_router_software_metadata_file "$CONFIG_META" >/dev/null 2>&1 || true
-		else
-			rm -f "$CONFIG_META"
+	SOURCE_OK=0
+	rm -f "$TMP_SUB"
+	if download_subscription_from_url_file "$TMP_SUB" "$SUB_URL_FILE" "direct"; then
+		SOURCE_OK=1
+	elif [ -n "$CONFIG_URL" ] &&
+		http_get_to_file "$(append_format_json "$CONFIG_URL")" "$CONFIG_META" >/dev/null 2>&1; then
+		save_router_software_metadata_file "$CONFIG_META" >/dev/null 2>&1 || true
+		SUBSCRIPTION_URL="$(extract_subscription_url_from_json_file "$CONFIG_META" || echo "")"
+		[ -n "$SUBSCRIPTION_URL" ] && save_subscription_url "$SUBSCRIPTION_URL" >/dev/null 2>&1 || true
+
+		if download_subscription_from_url_file "$TMP_SUB" "$SUB_URL_FILE" "direct"; then
+			SOURCE_OK=1
 		fi
 	fi
 
-	if ! http_get_to_file "$DOWNLOAD_URL" "$TMP_SUB" 2>/dev/null; then
-		log "failed to download subscription"
-		rm -f "$TMP_SUB" "$PUBLIC_META" "$CONFIG_META"
-		return 1
+	if [ "$SOURCE_OK" -eq 0 ] &&
+		download_subscription_from_url_file "$TMP_SUB" "$SUB_MIRROR_URL_FILE" "mirror"; then
+		SOURCE_OK=1
 	fi
 
-	if [ ! -s "$TMP_SUB" ]; then
-		log "downloaded subscription json is empty"
-		rm -f "$TMP_SUB" "$PUBLIC_META" "$CONFIG_META"
-		return 1
+	if [ "$SOURCE_OK" -eq 0 ] && [ -s "$CONFIG_META" ] &&
+		cp "$CONFIG_META" "$TMP_SUB" 2>/dev/null &&
+		normalize_subscription_file "$TMP_SUB"; then
+		log "profile gateway subscription source succeeded as final fallback"
+		SOURCE_OK=1
 	fi
 
-	if [ -z "$SUBSCRIPTION_URL" ]; then
-		SUBSCRIPTION_URL="$(extract_subscription_url_from_json_file "$TMP_SUB" || echo "")"
-		[ -n "$SUBSCRIPTION_URL" ] && save_subscription_url "$SUBSCRIPTION_URL" >/dev/null 2>&1 || true
-	fi
-
-	if ! normalize_subscription_file "$TMP_SUB"; then
-		log "downloaded subscription format is unsupported"
+	if [ "$SOURCE_OK" -ne 1 ]; then
+		log "failed to download subscription from direct, mirror and profile gateway sources"
 		rm -f "$TMP_SUB" "$PUBLIC_META" "$CONFIG_META"
 		return 1
 	fi
@@ -1728,43 +1786,46 @@ fetch_subscription_once() {
 	return 0
 }
 
-refresh_subscription_from_url() {
-	local sub_url tmp_sub old_sha new_sha
+download_subscription_from_url_file() {
+	local out="$1"
+	local url_file="$2"
+	local label="$3"
+	local url
 
-	[ -s "$SUB_URL_FILE" ] || return 1
-
-	sub_url="$(cat "$SUB_URL_FILE" 2>/dev/null | tr -d '\r\n ' || true)"
-	[ -n "$sub_url" ] || return 1
+	[ -s "$url_file" ] || return 1
 
 	detect_http_client
 
 	if [ -z "$HTTP_BIN" ]; then
-		log "refresh_subscription_from_url: no HTTP client"
+		log "$label subscription source: no HTTP client"
 		return 1
 	fi
+
+	url="$(cat "$url_file" 2>/dev/null | tr -d '\r\n ' || true)"
+	[ -n "$url" ] || return 1
+
+	rm -f "$out"
+	log "trying $label subscription source"
+	if http_get_to_file "$url" "$out" 2>/dev/null &&
+		[ -s "$out" ] &&
+		normalize_subscription_file "$out"; then
+		log "$label subscription source succeeded"
+		return 0
+	fi
+
+	rm -f "$out"
+	return 1
+}
+
+refresh_subscription_from_url() {
+	local url_file="${1:-$SUB_URL_FILE}"
+	local label="${2:-direct}"
+	local tmp_sub old_sha new_sha
 
 	tmp_sub="${SUB_FILE}.refresh.tmp"
 	rm -f "$tmp_sub"
 
-	log "refreshing subscription from saved url"
-
-	if ! http_get_to_file "$sub_url" "$tmp_sub" 2>/dev/null; then
-		log "refresh_subscription_from_url: download failed"
-		rm -f "$tmp_sub"
-		return 1
-	fi
-
-	if [ ! -s "$tmp_sub" ]; then
-		log "refresh_subscription_from_url: downloaded file is empty"
-		rm -f "$tmp_sub"
-		return 1
-	fi
-
-	if ! normalize_subscription_file "$tmp_sub"; then
-		log "refresh_subscription_from_url: unsupported subscription format"
-		rm -f "$tmp_sub"
-		return 1
-	fi
+	download_subscription_from_url_file "$tmp_sub" "$url_file" "$label" || return 1
 	rewrite_subscription_with_metadata "$tmp_sub" "$SUB_FILE" "$tmp_sub" >/dev/null 2>&1 || true
 
 	old_sha="$(calc_sha256_file "$SUB_FILE" 2>/dev/null || true)"
@@ -1772,18 +1833,18 @@ refresh_subscription_from_url() {
 
 	if [ -n "$old_sha" ] && [ "$old_sha" = "$new_sha" ]; then
 		rm -f "$tmp_sub"
-		log "subscription refresh: unchanged"
+		log "$label subscription refresh: unchanged"
 		date +%s > "$LAST_CHECK_FILE"
 		return 0
 	fi
 
 	date +%s > "$LAST_CHECK_FILE"
-	if install_updated_subscription_candidate "$tmp_sub" "subscription refresh"; then
-		log "subscription refresh: updated"
+	if install_updated_subscription_candidate "$tmp_sub" "$label subscription refresh"; then
+		log "$label subscription refresh: updated"
 		return 0
 	fi
 
-	log "subscription refresh: update rejected, keeping active subscription"
+	log "$label subscription refresh: update rejected, keeping active subscription"
 	return 1
 }
 
@@ -1963,7 +2024,6 @@ poll_subscription_loop() {
 }
 
 check_subscription_alive() {
-	local direct_failed=0
 	[ ! -s "$SUB_FILE" ] && return 0
 
 	now_ts="$(date +%s)"
@@ -1978,13 +2038,15 @@ check_subscription_alive() {
 		return 0
 	fi
 
-	if [ -s "$SUB_URL_FILE" ]; then
-		if refresh_subscription_from_url; then
-			return 0
-		fi
-		direct_failed=1
-		log "direct subscription refresh failed, falling back to router_config"
+	if refresh_subscription_from_url "$SUB_URL_FILE" "direct"; then
+		return 0
 	fi
+	log "direct subscription source unavailable, trying mirror subscription source"
+
+	if refresh_subscription_from_url "$SUB_MIRROR_URL_FILE" "mirror"; then
+		return 0
+	fi
+	log "direct and mirror subscription sources unavailable, checking profile gateway"
 
 	detect_http_client
 
@@ -2001,6 +2063,8 @@ check_subscription_alive() {
 			echo "$now_ts" > "$LAST_CHECK_FILE"
 			return 0
 		fi
+		CHECK_URL="$(public_config_url "$CHECK_URL")"
+		save_config_url "$CHECK_URL" >/dev/null 2>&1 || true
 		CHECK_URL="$(append_format_json "$CHECK_URL")"
 	else
 		UID_SUB="$(jsonfilter -i "$SUB_FILE" -e '@.uid' 2>/dev/null || echo "")"
@@ -2018,23 +2082,35 @@ check_subscription_alive() {
 			return 0
 		fi
 
-		BASE_URL="${API_URL%/shm/v1/public/router_public}"
-		CHECK_URL="${BASE_URL}/shm/v1/public/router_config?uid=${UID_SUB}&usi=${USI_SUB}&code=${CLEAN_CODE}&format=json"
+		if [ -n "$CONFIG_API_URL" ]; then
+			CHECK_URL="${CONFIG_API_URL}?uid=${UID_SUB}&usi=${USI_SUB}&code=${CLEAN_CODE}&format=json"
+		else
+			BASE_URL="${API_URL%/shm/v1/public/router_public}"
+			CHECK_URL="${BASE_URL}/shm/v1/public/router_config?uid=${UID_SUB}&usi=${USI_SUB}&code=${CLEAN_CODE}&format=json"
+		fi
 		save_config_url "$CHECK_URL" >/dev/null 2>&1 || true
 	fi
 
-	log "checking subscription via router_config"
+	log "checking subscription via profile gateway"
 
 	BODY="$(http_get_stdout "$CHECK_URL" 2>/dev/null || true)"
 
 	if [ -z "$BODY" ]; then
-		log "check_subscription_alive: empty response from router_config"
+		log "check_subscription_alive: final profile gateway source unavailable"
+		log "all subscription sources unavailable, keeping current tunnel"
 		echo "$now_ts" > "$LAST_CHECK_FILE"
 		return 0
 	fi
 	save_router_software_metadata_text "$BODY" >/dev/null 2>&1 || true
 
 	OK="$(printf '%s' "$BODY" | jsonfilter -e '@.ok' 2>/dev/null || echo "")"
+
+	if [ "$OK" != "1" ] && [ "$OK" != "0" ]; then
+		log "check_subscription_alive: invalid final profile gateway response"
+		log "all subscription sources unusable, keeping current tunnel"
+		echo "$now_ts" > "$LAST_CHECK_FILE"
+		return 0
+	fi
 
 	if [ "$OK" = "1" ]; then
 		tmp_sub="${SUB_FILE}.tmp.$$"
@@ -2045,8 +2121,9 @@ check_subscription_alive() {
 		[ -n "$SUBSCRIPTION_URL" ] && save_subscription_url "$SUBSCRIPTION_URL" >/dev/null 2>&1 || true
 
 		if ! normalize_subscription_file "$tmp_sub" >/dev/null 2>&1; then
-			log "subscription_alive: unsupported router_config subscription format"
+			log "subscription_alive: final profile gateway has no usable links"
 			rm -f "$tmp_sub"
+			log "subscription_alive: no usable update source, keeping current tunnel"
 			echo "$now_ts" > "$LAST_CHECK_FILE"
 			return 0
 		fi
@@ -2069,16 +2146,8 @@ check_subscription_alive() {
 	fi
 
 	ERR="$(printf '%s' "$BODY" | jsonfilter -e '@.error' 2>/dev/null || echo "unknown_error")"
-	log "subscription_invalid: ok=$OK, error=$ERR"
-
-	if [ -s "$SUB_URL_FILE" ] || [ "$direct_failed" = "1" ]; then
-		log "subscription fallback failed, keeping current subscription because direct subscription url is known"
-		echo "$now_ts" > "$LAST_CHECK_FILE"
-		echo "$ERR" > "$VERROR_FILE"
-		return 0
-	fi
-
-	log "subscription missing in router_config and no direct subscription url is known, resetting VPN state"
+	log "subscription_invalid: authoritative profile gateway returned ok=$OK, error=$ERR"
+	log "subscription removed in profile gateway, resetting VPN state"
 
 	rm -f "$VPN_READY_FILE"
 	rm -f "$SUB_FILE"
@@ -2156,6 +2225,7 @@ main_loop() {
 	load_conf
 	ensure_state_dir
 	ensure_routes_dir
+	migrate_legacy_gateway_state
 	ensure_lan_ipv6_disabled
 	apply_always_vpn_live_rules
 
