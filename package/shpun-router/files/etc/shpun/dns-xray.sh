@@ -32,6 +32,14 @@ reload_dnsmasq() {
 	/etc/init.d/dnsmasq reload >/dev/null 2>&1 || /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
 }
 
+write_current_forwarding() {
+	local out="$1"
+
+	uci -q show dhcp.@dnsmasq[0] 2>/dev/null | \
+		sed -n "s/^.*\.server='\(.*\)'$/\1/p" | \
+		grep -F "127.0.0.1#$DNS_PROXY_PORT" > "$out" 2>/dev/null || true
+}
+
 clear_forwarding() {
 	local forwarding changed=0
 
@@ -52,13 +60,15 @@ clear_forwarding() {
 }
 
 apply_forwarding() {
-	local raw_domain domain forwarding tmp changed=0
+	local raw_domain domain forwarding tmp current changed=0
 
 	dnsmasq_available || return 0
 	[ -s "$DOMAINS_FILE" ] || return 0
 
 	tmp="${TRACK_FILE}.tmp.$$"
+	current="${TRACK_FILE}.current.$$"
 	rm -f "$tmp"
+	rm -f "$current"
 
 	append_domain_forwarding() {
 		local oldifs octet numeric_labels=1
@@ -101,9 +111,19 @@ apply_forwarding() {
 	fi
 
 	[ -s "$tmp" ] || {
-		rm -f "$tmp"
+		rm -f "$tmp" "$current"
 		return 0
 	}
+
+	write_current_forwarding "$current"
+
+	if [ -s "$current" ] && cmp -s "$tmp" "$current" 2>/dev/null; then
+		if [ ! -s "$TRACK_FILE" ] || ! cmp -s "$tmp" "$TRACK_FILE" 2>/dev/null; then
+			cp "$tmp" "$TRACK_FILE" 2>/dev/null || true
+		fi
+		rm -f "$tmp" "$current"
+		return 0
+	fi
 
 	if [ -s "$TRACK_FILE" ]; then
 		while IFS= read -r forwarding; do
@@ -115,7 +135,7 @@ apply_forwarding() {
 
 	while IFS= read -r forwarding; do
 		[ -n "$forwarding" ] || continue
-		uci -q show dhcp.@dnsmasq[0] | grep -Fq "server='$forwarding'" && continue
+		grep -Fqx "$forwarding" "$current" 2>/dev/null && continue
 		uci -q add_list "dhcp.@dnsmasq[0].server=$forwarding" && changed=1
 	done < "$tmp"
 
@@ -124,6 +144,7 @@ apply_forwarding() {
 	else
 		mv "$tmp" "$TRACK_FILE"
 	fi
+	rm -f "$current"
 
 	if [ "$changed" -eq 1 ]; then
 		reload_dnsmasq

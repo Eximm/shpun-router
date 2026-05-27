@@ -158,6 +158,92 @@ nft_create_base() {
     return 0
 }
 
+nft_set_has_elements() {
+    nft list set inet shpun "$1" 2>/dev/null | grep -q 'elements = {'
+}
+
+nft_fill_cidr_set_slow() {
+    set_name="$1"
+    file="$2"
+    label="$3"
+    replace_existing="${4:-0}"
+    batch_total="${5:-0}"
+    batch_skipped="${6:-0}"
+
+    added=0
+    failed=0
+    skipped="$batch_skipped"
+
+    [ "$replace_existing" = "1" ] && nft flush set inet shpun "$set_name" >/dev/null 2>&1
+
+    while IFS= read -r cidr; do
+        cidr="$(printf '%s' "$cidr" | tr -d ' \t\r')"
+        [ -z "$cidr" ] && continue
+
+        case "$cidr" in
+            \#*) continue ;;
+            *[!0-9./]*)
+                skipped=$((skipped + 1))
+                continue
+                ;;
+        esac
+
+        case "$cidr" in
+            */*) ip="${cidr%%/*}"; prefix="${cidr##*/}" ;;
+            *)   ip="$cidr";       prefix="32" ;;
+        esac
+
+        case "$prefix" in
+            ''|*[!0-9]*)
+                skipped=$((skipped + 1))
+                continue
+                ;;
+        esac
+
+        [ "$prefix" -gt 32 ] 2>/dev/null && {
+            skipped=$((skipped + 1))
+            continue
+        }
+
+        oldifs="$IFS"
+        IFS='.'
+        set -- $ip
+        IFS="$oldifs"
+
+        [ "$#" -eq 4 ] || {
+            skipped=$((skipped + 1))
+            continue
+        }
+
+        valid_ip=1
+        for octet in "$@"; do
+            case "$octet" in
+                ''|*[!0-9]*) valid_ip=0 ;;
+            esac
+            [ "$octet" -gt 255 ] 2>/dev/null && valid_ip=0
+        done
+
+        [ "$valid_ip" -eq 1 ] || {
+            skipped=$((skipped + 1))
+            continue
+        }
+
+        if nft add element inet shpun "$set_name" "{ $cidr }" >/dev/null 2>&1; then
+            added=$((added + 1))
+        else
+            failed=$((failed + 1))
+        fi
+    done < "$file"
+
+    if [ "$added" -gt 0 ] || nft_set_has_elements "$set_name"; then
+        log "$label: fallback loaded after batch failure (added=$added failed=$failed skipped=$skipped batch_total=$batch_total)"
+        return 0
+    fi
+
+    log "$label: fallback failed after batch failure (added=0 failed=$failed skipped=$skipped batch_total=$batch_total)"
+    return 1
+}
+
 nft_fill_cidr_set() {
     set_name="$1"
     file="$2"
@@ -258,8 +344,9 @@ nft_fill_cidr_set() {
 
     if ! nft -f "$tmp" >/dev/null 2>&1; then
         rm -f "$tmp"
-        log "$label: batch load failed total=$total skipped=$skipped"
-        return 1
+        log "$label: batch load failed total=$total skipped=$skipped, trying fallback"
+        nft_fill_cidr_set_slow "$set_name" "$file" "$label" "$replace_existing" "$total" "$skipped"
+        return $?
     fi
 
     rm -f "$tmp"
