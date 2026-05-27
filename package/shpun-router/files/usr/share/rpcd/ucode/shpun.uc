@@ -14,6 +14,10 @@ const SELECTED_LINK = DIR + "/selected_link_index";
 const CONFIG_PENDING = DIR + "/xray_config_pending";
 const UDP_READY = DIR + "/udp_ready";
 const HTTP_PROXY_PORT = 10809;
+const TUNNEL_EXIT_IP = DIR + "/tunnel_exit_ip";
+const TUNNEL_EXIT_CHECK_MS = DIR + "/tunnel_exit_check_ms";
+const TUNNEL_EXIT_PING_MS = DIR + "/tunnel_exit_ping_ms";
+const TUNNEL_EXIT_LAST_OK = DIR + "/tunnel_exit_last_ok";
 
 const FW_CUR_NEW   = DIR + "/fw_current";
 const FW_LAST_NEW  = DIR + "/fw_latest";
@@ -417,14 +421,21 @@ return {
 					let current_server = get_current_server();
 					if (current_server) {
 						let server_public = public_server_info(current_server);
-						server_public.server_ping_ms = tcp_ping_ms(current_server.host, current_server.port);
+						let exit_ip = safe_public_ip(readfile(TUNNEL_EXIT_IP));
+						if (exit_ip)
+							server_public.exit_ip = exit_ip;
 
-						let exit = exit_probe();
-						if (exit) {
-							server_public.exit_ip = exit.ip;
-							server_public.exit_check_ms = exit.check_ms;
-							server_public.exit_ping_ms = tcp_ping_ms(exit.ip, 0);
-						}
+						let exit_check_ms = int(trim(readfile(TUNNEL_EXIT_CHECK_MS)));
+						if (exit_check_ms >= 0 && exit_check_ms <= 30000)
+							server_public.exit_check_ms = exit_check_ms;
+
+						let exit_ping_ms = int(trim(readfile(TUNNEL_EXIT_PING_MS)));
+						if (exit_ping_ms >= 0 && exit_ping_ms <= 30000)
+							server_public.exit_ping_ms = exit_ping_ms;
+
+						let exit_last_ok = int(trim(readfile(TUNNEL_EXIT_LAST_OK)));
+						if (exit_last_ok > 0)
+							server_public.exit_last_ok = exit_last_ok;
 
 						res.current_server = server_public;
 					}

@@ -22,6 +22,10 @@ CONFIG_ACTIVE_FILE="$STATE_DIR/xray_config_active"
 CONFIG_PENDING_FILE="$STATE_DIR/xray_config_pending"
 DNS_PROXY_READY_FILE="$STATE_DIR/dns_proxy_ready"
 UDP_READY_FILE="$STATE_DIR/udp_ready"
+TUNNEL_EXIT_IP_FILE="$STATE_DIR/tunnel_exit_ip"
+TUNNEL_EXIT_CHECK_MS_FILE="$STATE_DIR/tunnel_exit_check_ms"
+TUNNEL_EXIT_PING_MS_FILE="$STATE_DIR/tunnel_exit_ping_ms"
+TUNNEL_EXIT_LAST_OK_FILE="$STATE_DIR/tunnel_exit_last_ok"
 CONFIG_LOCKDIR="/tmp/shpun-config.lock"
 
 LOG_TAG="shpun-agent"
@@ -1606,9 +1610,78 @@ probe_url_through_tunnel() {
 	esac
 }
 
+seconds_to_ms() {
+	awk -v v="$1" 'BEGIN {
+		if (v == "") { print ""; exit }
+		printf "%d\n", (v * 1000)
+	}' 2>/dev/null
+}
+
+cache_tunnel_exit() {
+	local ip="$1"
+	local check_ms="$2"
+	local ping_ms
+
+	ip="$(printf '%s' "$ip" | tr -d '\r\n ')"
+	case "$ip" in
+		''|*[!A-Za-z0-9:.-]*) return 1 ;;
+	esac
+
+	ping_ms="$(ping -c1 -W1 "$ip" 2>/dev/null | sed -n 's/.*time=\([0-9.]*\).*/\1/p' | head -n 1)"
+	ping_ms="${ping_ms%%.*}"
+
+	printf '%s\n' "$ip" > "$TUNNEL_EXIT_IP_FILE"
+	case "$check_ms" in
+		''|*[!0-9]*) rm -f "$TUNNEL_EXIT_CHECK_MS_FILE" ;;
+		*) printf '%s\n' "$check_ms" > "$TUNNEL_EXIT_CHECK_MS_FILE" ;;
+	esac
+	case "$ping_ms" in
+		''|*[!0-9]*) rm -f "$TUNNEL_EXIT_PING_MS_FILE" ;;
+		*) printf '%s\n' "$ping_ms" > "$TUNNEL_EXIT_PING_MS_FILE" ;;
+	esac
+	date +%s > "$TUNNEL_EXIT_LAST_OK_FILE" 2>/dev/null || true
+	return 0
+}
+
+probe_tunnel_exit_cache() {
+	local proxy="http://127.0.0.1:${HTTP_PROXY_PORT}"
+	local out ip sec check_ms start end
+
+	case "$HTTP_BIN" in
+		curl)
+			out="$(curl -fsS -m 8 -x "$proxy" -w '\n%{time_total}' "$TUNNEL_PROBE_URL" 2>/dev/null)" || return 1
+			ip="$(printf '%s\n' "$out" | sed -n '1p')"
+			sec="$(printf '%s\n' "$out" | sed -n '2p')"
+			check_ms="$(seconds_to_ms "$sec")"
+			;;
+		wget|uclient-fetch)
+			start="$(cut -d' ' -f1 /proc/uptime 2>/dev/null)"
+			case "$HTTP_BIN" in
+				wget)
+					ip="$(env http_proxy="$proxy" HTTP_PROXY="$proxy" wget -q -T 8 -O - "$TUNNEL_PROBE_URL" 2>/dev/null | tr -d '\r\n ')"
+					;;
+				uclient-fetch)
+					ip="$(env http_proxy="$proxy" HTTP_PROXY="$proxy" uclient-fetch -q -T 8 -Y on -O - "$TUNNEL_PROBE_URL" 2>/dev/null | tr -d '\r\n ')"
+					;;
+			esac
+			[ -n "$ip" ] || return 1
+			end="$(cut -d' ' -f1 /proc/uptime 2>/dev/null)"
+			sec="$(awk -v s="$start" -v e="$end" 'BEGIN { printf "%.3f", e - s }' 2>/dev/null)"
+			check_ms="$(seconds_to_ms "$sec")"
+			;;
+		*)
+			return 1
+			;;
+	esac
+
+	cache_tunnel_exit "$ip" "$check_ms"
+}
+
 check_tunnel_connectivity() {
 	detect_http_client
 	[ -n "$HTTP_BIN" ] || return 1
+
+	probe_tunnel_exit_cache && return 0
 
 	probe_url_through_tunnel "$TUNNEL_PROBE_URL" && return 0
 
