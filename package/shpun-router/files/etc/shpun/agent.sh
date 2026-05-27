@@ -649,9 +649,16 @@ save_subscription_url() {
 }
 
 migrate_legacy_gateway_state() {
-	[ -s "$SUB_URL_FILE" ] || return 0
+	local saved_config_url
 
-	save_subscription_url "$(cat "$SUB_URL_FILE" 2>/dev/null | tr -d '\r\n ' || true)" >/dev/null 2>&1 || true
+	if [ -s "$SUB_URL_FILE" ]; then
+		save_subscription_url "$(cat "$SUB_URL_FILE" 2>/dev/null | tr -d '\r\n ' || true)" >/dev/null 2>&1 || true
+	fi
+
+	if [ -s "$CONFIG_URL_FILE" ]; then
+		saved_config_url="$(cat "$CONFIG_URL_FILE" 2>/dev/null | tr -d '\r\n ' || true)"
+		[ -n "$saved_config_url" ] && save_config_url "$saved_config_url" >/dev/null 2>&1 || true
+	fi
 }
 
 public_config_url() {
@@ -1687,6 +1694,8 @@ wait_for_default_route() {
 }
 
 fetch_subscription_once() {
+	local uid_public usi_public
+
 	if [ -z "$CLEAN_CODE" ] || [ -z "$API_URL" ]; then
 		return 1
 	fi
@@ -1732,6 +1741,15 @@ fetch_subscription_once() {
 		save_config_url "$CONFIG_URL" >/dev/null 2>&1 || true
 	fi
 
+	if [ -z "$CONFIG_URL" ] && [ -n "$CONFIG_API_URL" ]; then
+		uid_public="$(printf '%s' "$BODY" | jsonfilter -e '@.uid' 2>/dev/null || echo "")"
+		usi_public="$(printf '%s' "$BODY" | jsonfilter -e '@.usi' 2>/dev/null || echo "")"
+		if [ -n "$uid_public" ] && [ -n "$usi_public" ]; then
+			CONFIG_URL="${CONFIG_API_URL}?uid=${uid_public}&usi=${usi_public}&code=${CLEAN_CODE}"
+			save_config_url "$CONFIG_URL" >/dev/null 2>&1 || true
+		fi
+	fi
+
 	[ -n "$SUBSCRIPTION_URL" ] && save_subscription_url "$SUBSCRIPTION_URL" >/dev/null 2>&1 || true
 
 	log "fetching subscription by preferred source order: direct, mirror, profile gateway"
@@ -1746,7 +1764,11 @@ fetch_subscription_once() {
 	rm -f "$TMP_SUB"
 	if download_subscription_from_url_file "$TMP_SUB" "$SUB_URL_FILE" "direct"; then
 		SOURCE_OK=1
-	elif [ -n "$CONFIG_URL" ] &&
+	elif download_subscription_from_url_file "$TMP_SUB" "$SUB_MIRROR_URL_FILE" "mirror"; then
+		SOURCE_OK=1
+	fi
+
+	if [ "$SOURCE_OK" -eq 0 ] && [ -n "$CONFIG_URL" ] &&
 		http_get_to_file "$(append_format_json "$CONFIG_URL")" "$CONFIG_META" >/dev/null 2>&1; then
 		save_router_software_metadata_file "$CONFIG_META" >/dev/null 2>&1 || true
 		SUBSCRIPTION_URL="$(extract_subscription_url_from_json_file "$CONFIG_META" || echo "")"
@@ -1754,12 +1776,9 @@ fetch_subscription_once() {
 
 		if download_subscription_from_url_file "$TMP_SUB" "$SUB_URL_FILE" "direct"; then
 			SOURCE_OK=1
+		elif download_subscription_from_url_file "$TMP_SUB" "$SUB_MIRROR_URL_FILE" "mirror"; then
+			SOURCE_OK=1
 		fi
-	fi
-
-	if [ "$SOURCE_OK" -eq 0 ] &&
-		download_subscription_from_url_file "$TMP_SUB" "$SUB_MIRROR_URL_FILE" "mirror"; then
-		SOURCE_OK=1
 	fi
 
 	if [ "$SOURCE_OK" -eq 0 ] && [ -s "$CONFIG_META" ] &&
@@ -2150,7 +2169,8 @@ check_subscription_alive() {
 	log "subscription removed in profile gateway, resetting VPN state"
 
 	rm -f "$VPN_READY_FILE"
-	rm -f "$SUB_FILE"
+	rm -f "$SUB_FILE" "$SUB_URL_FILE" "$SUB_MIRROR_URL_FILE" "$CONFIG_URL_FILE" \
+		"$STATE_DIR/selected_link_index"
 
 	echo "$now_ts" > "$LAST_CHECK_FILE"
 	echo "$ERR" > "$VERROR_FILE"

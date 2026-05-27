@@ -5,6 +5,9 @@ import { open, popen } from 'fs';
 const DIR       = "/etc/shpun";
 const CODE      = DIR + "/router_code";
 const SUB       = DIR + "/subscription.json";
+const SUB_URL   = DIR + "/subscription_url";
+const SUB_MIRROR_URL = DIR + "/subscription_mirror_url";
+const CONFIG_URL = DIR + "/router_config_url";
 const READY     = DIR + "/vpn_ready";
 const VERROR    = DIR + "/vpn_error";
 const SELECTED_LINK = DIR + "/selected_link_index";
@@ -804,9 +807,11 @@ return {
 						if (p_fw) p_fw.close();
 					}
 
-					let p3 = popen(
-						"rm -f " + CODE + " " + SUB + " " +
-						DIR + "/xray.json " + READY + " " + VERROR + " " + LASTCHK + " " +
+						let p3 = popen(
+							"rm -f " + CODE + " " + SUB + " " +
+							SUB_URL + " " + SUB_MIRROR_URL + " " + CONFIG_URL + " " +
+							SELECTED_LINK + " " +
+							DIR + "/xray.json " + READY + " " + VERROR + " " + LASTCHK + " " +
 						CONFIG_PENDING + " " + DIR + "/xray_config_active " +
 						DIR + "/dns_proxy_ready " + UDP_READY +
 						" >/dev/null 2>&1"
