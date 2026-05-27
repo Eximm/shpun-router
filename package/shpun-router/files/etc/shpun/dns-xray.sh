@@ -32,12 +32,21 @@ reload_dnsmasq() {
 	/etc/init.d/dnsmasq reload >/dev/null 2>&1 || /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
 }
 
+sort_unique_file() {
+	local file="$1"
+	local sorted="${file}.sorted"
+
+	sort -u "$file" > "$sorted" 2>/dev/null && mv "$sorted" "$file"
+	rm -f "$sorted"
+}
+
 write_current_forwarding() {
 	local out="$1"
 
 	uci -q show dhcp.@dnsmasq[0] 2>/dev/null | \
 		sed -n "s/^.*\.server='\(.*\)'$/\1/p" | \
 		grep -F "127.0.0.1#$DNS_PROXY_PORT" > "$out" 2>/dev/null || true
+	[ -s "$out" ] && sort_unique_file "$out"
 }
 
 clear_forwarding() {
@@ -110,6 +119,8 @@ apply_forwarding() {
 		done
 	fi
 
+	[ -s "$tmp" ] && sort_unique_file "$tmp"
+
 	[ -s "$tmp" ] || {
 		rm -f "$tmp" "$current"
 		return 0
@@ -125,13 +136,11 @@ apply_forwarding() {
 		return 0
 	fi
 
-	if [ -s "$TRACK_FILE" ]; then
-		while IFS= read -r forwarding; do
-			[ -n "$forwarding" ] || continue
-			grep -Fqx "$forwarding" "$tmp" 2>/dev/null && continue
-			uci -q del_list "dhcp.@dnsmasq[0].server=$forwarding" && changed=1
-		done < "$TRACK_FILE"
-	fi
+	while IFS= read -r forwarding; do
+		[ -n "$forwarding" ] || continue
+		grep -Fqx "$forwarding" "$tmp" 2>/dev/null && continue
+		uci -q del_list "dhcp.@dnsmasq[0].server=$forwarding" && changed=1
+	done < "$current"
 
 	while IFS= read -r forwarding; do
 		[ -n "$forwarding" ] || continue
