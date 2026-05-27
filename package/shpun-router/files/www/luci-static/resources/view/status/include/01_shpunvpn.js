@@ -213,6 +213,7 @@ function buildServerBadges(server) {
 	var protoLabel = proto === 'vless' ? 'VLESS' : (proto === 'ss' ? 'SS' : proto.toUpperCase());
 	var location = formatServerLocation(server.name || server.host || 'Server', protoLabel);
 	var exitPing = parseInt(server.exit_ping_ms, 10);
+	var serverPing = parseInt(server.server_ping_ms, 10);
 	var badges = [
 		makeBadge('shpun-badge--server', location + (protoLabel ? ' - ' + protoLabel : ''))
 	];
@@ -222,6 +223,8 @@ function buildServerBadges(server) {
 
 	if (!isNaN(exitPing) && exitPing >= 0)
 		badges.push(makeBadge('shpun-badge--check', 'Сервер ' + exitPing + ' ms', 'Время отклика от роутера до выбранного VPN-сервера. Измеряется по внешнему IP, с которым VPN выходит в интернет.'));
+	else if (!isNaN(serverPing) && serverPing >= 0)
+		badges.push(makeBadge('shpun-badge--check', 'Пинг ' + serverPing + ' ms', 'Время отклика от роутера до выбранного VPN-сервера.'));
 
 	return badges;
 }

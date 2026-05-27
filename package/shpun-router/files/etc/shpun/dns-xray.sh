@@ -44,22 +44,46 @@ write_current_forwarding() {
 	local out="$1"
 
 	uci -q show dhcp.@dnsmasq[0] 2>/dev/null | \
-		sed -n "s/^.*\.server='\(.*\)'$/\1/p" | \
+		tr "'" "\n" | \
 		grep -F "127.0.0.1#$DNS_PROXY_PORT" > "$out" 2>/dev/null || true
 	[ -s "$out" ] && sort_unique_file "$out"
 }
 
+write_current_forwarding_raw() {
+	local out="$1"
+
+	uci -q show dhcp.@dnsmasq[0] 2>/dev/null | \
+		tr "'" "\n" | \
+		grep -F "127.0.0.1#$DNS_PROXY_PORT" > "$out" 2>/dev/null || true
+}
+
+write_current_non_shpun_servers() {
+	local out="$1"
+
+	uci -q show dhcp.@dnsmasq[0] 2>/dev/null | \
+		tr "'" "\n" | \
+		grep -F '/' | \
+		grep -Fv "127.0.0.1#$DNS_PROXY_PORT" > "$out" 2>/dev/null || true
+}
+
 clear_forwarding() {
-	local forwarding changed=0
+	local forwarding tmp changed=0
 
 	dnsmasq_available || return 0
 	[ -s "$TRACK_FILE" ] || return 0
 
+	tmp="${TRACK_FILE}.keep.$$"
+	rm -f "$tmp"
+	write_current_non_shpun_servers "$tmp"
+
+	uci -q delete dhcp.@dnsmasq[0].server && changed=1
+
 	while IFS= read -r forwarding; do
 		[ -n "$forwarding" ] || continue
-		uci -q del_list "dhcp.@dnsmasq[0].server=$forwarding" && changed=1
-	done < "$TRACK_FILE"
+		uci -q add_list "dhcp.@dnsmasq[0].server=$forwarding" && changed=1
+	done < "$tmp"
 
+	rm -f "$tmp"
 	rm -f "$TRACK_FILE"
 
 	if [ "$changed" -eq 1 ]; then
@@ -69,15 +93,19 @@ clear_forwarding() {
 }
 
 apply_forwarding() {
-	local raw_domain domain forwarding tmp current changed=0
+	local raw_domain domain forwarding tmp current current_raw keep changed=0
 
 	dnsmasq_available || return 0
 	[ -s "$DOMAINS_FILE" ] || return 0
 
 	tmp="${TRACK_FILE}.tmp.$$"
 	current="${TRACK_FILE}.current.$$"
+	current_raw="${TRACK_FILE}.current.raw.$$"
+	keep="${TRACK_FILE}.keep.$$"
 	rm -f "$tmp"
 	rm -f "$current"
+	rm -f "$current_raw"
+	rm -f "$keep"
 
 	append_domain_forwarding() {
 		local oldifs octet numeric_labels=1
@@ -122,29 +150,32 @@ apply_forwarding() {
 	[ -s "$tmp" ] && sort_unique_file "$tmp"
 
 	[ -s "$tmp" ] || {
-		rm -f "$tmp" "$current"
+		rm -f "$tmp" "$current" "$current_raw"
 		return 0
 	}
 
+	write_current_forwarding_raw "$current_raw"
 	write_current_forwarding "$current"
 
-	if [ -s "$current" ] && cmp -s "$tmp" "$current" 2>/dev/null; then
+	if [ -s "$current" ] && cmp -s "$tmp" "$current" 2>/dev/null && cmp -s "$tmp" "$current_raw" 2>/dev/null; then
 		if [ ! -s "$TRACK_FILE" ] || ! cmp -s "$tmp" "$TRACK_FILE" 2>/dev/null; then
 			cp "$tmp" "$TRACK_FILE" 2>/dev/null || true
 		fi
-		rm -f "$tmp" "$current"
+		rm -f "$tmp" "$current" "$current_raw" "$keep"
 		return 0
 	fi
 
-	while IFS= read -r forwarding; do
-		[ -n "$forwarding" ] || continue
-		grep -Fqx "$forwarding" "$tmp" 2>/dev/null && continue
-		uci -q del_list "dhcp.@dnsmasq[0].server=$forwarding" && changed=1
-	done < "$current"
+	write_current_non_shpun_servers "$keep"
+
+	uci -q delete dhcp.@dnsmasq[0].server && changed=1
 
 	while IFS= read -r forwarding; do
 		[ -n "$forwarding" ] || continue
-		grep -Fqx "$forwarding" "$current" 2>/dev/null && continue
+		uci -q add_list "dhcp.@dnsmasq[0].server=$forwarding" && changed=1
+	done < "$keep"
+
+	while IFS= read -r forwarding; do
+		[ -n "$forwarding" ] || continue
 		uci -q add_list "dhcp.@dnsmasq[0].server=$forwarding" && changed=1
 	done < "$tmp"
 
@@ -153,7 +184,7 @@ apply_forwarding() {
 	else
 		mv "$tmp" "$TRACK_FILE"
 	fi
-	rm -f "$current"
+	rm -f "$current" "$current_raw" "$keep"
 
 	if [ "$changed" -eq 1 ]; then
 		reload_dnsmasq

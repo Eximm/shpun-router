@@ -417,6 +417,7 @@ return {
 					let current_server = get_current_server();
 					if (current_server) {
 						let server_public = public_server_info(current_server);
+						server_public.server_ping_ms = tcp_ping_ms(current_server.host, current_server.port);
 
 						let exit = exit_probe();
 						if (exit) {

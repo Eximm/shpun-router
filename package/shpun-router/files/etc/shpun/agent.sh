@@ -1659,16 +1659,26 @@ ensure_transparent_rules() {
 }
 
 recover_failed_tunnel() {
-	log "tunnel probe failure confirmed, restarting shpun-vpn to apply current effective config"
-	rm -f "$VPN_READY_FILE"
+	if [ -s "$CONFIG_PENDING_FILE" ]; then
+		log "tunnel probe failure confirmed and pending xray config exists, restarting shpun-vpn to apply it"
+		rm -f "$VPN_READY_FILE"
 
-	if ensure_vpn_from_subscription; then
-		log "tunnel recovery completed"
-		return 0
+		if ensure_vpn_from_subscription; then
+			log "tunnel recovery completed"
+			return 0
+		fi
+
+		log "tunnel recovery failed; agent will retry"
+		return 1
 	fi
 
-	log "tunnel recovery failed; agent will retry"
-	return 1
+	log "tunnel probe failure confirmed, keeping current xray session and refreshing transparent rules"
+	ensure_transparent_rules || true
+	apply_protected_dns_forwarding
+	echo "ok" > "$VPN_READY_FILE"
+	rm -f "$VERROR_FILE"
+	return 0
+
 }
 
 wait_for_default_route() {
@@ -2257,6 +2267,7 @@ main_loop() {
 
 	NET_FAIL_SECONDS=0
 	TUNNEL_FAIL_SECONDS=0
+	TUNNEL_PROBE_WARNED=0
 	LAST_TUNNEL_PROBE=0
 
 	while :; do
@@ -2308,13 +2319,17 @@ main_loop() {
 					if check_tunnel_connectivity; then
 						[ "$TUNNEL_FAIL_SECONDS" -gt 0 ] && log "tunnel probe recovered after ${TUNNEL_FAIL_SECONDS}s"
 						TUNNEL_FAIL_SECONDS=0
+						TUNNEL_PROBE_WARNED=0
 					else
 						TUNNEL_FAIL_SECONDS=$((TUNNEL_FAIL_SECONDS + TUNNEL_PROBE_INTERVAL))
-						log "tunnel proxy probe failed for ${TUNNEL_FAIL_SECONDS}s while WAN is reachable"
 
 						if [ "$TUNNEL_FAIL_SECONDS" -ge "$TUNNEL_FAIL_TIMEOUT" ]; then
-							recover_failed_tunnel || true
-							TUNNEL_FAIL_SECONDS=0
+							if [ "$TUNNEL_PROBE_WARNED" -eq 0 ]; then
+								log "tunnel proxy probe unavailable for ${TUNNEL_FAIL_SECONDS}s while WAN is reachable"
+								recover_failed_tunnel || true
+								TUNNEL_PROBE_WARNED=1
+							fi
+							TUNNEL_FAIL_SECONDS="$TUNNEL_FAIL_TIMEOUT"
 						fi
 					fi
 				fi
@@ -2322,6 +2337,7 @@ main_loop() {
 				NET_FAIL_SECONDS=$((NET_FAIL_SECONDS + MAIN_LOOP_SLEEP))
 				log "no internet detected for ${NET_FAIL_SECONDS}s while VPN is active"
 				TUNNEL_FAIL_SECONDS=0
+				TUNNEL_PROBE_WARNED=0
 
 				if [ "$NET_FAIL_SECONDS" -ge "$NET_FAIL_TIMEOUT" ]; then
 					log "internet probe failed for ${NET_FAIL_SECONDS}s, keeping tunnel running"
