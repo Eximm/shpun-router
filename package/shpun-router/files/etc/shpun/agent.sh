@@ -46,10 +46,12 @@ TPROXY_PORT_DEFAULT=12346
 TPROXY_MARK_DEFAULT=233
 TPROXY_TABLE_DEFAULT=233
 HTTP_PROXY_PORT_DEFAULT=10809
+SOCKS_PROXY_PORT_DEFAULT=10808
 DNS_PROXY_PORT_DEFAULT=1053
 TUNNEL_PROBE_INTERVAL_DEFAULT=60
 TUNNEL_FAIL_TIMEOUT_DEFAULT=180
 TUNNEL_PROBE_URL_DEFAULT="http://api.ipify.org"
+TUNNEL_EXIT_PROBE_URLS_DEFAULT="http://api.ipify.org http://ifconfig.me/ip http://icanhazip.com"
 TUNNEL_PROBE_FALLBACK_URL_DEFAULT="http://cp.cloudflare.com/generate_204"
 TUNNEL_PROBE_SECONDARY_URL_DEFAULT="http://connectivitycheck.gstatic.com/generate_204"
 
@@ -446,10 +448,12 @@ load_conf() {
 	[ -z "$TPROXY_MARK" ]           && TPROXY_MARK="$TPROXY_MARK_DEFAULT"
 	[ -z "$TPROXY_TABLE" ]          && TPROXY_TABLE="$TPROXY_TABLE_DEFAULT"
 	[ -z "$HTTP_PROXY_PORT" ]       && HTTP_PROXY_PORT="$HTTP_PROXY_PORT_DEFAULT"
+	[ -z "$SOCKS_PROXY_PORT" ]      && SOCKS_PROXY_PORT="$SOCKS_PROXY_PORT_DEFAULT"
 	[ -z "$DNS_PROXY_PORT" ]        && DNS_PROXY_PORT="$DNS_PROXY_PORT_DEFAULT"
 	[ -z "$TUNNEL_PROBE_INTERVAL" ] && TUNNEL_PROBE_INTERVAL="$TUNNEL_PROBE_INTERVAL_DEFAULT"
 	[ -z "$TUNNEL_FAIL_TIMEOUT" ]   && TUNNEL_FAIL_TIMEOUT="$TUNNEL_FAIL_TIMEOUT_DEFAULT"
 	[ -z "$TUNNEL_PROBE_URL" ]      && TUNNEL_PROBE_URL="${KEEPALIVE_URL:-$TUNNEL_PROBE_URL_DEFAULT}"
+	[ -z "$TUNNEL_EXIT_PROBE_URLS" ] && TUNNEL_EXIT_PROBE_URLS="$TUNNEL_EXIT_PROBE_URLS_DEFAULT"
 	[ -z "$TUNNEL_PROBE_FALLBACK_URL" ] && TUNNEL_PROBE_FALLBACK_URL="$TUNNEL_PROBE_FALLBACK_URL_DEFAULT"
 	[ -z "$TUNNEL_PROBE_SECONDARY_URL" ] && TUNNEL_PROBE_SECONDARY_URL="$TUNNEL_PROBE_SECONDARY_URL_DEFAULT"
 
@@ -474,6 +478,11 @@ load_conf() {
 	esac
 	[ "$HTTP_PROXY_PORT" -gt 0 ] 2>/dev/null && [ "$HTTP_PROXY_PORT" -le 65535 ] 2>/dev/null || \
 		HTTP_PROXY_PORT="$HTTP_PROXY_PORT_DEFAULT"
+	case "$SOCKS_PROXY_PORT" in
+		''|*[!0-9]*) SOCKS_PROXY_PORT="$SOCKS_PROXY_PORT_DEFAULT" ;;
+	esac
+	[ "$SOCKS_PROXY_PORT" -gt 0 ] 2>/dev/null && [ "$SOCKS_PROXY_PORT" -le 65535 ] 2>/dev/null || \
+		SOCKS_PROXY_PORT="$SOCKS_PROXY_PORT_DEFAULT"
 	case "$DNS_PROXY_PORT" in
 		''|*[!0-9]*) DNS_PROXY_PORT="$DNS_PROXY_PORT_DEFAULT" ;;
 	esac
@@ -1624,7 +1633,11 @@ cache_tunnel_exit() {
 
 	ip="$(printf '%s' "$ip" | tr -d '\r\n ')"
 	case "$ip" in
-		''|*[!A-Za-z0-9:.-]*) return 1 ;;
+		''|*[!0-9A-Fa-f:.]*) return 1 ;;
+	esac
+	case "$ip" in
+		*.*|*:*) ;;
+		*) return 1 ;;
 	esac
 
 	ping_ms="$(ping -c1 -W1 "$ip" 2>/dev/null | sed -n 's/.*time=\([0-9.]*\).*/\1/p' | head -n 1)"
@@ -1643,25 +1656,26 @@ cache_tunnel_exit() {
 	return 0
 }
 
-probe_tunnel_exit_cache() {
+probe_tunnel_exit_url_http() {
+	local url="$1"
 	local proxy="http://127.0.0.1:${HTTP_PROXY_PORT}"
 	local out ip sec check_ms start end
 
 	case "$HTTP_BIN" in
 		curl)
-			out="$(curl -fsS -m 8 -x "$proxy" -w '\n%{time_total}' "$TUNNEL_PROBE_URL" 2>/dev/null)" || return 1
-			ip="$(printf '%s\n' "$out" | sed -n '1p')"
-			sec="$(printf '%s\n' "$out" | sed -n '2p')"
+			out="$(curl -fsS -m 8 -x "$proxy" -w '\n%{time_total}' "$url" 2>/dev/null)" || return 1
+			ip="$(printf '%s\n' "$out" | sed '$d' | head -n 1 | tr -d '\r\n ')"
+			sec="$(printf '%s\n' "$out" | tail -n 1)"
 			check_ms="$(seconds_to_ms "$sec")"
 			;;
 		wget|uclient-fetch)
 			start="$(cut -d' ' -f1 /proc/uptime 2>/dev/null)"
 			case "$HTTP_BIN" in
 				wget)
-					ip="$(env http_proxy="$proxy" HTTP_PROXY="$proxy" wget -q -T 8 -O - "$TUNNEL_PROBE_URL" 2>/dev/null | tr -d '\r\n ')"
+					ip="$(env http_proxy="$proxy" HTTP_PROXY="$proxy" wget -q -T 8 -O - "$url" 2>/dev/null | tr -d '\r\n ')"
 					;;
 				uclient-fetch)
-					ip="$(env http_proxy="$proxy" HTTP_PROXY="$proxy" uclient-fetch -q -T 8 -Y on -O - "$TUNNEL_PROBE_URL" 2>/dev/null | tr -d '\r\n ')"
+					ip="$(env http_proxy="$proxy" HTTP_PROXY="$proxy" uclient-fetch -q -T 8 -Y on -O - "$url" 2>/dev/null | tr -d '\r\n ')"
 					;;
 			esac
 			[ -n "$ip" ] || return 1
@@ -1671,10 +1685,35 @@ probe_tunnel_exit_cache() {
 			;;
 		*)
 			return 1
-			;;
+		;;
 	esac
 
 	cache_tunnel_exit "$ip" "$check_ms"
+}
+
+probe_tunnel_exit_url_socks() {
+	local url="$1"
+	local proxy="socks5h://127.0.0.1:${SOCKS_PROXY_PORT}"
+	local out ip sec check_ms
+
+	[ "$HTTP_BIN" = "curl" ] || return 1
+	out="$(curl -fsS -m 8 -x "$proxy" -w '\n%{time_total}' "$url" 2>/dev/null)" || return 1
+	ip="$(printf '%s\n' "$out" | sed '$d' | head -n 1 | tr -d '\r\n ')"
+	sec="$(printf '%s\n' "$out" | tail -n 1)"
+	check_ms="$(seconds_to_ms "$sec")"
+	cache_tunnel_exit "$ip" "$check_ms"
+}
+
+probe_tunnel_exit_cache() {
+	local url
+
+	for url in $TUNNEL_EXIT_PROBE_URLS; do
+		[ -n "$url" ] || continue
+		probe_tunnel_exit_url_http "$url" && return 0
+		probe_tunnel_exit_url_socks "$url" && return 0
+	done
+
+	return 1
 }
 
 check_tunnel_connectivity() {
