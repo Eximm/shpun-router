@@ -421,17 +421,31 @@ return {
 					let current_server = get_current_server();
 					if (current_server) {
 						let server_public = public_server_info(current_server);
-						let exit_ip = safe_public_ip(readfile(TUNNEL_EXIT_IP));
-						if (exit_ip)
-							server_public.exit_ip = exit_ip;
 
-						let exit_check_ms = int(trim(readfile(TUNNEL_EXIT_CHECK_MS)));
-						if (exit_check_ms >= 0 && exit_check_ms <= 30000)
-							server_public.exit_check_ms = exit_check_ms;
+						let exit = exit_probe();
+						if (exit) {
+							server_public.exit_ip = exit.ip;
+							server_public.exit_check_ms = exit.check_ms;
+							server_public.exit_ping_ms = tcp_ping_ms(exit.ip, 0);
+						}
 
-						let exit_ping_ms = int(trim(readfile(TUNNEL_EXIT_PING_MS)));
-						if (exit_ping_ms >= 0 && exit_ping_ms <= 30000)
-							server_public.exit_ping_ms = exit_ping_ms;
+						if (!server_public.exit_ip) {
+							let exit_ip = safe_public_ip(readfile(TUNNEL_EXIT_IP));
+							if (exit_ip)
+								server_public.exit_ip = exit_ip;
+						}
+
+						if (server_public.exit_check_ms == null) {
+							let exit_check_ms = int(trim(readfile(TUNNEL_EXIT_CHECK_MS)));
+							if (exit_check_ms >= 0 && exit_check_ms <= 30000)
+								server_public.exit_check_ms = exit_check_ms;
+						}
+
+						if (server_public.exit_ping_ms == null) {
+							let exit_ping_ms = int(trim(readfile(TUNNEL_EXIT_PING_MS)));
+							if (exit_ping_ms >= 0 && exit_ping_ms <= 30000)
+								server_public.exit_ping_ms = exit_ping_ms;
+						}
 
 						let exit_last_ok = int(trim(readfile(TUNNEL_EXIT_LAST_OK)));
 						if (exit_last_ok > 0)

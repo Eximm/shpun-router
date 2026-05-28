@@ -213,11 +213,8 @@ function buildServerBadges(server) {
 	var protoLabel = proto === 'vless' ? 'VLESS' : (proto === 'ss' ? 'SS' : proto.toUpperCase());
 	var location = formatServerLocation(server.name || server.host || 'Server', protoLabel);
 	var exitPing = parseInt(server.exit_ping_ms, 10);
-	var serverText = location + (protoLabel ? ' - ' + protoLabel : '');
-	if (!isNaN(exitPing) && exitPing >= 0)
-		serverText += ' · ' + exitPing + ' ms';
 	var badges = [
-		makeBadge('shpun-badge--server', serverText)
+		makeBadge('shpun-badge--server', location + (protoLabel ? ' - ' + protoLabel : ''))
 	];
 
 	if (server.exit_ip)

@@ -156,31 +156,6 @@ REDIR_PORT="${REDIR_PORT:-12345}"
 TPROXY_PORT="${TPROXY_PORT:-12346}"
 TPROXY_MARK="${TPROXY_MARK:-233}"
 HTTP_PROXY_PORT="${HTTP_PROXY_PORT:-10809}"
-DNS_PROXY_PORT="${DNS_PROXY_PORT:-1053}"
-DNS_UPSTREAM="${DNS_ADDR1:-9.9.9.9}"
-
-valid_ipv4_address() {
-    local ip="$1" octet oldifs
-
-    case "$ip" in
-        ''|*[!0-9.]*) return 1 ;;
-    esac
-
-    oldifs="$IFS"
-    IFS='.'
-    set -- $ip
-    IFS="$oldifs"
-    [ "$#" -eq 4 ] || return 1
-
-    for octet in "$@"; do
-        case "$octet" in ''|*[!0-9]*) return 1 ;; esac
-        [ "$octet" -le 255 ] 2>/dev/null || return 1
-    done
-
-    return 0
-}
-
-valid_ipv4_address "$DNS_UPSTREAM" || DNS_UPSTREAM="9.9.9.9"
 
 mask_host() {
     host="$(printf '%s' "$1" | tr -d ' \t\r\n')"
@@ -479,10 +454,6 @@ case "$ROUTER_PROTO" in
                 ;;
         esac
 
-        METHOD_JSON="$(json_escape "$METHOD")"
-        PASSWORD_JSON="$(json_escape "$PASSWORD")"
-        SERVER_JSON="$(json_escape "$SERVER")"
-
         cat >"$OUT_CFG" <<EOF
 {
   "log": {
@@ -513,17 +484,6 @@ case "$ROUTER_PROTO" in
       "settings": {}
     },
     {
-      "tag": "dns-in",
-      "listen": "127.0.0.1",
-      "port": $DNS_PROXY_PORT,
-      "protocol": "dokodemo-door",
-      "settings": {
-        "address": "$DNS_UPSTREAM",
-        "port": 53,
-        "network": "tcp,udp"
-      }
-    },
-    {
       "tag": "redir-in",
       "listen": "0.0.0.0",
       "port": $REDIR_PORT,
@@ -534,8 +494,7 @@ case "$ROUTER_PROTO" in
       },
       "sniffing": {
         "enabled": true,
-        "destOverride": ["http", "tls"],
-        "routeOnly": true
+        "destOverride": ["http", "tls"]
       }
     },
     {
@@ -553,9 +512,7 @@ case "$ROUTER_PROTO" in
         }
       },
       "sniffing": {
-        "enabled": true,
-        "destOverride": ["quic"],
-        "routeOnly": true
+        "enabled": false
       }
     }
   ],
@@ -567,10 +524,10 @@ case "$ROUTER_PROTO" in
       "settings": {
         "servers": [
           {
-            "address": "$SERVER_JSON",
+            "address": "$SERVER",
             "port": $PORT,
-            "method": "$METHOD_JSON",
-            "password": "$PASSWORD_JSON",
+            "method": "$METHOD",
+            "password": "$PASSWORD",
             "udp": true
           }
         ]
@@ -588,23 +545,15 @@ case "$ROUTER_PROTO" in
     "rules": [
       {
         "type": "field",
-        "inboundTag": ["dns-in"],
-        "outboundTag": "proxy"
-      },
-      {
-        "type": "field",
         "outboundTag": "direct",
         "ip": [
           "127.0.0.0/8",
           "10.0.0.0/8",
-          "169.254.0.0/16",
           "172.16.0.0/12",
-          "192.168.0.0/16",
-          "224.0.0.0/4",
-          "255.255.255.255/32"
+          "192.168.0.0/16"
         ],
         "domain": [
-          "$SERVER_JSON"
+          "$SERVER"
         ]
       },
 $ALWAYS_VPN_RULE
@@ -682,19 +631,8 @@ EOF
                 ;;
         esac
 
-        UUID_JSON="$(json_escape "$UUID")"
-        SERVER_JSON="$(json_escape "$SERVER")"
-        TYPE_JSON="$(json_escape "$TYPE")"
-        FP_JSON="$(json_escape "$FP")"
-        PBK_JSON="$(json_escape "$PBK")"
-        SID_JSON="$(json_escape "$SID")"
-        FLOW_JSON="$(json_escape "$FLOW")"
-        SNI_JSON="$(json_escape "$SNI")"
-        ENCRYPTION_JSON="$(json_escape "$ENCRYPTION")"
-        HEADER_TYPE_JSON="$(json_escape "$HEADER_TYPE")"
-
         if [ -n "$FLOW" ]; then
-            USER_FLOW_LINE=",\n                \"flow\": \"$FLOW_JSON\""
+            USER_FLOW_LINE=",\n                \"flow\": \"$FLOW\""
         else
             USER_FLOW_LINE=""
         fi
@@ -704,7 +642,7 @@ EOF
             TCP_HEADER_BLOCK=$(cat <<EOF
         "tcpSettings": {
           "header": {
-            "type": "$HEADER_TYPE_JSON"
+            "type": "$HEADER_TYPE"
           }
         },
 EOF
@@ -718,14 +656,14 @@ EOF
             }
             STREAM_SETTINGS=$(cat <<EOF
       "streamSettings": {
-        "network": "$TYPE_JSON",
+        "network": "$TYPE",
         "security": "reality",
 $TCP_HEADER_BLOCK        "realitySettings": {
           "show": false,
-          "fingerprint": "$FP_JSON",
-          "serverName": "$SNI_JSON",
-          "publicKey": "$PBK_JSON",
-          "shortId": "$SID_JSON",
+          "fingerprint": "$FP",
+          "serverName": "$SNI",
+          "publicKey": "$PBK",
+          "shortId": "$SID",
           "spiderX": "/"
         }
       }
@@ -734,11 +672,11 @@ EOF
         elif [ "$SECURITY" = "tls" ]; then
             STREAM_SETTINGS=$(cat <<EOF
       "streamSettings": {
-        "network": "$TYPE_JSON",
+        "network": "$TYPE",
         "security": "tls",
 $TCP_HEADER_BLOCK        "tlsSettings": {
-          "serverName": "$SNI_JSON",
-          "fingerprint": "$FP_JSON",
+          "serverName": "$SNI",
+          "fingerprint": "$FP",
           "allowInsecure": false
         }
       }
@@ -747,7 +685,7 @@ EOF
         else
             STREAM_SETTINGS=$(cat <<EOF
       "streamSettings": {
-        "network": "$TYPE_JSON",
+        "network": "$TYPE",
         "security": "none"
       }
 EOF
@@ -786,17 +724,6 @@ EOF
       "settings": {}
     },
     {
-      "tag": "dns-in",
-      "listen": "127.0.0.1",
-      "port": $DNS_PROXY_PORT,
-      "protocol": "dokodemo-door",
-      "settings": {
-        "address": "$DNS_UPSTREAM",
-        "port": 53,
-        "network": "tcp,udp"
-      }
-    },
-    {
       "tag": "redir-in",
       "listen": "0.0.0.0",
       "port": $REDIR_PORT,
@@ -807,8 +734,7 @@ EOF
       },
       "sniffing": {
         "enabled": true,
-        "destOverride": ["http", "tls"],
-        "routeOnly": true
+        "destOverride": ["http", "tls"]
       }
     },
     {
@@ -826,9 +752,7 @@ EOF
         }
       },
       "sniffing": {
-        "enabled": true,
-        "destOverride": ["quic"],
-        "routeOnly": true
+        "enabled": false
       }
     }
   ],
@@ -840,12 +764,12 @@ EOF
       "settings": {
         "vnext": [
           {
-            "address": "$SERVER_JSON",
+            "address": "$SERVER",
             "port": $PORT,
             "users": [
               {
-                "id": "$UUID_JSON",
-                "encryption": "$ENCRYPTION_JSON"$USER_FLOW_LINE
+                "id": "$UUID",
+                "encryption": "$ENCRYPTION"$USER_FLOW_LINE
               }
             ]
           }
@@ -865,23 +789,15 @@ $STREAM_SETTINGS
     "rules": [
       {
         "type": "field",
-        "inboundTag": ["dns-in"],
-        "outboundTag": "proxy"
-      },
-      {
-        "type": "field",
         "outboundTag": "direct",
         "ip": [
           "127.0.0.0/8",
           "10.0.0.0/8",
-          "169.254.0.0/16",
           "172.16.0.0/12",
-          "192.168.0.0/16",
-          "224.0.0.0/4",
-          "255.255.255.255/32"
+          "192.168.0.0/16"
         ],
         "domain": [
-          "$SERVER_JSON"
+          "$SERVER"
         ]
       },
 $ALWAYS_VPN_RULE

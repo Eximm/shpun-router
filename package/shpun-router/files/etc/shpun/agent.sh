@@ -1607,7 +1607,7 @@ probe_url_through_tunnel() {
 			;;
 		wget)
 			env http_proxy="$proxy" HTTP_PROXY="$proxy" \
-				wget -q -T 8 -O /dev/null "$url" >/dev/null 2>&1
+				wget -q -T 8 -Y on -O /dev/null "$url" >/dev/null 2>&1
 			;;
 		uclient-fetch)
 			env http_proxy="$proxy" HTTP_PROXY="$proxy" \
@@ -1672,7 +1672,7 @@ probe_tunnel_exit_url_http() {
 			start="$(cut -d' ' -f1 /proc/uptime 2>/dev/null)"
 			case "$HTTP_BIN" in
 				wget)
-					ip="$(env http_proxy="$proxy" HTTP_PROXY="$proxy" wget -q -T 8 -O - "$url" 2>/dev/null | tr -d '\r\n ')"
+					ip="$(env http_proxy="$proxy" HTTP_PROXY="$proxy" wget -q -T 8 -Y on -O - "$url" 2>/dev/null | tr -d '\r\n ')"
 					;;
 				uclient-fetch)
 					ip="$(env http_proxy="$proxy" HTTP_PROXY="$proxy" uclient-fetch -q -T 8 -Y on -O - "$url" 2>/dev/null | tr -d '\r\n ')"
