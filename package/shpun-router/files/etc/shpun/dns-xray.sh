@@ -49,14 +49,6 @@ write_current_forwarding() {
 	[ -s "$out" ] && sort_unique_file "$out"
 }
 
-write_current_forwarding_raw() {
-	local out="$1"
-
-	uci -q show dhcp.@dnsmasq[0] 2>/dev/null | \
-		sed -n "s/^dhcp\\.@dnsmasq\\[0\\]\\.server='\\(.*\\)'$/\\1/p" | \
-		grep -F "127.0.0.1#$DNS_PROXY_PORT" > "$out" 2>/dev/null || true
-}
-
 write_current_non_shpun_servers() {
 	local out="$1"
 
@@ -92,18 +84,16 @@ clear_forwarding() {
 }
 
 apply_forwarding() {
-	local raw_domain domain forwarding tmp current current_raw keep changed=0
+	local raw_domain domain forwarding tmp current keep changed=0
 
 	dnsmasq_available || return 0
 	[ -s "$DOMAINS_FILE" ] || return 0
 
 	tmp="${TRACK_FILE}.tmp.$$"
 	current="${TRACK_FILE}.current.$$"
-	current_raw="${TRACK_FILE}.current.raw.$$"
 	keep="${TRACK_FILE}.keep.$$"
 	rm -f "$tmp"
 	rm -f "$current"
-	rm -f "$current_raw"
 	rm -f "$keep"
 
 	append_domain_forwarding() {
@@ -149,18 +139,17 @@ apply_forwarding() {
 	[ -s "$tmp" ] && sort_unique_file "$tmp"
 
 	[ -s "$tmp" ] || {
-		rm -f "$tmp" "$current" "$current_raw"
+		rm -f "$tmp" "$current"
 		return 0
 	}
 
-	write_current_forwarding_raw "$current_raw"
 	write_current_forwarding "$current"
 
-	if [ -s "$current" ] && cmp -s "$tmp" "$current" 2>/dev/null && cmp -s "$tmp" "$current_raw" 2>/dev/null; then
+	if [ -s "$current" ] && cmp -s "$tmp" "$current" 2>/dev/null; then
 		if [ ! -s "$TRACK_FILE" ] || ! cmp -s "$tmp" "$TRACK_FILE" 2>/dev/null; then
 			cp "$tmp" "$TRACK_FILE" 2>/dev/null || true
 		fi
-		rm -f "$tmp" "$current" "$current_raw" "$keep"
+		rm -f "$tmp" "$current" "$keep"
 		return 0
 	fi
 
@@ -183,7 +172,7 @@ apply_forwarding() {
 	else
 		mv "$tmp" "$TRACK_FILE"
 	fi
-	rm -f "$current" "$current_raw" "$keep"
+	rm -f "$current" "$keep"
 
 	if [ "$changed" -eq 1 ]; then
 		reload_dnsmasq
