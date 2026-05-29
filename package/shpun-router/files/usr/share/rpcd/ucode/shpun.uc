@@ -88,6 +88,37 @@ function read_fw_latest() {
 	return v || "";
 }
 
+function version_part_num(v) {
+	v = trim(norm(v));
+	let out = "";
+	for (let i = 0; i < length(v); i++) {
+		let ch = substr(v, i, 1);
+		if (index("0123456789", ch) < 0)
+			break;
+		out += ch;
+	}
+	return int(out || "0");
+}
+
+function compare_versions(a, b) {
+	let pa = split(trim(norm(a)), ".");
+	let pb = split(trim(norm(b)), ".");
+	let len = length(pa) > length(pb) ? length(pa) : length(pb);
+	if (len < 3)
+		len = 3;
+
+	for (let i = 0; i < len; i++) {
+		let av = version_part_num(pa[i] || "0");
+		let bv = version_part_num(pb[i] || "0");
+		if (av < bv)
+			return -1;
+		if (av > bv)
+			return 1;
+	}
+
+	return 0;
+}
+
 function validate_ip_cidr(entry) {
 	entry = trim(entry);
 	if (!entry || length(entry) == 0) return false;
@@ -412,6 +443,8 @@ return {
 					let err_raw  = readfile(VERROR);
 					let fw_cur   = read_fw_current();
 					let fw_last  = read_fw_latest();
+					if (trim(fw_cur) && trim(fw_last) && compare_versions(fw_cur, fw_last) >= 0)
+						fw_last = "";
 
 					let res = {
 						code:             code_raw || "",

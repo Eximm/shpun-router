@@ -815,9 +815,79 @@ save_config_url() {
 	return 1
 }
 
+version_part_num() {
+	local part="$1"
+
+	part="$(printf '%s' "$part" | sed 's/^[^0-9]*//; s/[^0-9].*$//' 2>/dev/null || echo "")"
+	case "$part" in
+		''|*[!0-9]*) echo 0 ;;
+		*) echo "$part" ;;
+	esac
+}
+
+compare_versions() {
+	local v1="${1:-0.0.0}"
+	local v2="${2:-0.0.0}"
+	local oldifs a1 a2 a3 b1 b2 b3
+
+	oldifs="$IFS"
+	IFS=.
+	set -- $v1
+	a1="$(version_part_num "${1:-0}")"
+	a2="$(version_part_num "${2:-0}")"
+	a3="$(version_part_num "${3:-0}")"
+	set -- $v2
+	b1="$(version_part_num "${1:-0}")"
+	b2="$(version_part_num "${2:-0}")"
+	b3="$(version_part_num "${3:-0}")"
+	IFS="$oldifs"
+
+	[ "$a1" -lt "$b1" ] && { echo -1; return; }
+	[ "$a1" -gt "$b1" ] && { echo 1; return; }
+	[ "$a2" -lt "$b2" ] && { echo -1; return; }
+	[ "$a2" -gt "$b2" ] && { echo 1; return; }
+	[ "$a3" -lt "$b3" ] && { echo -1; return; }
+	[ "$a3" -gt "$b3" ] && { echo 1; return; }
+
+	echo 0
+}
+
+read_current_router_version() {
+	local file val
+
+	for file in "$STATE_DIR/fw_current" "$STATE_DIR/router_software_version" "$STATE_DIR/router_version"; do
+		[ -s "$file" ] || continue
+		val="$(cat "$file" 2>/dev/null | tr -d '\r\n ' || true)"
+		[ -n "$val" ] && {
+			printf '%s' "$val"
+			return 0
+		}
+	done
+
+	return 1
+}
+
+effective_latest_router_version() {
+	local remote="$1"
+	local current cmp
+
+	current="$(read_current_router_version || echo "")"
+	[ -n "$current" ] || {
+		printf '%s' "$remote"
+		return 0
+	}
+
+	cmp="$(compare_versions "$current" "$remote")"
+	if [ "$cmp" -gt 0 ]; then
+		printf '%s' "$current"
+	else
+		printf '%s' "$remote"
+	fi
+}
+
 save_router_software_metadata_file() {
 	local file="$1"
-	local version update_url min_version
+	local version update_url min_version effective_version
 
 	[ -s "$file" ] || return 1
 
@@ -831,8 +901,9 @@ save_router_software_metadata_file() {
 	[ -z "$min_version" ] && min_version="$(jsonfilter -i "$file" -e '@.router_software_current.min_version' 2>/dev/null || echo "")"
 
 	[ -n "$version" ] && {
-		printf '%s\n' "$version" > "$FW_LATEST_FILE"
-		printf '%s\n' "$version" > "$ROUTER_LATEST_VERSION_FILE"
+		effective_version="$(effective_latest_router_version "$version")"
+		printf '%s\n' "$effective_version" > "$FW_LATEST_FILE"
+		printf '%s\n' "$effective_version" > "$ROUTER_LATEST_VERSION_FILE"
 	}
 
 	case "$update_url" in
