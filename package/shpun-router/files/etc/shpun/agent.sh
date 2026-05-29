@@ -241,6 +241,12 @@ apply_protected_dns_forwarding() {
 	/etc/shpun/dns-xray.sh apply || log "failed to synchronize DNS forwarding through Xray"
 }
 
+protected_dns_forwarding_active() {
+	[ -s "$DNS_PROXY_READY_FILE" ] || return 1
+	command -v uci >/dev/null 2>&1 || return 1
+	uci -q show dhcp.@dnsmasq[0] 2>/dev/null | grep -Fq "127.0.0.1#$DNS_PROXY_PORT"
+}
+
 enable_protected_dns_forwarding() {
 	[ -s "$ENGINE_CONFIG" ] || return 0
 	grep -q '"tag": "dns-in"' "$ENGINE_CONFIG" 2>/dev/null || return 0
@@ -2487,7 +2493,7 @@ main_loop() {
 			if [ ! -s "$CONFIG_PENDING_FILE" ] && [ ! -s "$DNS_PROXY_READY_FILE" ]; then
 				enable_protected_dns_forwarding
 			fi
-			apply_protected_dns_forwarding
+			protected_dns_forwarding_active || apply_protected_dns_forwarding
 			ensure_transparent_rules || true
 		fi
 
