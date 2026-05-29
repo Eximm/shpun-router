@@ -218,10 +218,10 @@ function buildServerBadges(server) {
 	];
 
 	if (server.exit_ip)
-		badges.push(makeBadge('shpun-badge--exit', 'Внешний IP ' + server.exit_ip, 'IP-адрес VPN, который видят сайты и сервисы в интернете.'));
+		badges.push(makeBadge('shpun-badge--exit', 'IP сервера ' + server.exit_ip, 'Финальный IP-адрес выхода из VPN-туннеля, который видят сайты и сервисы.'));
 
 	if (!isNaN(exitPing) && exitPing >= 0)
-		badges.push(makeBadge('shpun-badge--check', 'Сервер ' + exitPing + ' ms', 'Время отклика от роутера до выбранного VPN-сервера. Измеряется по внешнему IP, с которым VPN выходит в интернет.'));
+		badges.push(makeBadge('shpun-badge--check', 'Пинг ' + exitPing + ' ms', 'Время отклика от роутера до финального IP выхода из VPN-туннеля.'));
 
 	return badges;
 }
@@ -605,7 +605,7 @@ return view.extend({
 		var fwLatest         = (state.fw_latest || '').trim();
 		var hasNewFw = !!(fwLatest && fwCurrentRaw && compareVersions(fwCurrentRaw, fwLatest) < 0);
 
-		var appLink = 'https://app.sdnonline.online';
+		var appLink = 'https://app.shpun.net';
 		var botLink = 'https://t.me/shpunvpn_bot';
 		var qrUrl   = 'https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=' + encodeURIComponent(appLink);
 
@@ -724,7 +724,7 @@ return view.extend({
 					E('div', { 'class': 'shpun-col-side' }, [
 						E('div', { 'class': 'shpun-side-card' }, [
 							E('div', { 'class': 'shpun-side-title' }, 'Привязка через ShpunApp'),
-							E('div', { 'class': 'shpun-side-url' }, 'app.sdnonline.online'),
+							E('div', { 'class': 'shpun-side-url' }, 'app.shpun.net'),
 							E('a', { 'class': 'shpun-qr-link', 'href': appLink, 'target': '_blank', 'rel': 'noreferrer' }, [
 								E('img', { 'class': 'shpun-qr', 'src': qrUrl, 'alt': 'QR' })
 							]),

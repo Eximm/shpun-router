@@ -257,7 +257,9 @@ function public_server_info(info) {
 		index: info.index,
 		selected: info.selected,
 		proto: info.proto,
-		name: info.name
+		name: info.name,
+		host: info.host,
+		port: info.port
 	};
 }
 
@@ -421,7 +423,6 @@ return {
 					let current_server = get_current_server();
 					if (current_server) {
 						let server_public = public_server_info(current_server);
-
 						let exit = exit_probe();
 						if (exit) {
 							server_public.exit_ip = exit.ip;
