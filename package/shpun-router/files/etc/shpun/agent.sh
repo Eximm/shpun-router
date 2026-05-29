@@ -16,6 +16,7 @@ ROUTER_LATEST_VERSION_FILE="$STATE_DIR/router_latest_version"
 VPN_READY_FILE="$STATE_DIR/vpn_ready"
 LAST_CHECK_FILE="$STATE_DIR/last_sub_check"
 SUB_UNAVAILABLE_COUNT_FILE="$STATE_DIR/subscription_unavailable_count"
+ENGINE_DOWNLOAD_FAIL_FILE="$STATE_DIR/engine_download_last_fail"
 CONF="$STATE_DIR/agent.conf"
 
 VERROR_FILE="$STATE_DIR/vpn_error"
@@ -52,6 +53,7 @@ SOCKS_PROXY_PORT_DEFAULT=10808
 DNS_PROXY_PORT_DEFAULT=1053
 TUNNEL_PROBE_INTERVAL_DEFAULT=60
 TUNNEL_FAIL_TIMEOUT_DEFAULT=180
+ENGINE_DOWNLOAD_RETRY_INTERVAL_DEFAULT=300
 TUNNEL_PROBE_URL_DEFAULT="http://api.ipify.org"
 TUNNEL_EXIT_PROBE_URLS_DEFAULT="http://api.ipify.org http://ifconfig.me/ip http://icanhazip.com"
 TUNNEL_PROBE_FALLBACK_URL_DEFAULT="http://cp.cloudflare.com/generate_204"
@@ -466,11 +468,26 @@ build_engine_url() {
 	fi
 
 	ENGINE_ARCH="$(detect_engine_arch)"
+	[ -z "$ENGINE_BASE_URLS" ] && ENGINE_BASE_URLS="$ENGINE_BASE_URL https://router.shpun.net/files/xray"
 
 	if [ -n "$ENGINE_VERSION" ]; then
 		echo "${ENGINE_BASE_URL}/xray-${ENGINE_ARCH}-${ENGINE_VERSION}"
 	else
 		echo "${ENGINE_BASE_URL}/xray-${ENGINE_ARCH}"
+	fi
+}
+
+engine_url_from_base() {
+	local base="$1"
+
+	base="${base%/}"
+	[ -n "$base" ] || return 1
+	[ -n "$ENGINE_ARCH" ] || ENGINE_ARCH="$(detect_engine_arch)"
+
+	if [ -n "$ENGINE_VERSION" ]; then
+		printf '%s/xray-%s-%s' "$base" "$ENGINE_ARCH" "$ENGINE_VERSION"
+	else
+		printf '%s/xray-%s' "$base" "$ENGINE_ARCH"
 	fi
 }
 
@@ -504,6 +521,7 @@ load_conf() {
 	[ -z "$DNS_PROXY_PORT" ]        && DNS_PROXY_PORT="$DNS_PROXY_PORT_DEFAULT"
 	[ -z "$TUNNEL_PROBE_INTERVAL" ] && TUNNEL_PROBE_INTERVAL="$TUNNEL_PROBE_INTERVAL_DEFAULT"
 	[ -z "$TUNNEL_FAIL_TIMEOUT" ]   && TUNNEL_FAIL_TIMEOUT="$TUNNEL_FAIL_TIMEOUT_DEFAULT"
+	[ -z "$ENGINE_DOWNLOAD_RETRY_INTERVAL" ] && ENGINE_DOWNLOAD_RETRY_INTERVAL="$ENGINE_DOWNLOAD_RETRY_INTERVAL_DEFAULT"
 	[ -z "$TUNNEL_PROBE_URL" ]      && TUNNEL_PROBE_URL="${KEEPALIVE_URL:-$TUNNEL_PROBE_URL_DEFAULT}"
 	[ -z "$TUNNEL_EXIT_PROBE_URLS" ] && TUNNEL_EXIT_PROBE_URLS="$TUNNEL_EXIT_PROBE_URLS_DEFAULT"
 	[ -z "$TUNNEL_PROBE_FALLBACK_URL" ] && TUNNEL_PROBE_FALLBACK_URL="$TUNNEL_PROBE_FALLBACK_URL_DEFAULT"
@@ -554,6 +572,11 @@ load_conf() {
 	esac
 	[ "$TUNNEL_FAIL_TIMEOUT" -ge "$TUNNEL_PROBE_INTERVAL" ] 2>/dev/null || \
 		TUNNEL_FAIL_TIMEOUT="$TUNNEL_PROBE_INTERVAL"
+	case "$ENGINE_DOWNLOAD_RETRY_INTERVAL" in
+		''|*[!0-9]*) ENGINE_DOWNLOAD_RETRY_INTERVAL="$ENGINE_DOWNLOAD_RETRY_INTERVAL_DEFAULT" ;;
+	esac
+	[ "$ENGINE_DOWNLOAD_RETRY_INTERVAL" -ge "$MAIN_LOOP_SLEEP" ] 2>/dev/null || \
+		ENGINE_DOWNLOAD_RETRY_INTERVAL="$MAIN_LOOP_SLEEP"
 
 	[ -z "$ROUTES_URL_BASE" ]       && ROUTES_URL_BASE="$ROUTES_URL_BASE_DEFAULT"
 	[ -z "$ROUTES_CHECK_INTERVAL" ] && ROUTES_CHECK_INTERVAL="$ROUTES_CHECK_INTERVAL_DEFAULT"
@@ -1647,14 +1670,26 @@ ensure_routes_ready() {
 }
 
 engine_download() {
+	local url tried_urls tmp_err err_line now_ts last_fail_ts
+
 	if [ -z "$ENGINE_URL" ]; then
 		log "ENGINE_URL not set, skip engine download"
 		return 1
 	fi
 
 	if [ -x "$ENGINE_BIN" ]; then
+		rm -f "$ENGINE_DOWNLOAD_FAIL_FILE"
 		log "engine already present: $ENGINE_BIN"
 		return 0
+	fi
+
+	now_ts="$(date +%s 2>/dev/null || echo 0)"
+	last_fail_ts="$(cat "$ENGINE_DOWNLOAD_FAIL_FILE" 2>/dev/null | tr -d '\r\n ' || echo 0)"
+	case "$now_ts" in ''|*[!0-9]*) now_ts=0 ;; esac
+	case "$last_fail_ts" in ''|*[!0-9]*) last_fail_ts=0 ;; esac
+	if [ "$last_fail_ts" -gt 0 ] && [ "$((now_ts - last_fail_ts))" -lt "$ENGINE_DOWNLOAD_RETRY_INTERVAL" ]; then
+		log "engine download retry suppressed (${ENGINE_DOWNLOAD_RETRY_INTERVAL}s interval)"
+		return 1
 	fi
 
 	detect_http_client
@@ -1666,28 +1701,67 @@ engine_download() {
 
 	mkdir -p "$(dirname "$ENGINE_BIN")" 2>/dev/null || true
 
-	log "downloading engine from $ENGINE_URL to $ENGINE_BIN"
+	tried_urls=" $ENGINE_URL "
+	tmp_err="${ENGINE_BIN}.download.err"
 
-	if ! http_get_to_file "$ENGINE_URL" "$ENGINE_BIN" 2>/dev/null; then
-		log "failed to download engine"
+	for url in "$ENGINE_URL"; do
+		log "downloading engine from $url to $ENGINE_BIN"
+		rm -f "$tmp_err"
+		if http_get_to_file "$url" "$ENGINE_BIN" 2>"$tmp_err"; then
+			if [ -s "$ENGINE_BIN" ]; then
+				chmod +x "$ENGINE_BIN" 2>/dev/null || {
+					log "failed to chmod +x engine"
+					rm -f "$ENGINE_BIN" "$tmp_err"
+					return 1
+				}
+				rm -f "$tmp_err"
+				log "engine downloaded and ready: $ENGINE_BIN"
+				return 0
+			fi
+			log "downloaded engine file is empty from $url"
+		else
+			log "failed to download engine from $url"
+			err_line="$(head -n 1 "$tmp_err" 2>/dev/null | tr -d '\r' || true)"
+			[ -n "$err_line" ] && log "engine download error: $err_line"
+		fi
 		rm -f "$ENGINE_BIN"
-		return 1
-	fi
+	done
 
-	if [ ! -s "$ENGINE_BIN" ]; then
-		log "downloaded engine file is empty"
+	[ -z "$ENGINE_BASE_URLS" ] && ENGINE_BASE_URLS="$ENGINE_BASE_URL https://router.shpun.net/files/xray"
+	for base in $ENGINE_BASE_URLS; do
+		url="$(engine_url_from_base "$base" || echo "")"
+		[ -n "$url" ] || continue
+		case "$tried_urls" in
+			*" $url "*) continue ;;
+		esac
+		tried_urls="${tried_urls}${url} "
+
+		log "downloading engine from fallback $url to $ENGINE_BIN"
+		rm -f "$tmp_err"
+		if http_get_to_file "$url" "$ENGINE_BIN" 2>"$tmp_err"; then
+			if [ -s "$ENGINE_BIN" ]; then
+				chmod +x "$ENGINE_BIN" 2>/dev/null || {
+					log "failed to chmod +x engine"
+					rm -f "$ENGINE_BIN" "$tmp_err"
+					return 1
+				}
+				rm -f "$tmp_err"
+				log "engine downloaded and ready: $ENGINE_BIN"
+				return 0
+			fi
+			log "downloaded engine file is empty from $url"
+		else
+			log "failed to download engine from fallback $url"
+			err_line="$(head -n 1 "$tmp_err" 2>/dev/null | tr -d '\r' || true)"
+			[ -n "$err_line" ] && log "engine download error: $err_line"
+		fi
 		rm -f "$ENGINE_BIN"
-		return 1
-	fi
+	done
 
-	if ! chmod +x "$ENGINE_BIN" 2>/dev/null; then
-		log "failed to chmod +x engine"
-		rm -f "$ENGINE_BIN"
-		return 1
-	fi
-
-	log "engine downloaded and ready: $ENGINE_BIN"
-	return 0
+	rm -f "$tmp_err"
+	[ "$now_ts" -gt 0 ] && echo "$now_ts" > "$ENGINE_DOWNLOAD_FAIL_FILE"
+	log "failed to download engine from all sources"
+	return 1
 }
 
 wait_vpn_started() {
@@ -2486,13 +2560,6 @@ vpn_sanity_check() {
 		return
 	fi
 
-	if [ ! -x "$ENGINE_BIN" ] || [ ! -s "$ENGINE_CONFIG" ]; then
-		log "vpn_sanity_check: engine or config missing; removing dead transparent path"
-		disable_dead_vpn_path
-		rm -f "$fail_file"
-		return
-	fi
-
 	if is_vpn_process_running; then
 		rm -f "$fail_file"
 		if [ ! -s "$CONFIG_PENDING_FILE" ] && [ ! -s "$DNS_PROXY_READY_FILE" ]; then
@@ -2502,6 +2569,13 @@ vpn_sanity_check() {
 			current_config_sha="$(calc_sha256_file "$ENGINE_CONFIG" 2>/dev/null || true)"
 			[ -n "$current_config_sha" ] && echo "$current_config_sha" > "$CONFIG_ACTIVE_FILE"
 		fi
+		return
+	fi
+
+	if [ ! -x "$ENGINE_BIN" ] || [ ! -s "$ENGINE_CONFIG" ]; then
+		log "vpn_sanity_check: xray process not running and engine/config missing; removing dead transparent path"
+		disable_dead_vpn_path
+		rm -f "$fail_file"
 		return
 	fi
 
