@@ -218,7 +218,7 @@ function buildServerBadges(server) {
 	];
 
 	if (server.exit_ip)
-		badges.push(makeBadge('shpun-badge--exit', 'IP сервера ' + server.exit_ip, 'Финальный IP-адрес выхода из VPN-туннеля, который видят сайты и сервисы.'));
+		badges.push(makeBadge('shpun-badge--exit', 'Внешний IP ' + server.exit_ip, 'Финальный IP-адрес выхода из VPN-туннеля, который видят сайты и сервисы.'));
 
 	if (!isNaN(exitPing) && exitPing >= 0)
 		badges.push(makeBadge('shpun-badge--check', 'Пинг ' + exitPing + ' ms', 'Время отклика от роутера до финального IP выхода из VPN-туннеля.'));
