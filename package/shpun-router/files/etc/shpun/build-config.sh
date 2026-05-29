@@ -156,6 +156,7 @@ REDIR_PORT="${REDIR_PORT:-12345}"
 TPROXY_PORT="${TPROXY_PORT:-12346}"
 TPROXY_MARK="${TPROXY_MARK:-233}"
 HTTP_PROXY_PORT="${HTTP_PROXY_PORT:-10809}"
+DNS_PROXY_PORT="${DNS_PROXY_PORT:-1053}"
 
 mask_host() {
     host="$(printf '%s' "$1" | tr -d ' \t\r\n')"
@@ -477,6 +478,20 @@ case "$ROUTER_PROTO" in
       }
     },
     {
+      "tag": "dns-in",
+      "listen": "127.0.0.1",
+      "port": $DNS_PROXY_PORT,
+      "protocol": "dokodemo-door",
+      "settings": {
+        "address": "1.1.1.1",
+        "port": 53,
+        "network": "tcp,udp"
+      },
+      "sniffing": {
+        "enabled": false
+      }
+    },
+    {
       "tag": "http-in",
       "listen": "127.0.0.1",
       "port": $HTTP_PROXY_PORT,
@@ -543,6 +558,11 @@ case "$ROUTER_PROTO" in
   "routing": {
     "domainStrategy": "IPIfNonMatch",
     "rules": [
+      {
+        "type": "field",
+        "inboundTag": ["dns-in"],
+        "outboundTag": "proxy"
+      },
       {
         "type": "field",
         "outboundTag": "direct",
@@ -717,6 +737,20 @@ EOF
       }
     },
     {
+      "tag": "dns-in",
+      "listen": "127.0.0.1",
+      "port": $DNS_PROXY_PORT,
+      "protocol": "dokodemo-door",
+      "settings": {
+        "address": "1.1.1.1",
+        "port": 53,
+        "network": "tcp,udp"
+      },
+      "sniffing": {
+        "enabled": false
+      }
+    },
+    {
       "tag": "http-in",
       "listen": "127.0.0.1",
       "port": $HTTP_PROXY_PORT,
@@ -787,6 +821,11 @@ $STREAM_SETTINGS
   "routing": {
     "domainStrategy": "IPIfNonMatch",
     "rules": [
+      {
+        "type": "field",
+        "inboundTag": ["dns-in"],
+        "outboundTag": "proxy"
+      },
       {
         "type": "field",
         "outboundTag": "direct",

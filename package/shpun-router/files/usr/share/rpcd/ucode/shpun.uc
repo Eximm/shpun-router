@@ -408,6 +408,7 @@ return {
 				try {
 					let code_raw = readfile(CODE);
 					let sub_raw  = readfile(SUB);
+					let sub_url  = trim(readfile(SUB_URL));
 					let err_raw  = readfile(VERROR);
 					let fw_cur   = read_fw_current();
 					let fw_last  = read_fw_latest();
@@ -415,7 +416,7 @@ return {
 					let res = {
 						code:             code_raw || "",
 						has_sub:          (sub_raw != ""),
-						subscription_url: "",
+						subscription_url: sub_url || "",
 						vpn_ready:        exists(READY),
 						udp_ready:        exists(UDP_READY),
 						vpn_error:        err_raw || ""

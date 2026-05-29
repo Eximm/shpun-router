@@ -44,7 +44,7 @@ write_current_forwarding() {
 	local out="$1"
 
 	uci -q show dhcp.@dnsmasq[0] 2>/dev/null | \
-		tr "'" "\n" | \
+		sed -n "s/^dhcp\\.@dnsmasq\\[0\\]\\.server='\\(.*\\)'$/\\1/p" | \
 		grep -F "127.0.0.1#$DNS_PROXY_PORT" > "$out" 2>/dev/null || true
 	[ -s "$out" ] && sort_unique_file "$out"
 }
@@ -53,7 +53,7 @@ write_current_forwarding_raw() {
 	local out="$1"
 
 	uci -q show dhcp.@dnsmasq[0] 2>/dev/null | \
-		tr "'" "\n" | \
+		sed -n "s/^dhcp\\.@dnsmasq\\[0\\]\\.server='\\(.*\\)'$/\\1/p" | \
 		grep -F "127.0.0.1#$DNS_PROXY_PORT" > "$out" 2>/dev/null || true
 }
 
@@ -61,8 +61,7 @@ write_current_non_shpun_servers() {
 	local out="$1"
 
 	uci -q show dhcp.@dnsmasq[0] 2>/dev/null | \
-		tr "'" "\n" | \
-		grep -F '/' | \
+		sed -n "s/^dhcp\\.@dnsmasq\\[0\\]\\.server='\\(.*\\)'$/\\1/p" | \
 		grep -Fv "127.0.0.1#$DNS_PROXY_PORT" > "$out" 2>/dev/null || true
 }
 

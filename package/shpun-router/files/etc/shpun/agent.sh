@@ -1948,6 +1948,7 @@ fetch_subscription_from_gateway() {
 			http://*|https://*) CONFIG_URL="$CONFIG_PATH" ;;
 			*) CONFIG_URL="${base_url}${CONFIG_PATH}" ;;
 		esac
+		CONFIG_URL="$(public_config_url "$CONFIG_URL")"
 		save_config_url "$CONFIG_URL" >/dev/null 2>&1 || true
 	fi
 
