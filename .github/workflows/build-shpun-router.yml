@@ -92,6 +92,7 @@ jobs:
 
       # --- Create clean OTA filename ---
       - name: Create clean OTA filename
+        id: ota
         working-directory: sdk
         run: |
           set -e
@@ -108,15 +109,17 @@ jobs:
 
           echo "Original ipk: $ORIG_IPK"
 
+          rm -rf bin/ota
           mkdir -p bin/ota
           CLEAN_IPK="bin/ota/${PACKAGE_NAME}_${PKG_VERSION}_all.ipk"
 
-          cp "$ORIG_IPK" "$CLEAN_IPK"
+          mv "$ORIG_IPK" "$CLEAN_IPK"
           ls -lh "$CLEAN_IPK"
+          echo "clean_ipk=sdk/$CLEAN_IPK" >> "$GITHUB_OUTPUT"
 
       # --- Upload OTA artifact ---
       - name: Upload shpun-router OTA package
         uses: actions/upload-artifact@v4
         with:
           name: shpun-router-ota
-          path: sdk/bin/ota/shpun-router_*_all.ipk
+          path: ${{ steps.ota.outputs.clean_ipk }}
