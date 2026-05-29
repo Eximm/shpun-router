@@ -1,14 +1,14 @@
 #!/bin/sh
 # shellcheck disable=SC1090
 
-SUB_FILE="/etc/shpun/subscription.json"
-OUT_CFG="/etc/shpun/xray.json"
-CONF="/etc/shpun/agent.conf"
-SELECTED_LINK_FILE="/etc/shpun/selected_link_index"
-ROUTES_MODE_FILE="/etc/shpun/routes/mode"
-SMART_RU_DOMAINS_FILE="/etc/shpun/routes/presets/smart_ru.domains"
-ALWAYS_VPN_DOMAINS_FILE="/etc/shpun/routes/presets/always_vpn.domains"
-CUSTOM_ROUTES_FILE="/etc/shpun/routes/custom.json"
+SUB_FILE="${SUB_FILE:-/etc/shpun/subscription.json}"
+OUT_CFG="${OUT_CFG:-/etc/shpun/xray.json}"
+CONF="${CONF:-/etc/shpun/agent.conf}"
+SELECTED_LINK_FILE="${SELECTED_LINK_FILE:-/etc/shpun/selected_link_index}"
+ROUTES_MODE_FILE="${ROUTES_MODE_FILE:-/etc/shpun/routes/mode}"
+SMART_RU_DOMAINS_FILE="${SMART_RU_DOMAINS_FILE:-/etc/shpun/routes/presets/smart_ru.domains}"
+ALWAYS_VPN_DOMAINS_FILE="${ALWAYS_VPN_DOMAINS_FILE:-/etc/shpun/routes/presets/always_vpn.domains}"
+CUSTOM_ROUTES_FILE="${CUSTOM_ROUTES_FILE:-/etc/shpun/routes/custom.json}"
 
 [ -f "$CONF" ] && . "$CONF"
 

@@ -61,11 +61,15 @@ clear_forwarding() {
 	local forwarding tmp changed=0
 
 	dnsmasq_available || return 0
-	[ -s "$TRACK_FILE" ] || return 0
 
 	tmp="${TRACK_FILE}.keep.$$"
 	rm -f "$tmp"
 	write_current_non_shpun_servers "$tmp"
+
+	if ! uci -q show dhcp.@dnsmasq[0] 2>/dev/null | grep -Fq "127.0.0.1#$DNS_PROXY_PORT"; then
+		rm -f "$tmp" "$TRACK_FILE"
+		return 0
+	fi
 
 	uci -q delete dhcp.@dnsmasq[0].server && changed=1
 

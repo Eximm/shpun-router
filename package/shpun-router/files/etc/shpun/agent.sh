@@ -1863,19 +1863,53 @@ seconds_to_ms() {
 	}' 2>/dev/null
 }
 
+is_valid_ipv4() {
+	local ip="$1" oldifs a b c d octet
+
+	case "$ip" in
+		*.*.*.*) ;;
+		*) return 1 ;;
+	esac
+
+	oldifs="$IFS"
+	IFS='.'
+	set -- $ip
+	IFS="$oldifs"
+
+	[ "$#" -eq 4 ] || return 1
+	for octet in "$@"; do
+		case "$octet" in
+			''|*[!0-9]*) return 1 ;;
+		esac
+		[ "$octet" -ge 0 ] 2>/dev/null && [ "$octet" -le 255 ] 2>/dev/null || return 1
+	done
+
+	return 0
+}
+
+is_valid_ipv6() {
+	local ip="$1"
+
+	case "$ip" in
+		*:* ) ;;
+		*) return 1 ;;
+	esac
+
+	[ "${#ip}" -ge 3 ] 2>/dev/null && [ "${#ip}" -le 45 ] 2>/dev/null || return 1
+	case "$ip" in
+		*[!0-9A-Fa-f:]* ) return 1 ;;
+	esac
+
+	return 0
+}
+
 cache_tunnel_exit() {
 	local ip="$1"
 	local check_ms="$2"
 	local ping_ms
 
 	ip="$(printf '%s' "$ip" | tr -d '\r\n ')"
-	case "$ip" in
-		''|*[!0-9A-Fa-f:.]*) return 1 ;;
-	esac
-	case "$ip" in
-		*.*|*:*) ;;
-		*) return 1 ;;
-	esac
+	is_valid_ipv4 "$ip" || is_valid_ipv6 "$ip" || return 1
 
 	ping_ms="$(ping -c1 -W1 "$ip" 2>/dev/null | sed -n 's/.*time=\([0-9.]*\).*/\1/p' | head -n 1)"
 	ping_ms="${ping_ms%%.*}"
@@ -2625,6 +2659,10 @@ main_loop() {
 	while :; do
 		load_conf
 		ensure_lan_ipv6_disabled
+
+		if ! is_vpn_process_running; then
+			disable_protected_dns_forwarding
+		fi
 
 		if [ ! -s "$CODE_FILE" ]; then
 			if ! ensure_router_code; then

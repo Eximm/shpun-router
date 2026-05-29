@@ -356,18 +356,58 @@ function tcp_ping_ms(host, port) {
 	return ms;
 }
 
+function is_valid_ipv4(ip) {
+	let parts = split(ip, ".");
+	if (length(parts) != 4)
+		return false;
+
+	for (let i = 0; i < length(parts); i++) {
+		let part = parts[i];
+		if (part == "" || length(part) > 3)
+			return false;
+
+		for (let j = 0; j < length(part); j++) {
+			let ch = substr(part, j, 1);
+			if (ch < "0" || ch > "9")
+				return false;
+		}
+
+		let n = int(part);
+		if (n < 0 || n > 255)
+			return false;
+	}
+
+	return true;
+}
+
+function is_valid_ipv6(ip) {
+	if (index(ip, ":") < 0 || length(ip) < 3 || length(ip) > 45)
+		return false;
+
+	let hexdigits = "0123456789abcdefABCDEF:";
+	for (let i = 0; i < length(ip); i++) {
+		if (index(hexdigits, substr(ip, i, 1)) < 0)
+			return false;
+	}
+
+	return true;
+}
+
 function safe_public_ip(ip) {
 	ip = trim(norm(ip));
 	if (!ip || length(ip) > 80)
 		return "";
 
-	let allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789:.-";
+	let allowed = "0123456789abcdefABCDEF:.";
 	for (let i = 0; i < length(ip); i++) {
 		if (index(allowed, substr(ip, i, 1)) < 0)
 			return "";
 	}
 
-	return ip;
+	if (index(ip, ":") >= 0)
+		return is_valid_ipv6(ip) ? ip : "";
+
+	return is_valid_ipv4(ip) ? ip : "";
 }
 
 function seconds_to_ms(v) {
@@ -780,8 +820,9 @@ return {
 					let out = "";
 					if (p) { out = p.read("all") || ""; p.close(); }
 
-					if (trim(out) != "ok")
-						return { ok: 0, error: "server profile validation failed", output: out };
+					out = trim(out);
+					if (out != "ok")
+						return { ok: 0, error: out || "server profile validation failed", output: out };
 
 					return { ok: 1, selected: idx };
 				} catch(e) {

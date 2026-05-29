@@ -205,6 +205,27 @@ function makeBadge(cls, text, title) {
 	]);
 }
 
+function isValidDisplayIp(ip) {
+	ip = String(ip || '').trim();
+	if (!ip || ip.length > 80)
+		return false;
+
+	if (ip.indexOf(':') >= 0)
+		return /^[0-9a-fA-F:]{3,45}$/.test(ip);
+
+	if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip))
+		return false;
+
+	var parts = ip.split('.');
+	for (var i = 0; i < parts.length; i++) {
+		var n = parseInt(parts[i], 10);
+		if (isNaN(n) || n < 0 || n > 255)
+			return false;
+	}
+
+	return true;
+}
+
 function buildServerBadges(server) {
 	if (!server)
 		return [];
@@ -217,7 +238,7 @@ function buildServerBadges(server) {
 		makeBadge('shpun-badge--server', location + (protoLabel ? ' - ' + protoLabel : ''))
 	];
 
-	if (server.exit_ip)
+	if (isValidDisplayIp(server.exit_ip))
 		badges.push(makeBadge('shpun-badge--exit', 'Внешний IP ' + server.exit_ip, 'Финальный IP-адрес выхода из VPN-туннеля, который видят сайты и сервисы.'));
 
 	if (!isNaN(exitPing) && exitPing >= 0)
@@ -607,7 +628,9 @@ return view.extend({
 
 		var appLink = 'https://app.shpun.net';
 		var botLink = 'https://t.me/shpunvpn_bot';
-		var qrUrl   = 'https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=' + encodeURIComponent(appLink);
+		var qrData = encodeURIComponent(appLink);
+		var qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=' + qrData;
+		var qrUrlFallback = 'https://qrapi.dev/api/generate?data=' + qrData;
 
 		var codeNode = E('span', {
 			'class': code ? 'shpun-code shpun-code-copy' : 'shpun-code',
@@ -726,7 +749,24 @@ return view.extend({
 							E('div', { 'class': 'shpun-side-title' }, 'Привязка через ShpunApp'),
 							E('div', { 'class': 'shpun-side-url' }, 'app.shpun.net'),
 							E('a', { 'class': 'shpun-qr-link', 'href': appLink, 'target': '_blank', 'rel': 'noreferrer' }, [
-								E('img', { 'class': 'shpun-qr', 'src': qrUrl, 'alt': 'QR' })
+								E('img', {
+									'class': 'shpun-qr',
+									'src': qrUrl,
+									'data-fallback-src': qrUrlFallback,
+									'referrerpolicy': 'no-referrer',
+									'alt': 'QR',
+									'error': function(ev) {
+										var img = ev.currentTarget || this;
+										var fallback = img.getAttribute('data-fallback-src');
+										if (fallback && img.getAttribute('data-fallback-used') !== '1') {
+											img.setAttribute('data-fallback-used', '1');
+											img.src = fallback;
+										}
+										else {
+											img.style.display = 'none';
+										}
+									}
+								})
 							]),
 							E('div', { 'class': 'shpun-qr-caption' }, 'Откройте ShpunApp для привязки и управления роутером'),
 							E('div', { 'class': 'shpun-side-flex-spacer' }),
