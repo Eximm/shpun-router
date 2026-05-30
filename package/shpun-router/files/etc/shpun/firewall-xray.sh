@@ -416,7 +416,7 @@ nft_apply_tcp_rules() {
         nft add rule inet shpun prerouting iifname "$LAN_IF" ip daddr @ru_dst return || return 1
     fi
 
-    nft add rule inet shpun prerouting iifname "$LAN_IF" ip protocol tcp tcp dport != "$REDIR_PORT" redirect to :"$REDIR_PORT" || return 1
+    nft add rule inet shpun prerouting iifname "$LAN_IF" ip protocol tcp tcp dport != "$REDIR_PORT" counter redirect to :"$REDIR_PORT" || return 1
 
     return 0
 }
@@ -443,7 +443,7 @@ nft_apply_udp_rules() {
     nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" meta l4proto udp ip daddr @custom_vpn counter tproxy ip to :"$TPROXY_PORT" meta mark set "0x${TPROXY_MARK}" || return 1
     nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" ip daddr @custom_direct counter return || return 1
 
-    nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" meta l4proto udp tproxy ip to :"$TPROXY_PORT" meta mark set "0x${TPROXY_MARK}" || return 1
+    nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" meta l4proto udp counter tproxy ip to :"$TPROXY_PORT" meta mark set "0x${TPROXY_MARK}" || return 1
 
     return 0
 }

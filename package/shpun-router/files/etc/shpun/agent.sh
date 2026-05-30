@@ -58,6 +58,9 @@ TUNNEL_PROBE_URL_DEFAULT="http://api.ipify.org"
 TUNNEL_EXIT_PROBE_URLS_DEFAULT="http://api.ipify.org http://ifconfig.me/ip http://icanhazip.com"
 TUNNEL_PROBE_FALLBACK_URL_DEFAULT="http://cp.cloudflare.com/generate_204"
 TUNNEL_PROBE_SECONDARY_URL_DEFAULT="http://connectivitycheck.gstatic.com/generate_204"
+DNS_BOOTSTRAP_ENABLE_DEFAULT=1
+DNS_BOOTSTRAP_SERVERS_DEFAULT="1.1.1.1 1.0.0.1 8.8.8.8 8.8.4.4 9.9.9.9 208.67.222.222 208.67.220.220"
+DNS_BOOTSTRAP_TEST_DOMAINS_DEFAULT="router.shpun.net spb.shpyn.online"
 
 ROUTES_DIR="$STATE_DIR/routes"
 ROUTES_CIDRS_FILE="$ROUTES_DIR/ru.cidrs"
@@ -348,6 +351,102 @@ detect_http_client() {
 	fi
 }
 
+dns_can_resolve() {
+	local domain="$1"
+
+	[ -n "$domain" ] || return 1
+	command -v nslookup >/dev/null 2>&1 || return 1
+
+	nslookup "$domain" >/dev/null 2>&1
+}
+
+dns_server_can_resolve() {
+	local server="$1"
+	local domain
+
+	[ -n "$server" ] || return 1
+	command -v nslookup >/dev/null 2>&1 || return 1
+
+	for domain in $DNS_BOOTSTRAP_TEST_DOMAINS; do
+		nslookup "$domain" "$server" >/dev/null 2>&1 && return 0
+	done
+
+	return 1
+}
+
+dns_bootstrap_needed() {
+	local domain
+
+	[ "$DNS_BOOTSTRAP_ENABLE" = "1" ] || return 1
+
+	for domain in $DNS_BOOTSTRAP_TEST_DOMAINS; do
+		dns_can_resolve "$domain" && return 1
+	done
+
+	return 0
+}
+
+uci_list_has_value() {
+	local option="$1"
+	local value="$2"
+
+	uci -q get "$option" 2>/dev/null | tr ' ' '\n' | grep -Fxq "$value"
+}
+
+ensure_bootstrap_dns() {
+	local dns good_dns changed=0
+
+	[ "$DNS_BOOTSTRAP_ENABLE" = "1" ] || return 0
+	command -v uci >/dev/null 2>&1 || return 0
+	dns_bootstrap_needed || return 0
+
+	log "local DNS cannot resolve bootstrap domains, applying fallback DNS servers"
+
+	for dns in $DNS_BOOTSTRAP_SERVERS; do
+		if dns_server_can_resolve "$dns"; then
+			good_dns="${good_dns:+$good_dns }$dns"
+		else
+			log "bootstrap DNS $dns did not resolve test domains, skipping"
+		fi
+	done
+
+	if [ -z "$good_dns" ]; then
+		log "no bootstrap DNS server passed direct resolve test, keeping full fallback list"
+		good_dns="$DNS_BOOTSTRAP_SERVERS"
+	fi
+
+	uci -q set dhcp.@dnsmasq[0].resolvfile='/tmp/resolv.conf.d/resolv.conf.auto' && changed=1
+	uci -q delete dhcp.@dnsmasq[0].noresolv 2>/dev/null && changed=1
+
+	if uci -q get network.wwan >/dev/null 2>&1; then
+		uci -q set network.wwan.peerdns='0' && changed=1
+		uci -q delete network.wwan.dns 2>/dev/null || true
+		for dns in $good_dns; do
+			uci -q add_list network.wwan.dns="$dns" && changed=1
+		done
+	fi
+
+	for dns in $good_dns; do
+		uci_list_has_value "dhcp.@dnsmasq[0].server" "$dns" || {
+			uci -q add_list dhcp.@dnsmasq[0].server="$dns" && changed=1
+		}
+	done
+
+	if [ "$changed" -eq 1 ]; then
+		uci -q commit network 2>/dev/null || true
+		uci -q commit dhcp 2>/dev/null || true
+		/etc/init.d/network reload >/dev/null 2>&1 || true
+		/etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
+		sleep 2
+	fi
+
+	if dns_bootstrap_needed; then
+		log "fallback DNS applied but bootstrap domains still do not resolve"
+	else
+		log "fallback DNS applied successfully"
+	fi
+}
+
 http_get_to_file() {
 	local url="$1"
 	local out="$2"
@@ -526,6 +625,9 @@ load_conf() {
 	[ -z "$TUNNEL_EXIT_PROBE_URLS" ] && TUNNEL_EXIT_PROBE_URLS="$TUNNEL_EXIT_PROBE_URLS_DEFAULT"
 	[ -z "$TUNNEL_PROBE_FALLBACK_URL" ] && TUNNEL_PROBE_FALLBACK_URL="$TUNNEL_PROBE_FALLBACK_URL_DEFAULT"
 	[ -z "$TUNNEL_PROBE_SECONDARY_URL" ] && TUNNEL_PROBE_SECONDARY_URL="$TUNNEL_PROBE_SECONDARY_URL_DEFAULT"
+	[ -z "$DNS_BOOTSTRAP_ENABLE" ] && DNS_BOOTSTRAP_ENABLE="$DNS_BOOTSTRAP_ENABLE_DEFAULT"
+	[ -z "$DNS_BOOTSTRAP_SERVERS" ] && DNS_BOOTSTRAP_SERVERS="$DNS_BOOTSTRAP_SERVERS_DEFAULT"
+	[ -z "$DNS_BOOTSTRAP_TEST_DOMAINS" ] && DNS_BOOTSTRAP_TEST_DOMAINS="$DNS_BOOTSTRAP_TEST_DOMAINS_DEFAULT"
 
 	case "$REDIR_PORT" in
 		''|*[!0-9]*) REDIR_PORT="$REDIR_PORT_DEFAULT" ;;
@@ -577,6 +679,10 @@ load_conf() {
 	esac
 	[ "$ENGINE_DOWNLOAD_RETRY_INTERVAL" -ge "$MAIN_LOOP_SLEEP" ] 2>/dev/null || \
 		ENGINE_DOWNLOAD_RETRY_INTERVAL="$MAIN_LOOP_SLEEP"
+	case "$DNS_BOOTSTRAP_ENABLE" in
+		1|yes|true|on) DNS_BOOTSTRAP_ENABLE=1 ;;
+		*) DNS_BOOTSTRAP_ENABLE=0 ;;
+	esac
 
 	[ -z "$ROUTES_URL_BASE" ]       && ROUTES_URL_BASE="$ROUTES_URL_BASE_DEFAULT"
 	[ -z "$ROUTES_CHECK_INTERVAL" ] && ROUTES_CHECK_INTERVAL="$ROUTES_CHECK_INTERVAL_DEFAULT"
@@ -1698,6 +1804,7 @@ engine_download() {
 		log "engine_download: no HTTP client"
 		return 1
 	fi
+	ensure_bootstrap_dns
 
 	mkdir -p "$(dirname "$ENGINE_BIN")" 2>/dev/null || true
 
@@ -2227,6 +2334,7 @@ fetch_subscription_once() {
 		log "fetch_subscription_once: no HTTP client"
 		return 1
 	fi
+	ensure_bootstrap_dns
 
 	fetch_subscription_from_gateway "$API_URL" "router gateway" && return 0
 
@@ -2663,6 +2771,7 @@ main_loop() {
 		if ! is_vpn_process_running; then
 			disable_protected_dns_forwarding
 		fi
+		ensure_bootstrap_dns
 
 		if [ ! -s "$CODE_FILE" ]; then
 			if ! ensure_router_code; then
