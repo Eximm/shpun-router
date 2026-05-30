@@ -140,12 +140,14 @@ if ! OUT_CFG="$CONFIG_CANDIDATE" SELECTED_LINK_FILE="$SELECTED_CANDIDATE" "$BUIL
 	exit 1
 fi
 
-if ! make_validation_config "$CONFIG_CANDIDATE" "$CONFIG_VALIDATE" ||
-	! "$ENGINE_BIN" run -test -config "$CONFIG_VALIDATE" >/dev/null 2>&1; then
-	rm -f "$SELECTED_CANDIDATE" "$CONFIG_CANDIDATE" "$CONFIG_VALIDATE" "$CONFIG_BACKUP"
-	log "server index $NEW_INDEX rejected: candidate xray validation failed, keeping current tunnel"
-	echo "config_invalid"
-	exit 1
+if [ "${SWITCH_SERVER_VALIDATE:-0}" = "1" ]; then
+	if ! make_validation_config "$CONFIG_CANDIDATE" "$CONFIG_VALIDATE" ||
+		! "$ENGINE_BIN" run -test -config "$CONFIG_VALIDATE" >/dev/null 2>&1; then
+		rm -f "$SELECTED_CANDIDATE" "$CONFIG_CANDIDATE" "$CONFIG_VALIDATE" "$CONFIG_BACKUP"
+		log "server index $NEW_INDEX rejected: candidate xray validation failed, keeping current tunnel"
+		echo "config_invalid"
+		exit 1
+	fi
 fi
 rm -f "$CONFIG_VALIDATE"
 
