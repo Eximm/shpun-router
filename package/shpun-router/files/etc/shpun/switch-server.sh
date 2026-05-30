@@ -51,6 +51,49 @@ lock_config() {
 	return 0
 }
 
+make_validation_config() {
+	local src="$1"
+	local dst="$2"
+
+	awk '
+		BEGIN {
+			in_inbounds = 0
+			depth = 0
+			replaced = 0
+		}
+		{
+			if (!in_inbounds && $0 ~ /^[[:space:]]*"inbounds"[[:space:]]*:/) {
+				print "  \"inbounds\": [],"
+				in_inbounds = 1
+				replaced = 1
+				for (i = 1; i <= length($0); i++) {
+					ch = substr($0, i, 1)
+					if (ch == "[") depth++
+					else if (ch == "]") depth--
+				}
+				if (depth <= 0)
+					in_inbounds = 0
+				next
+			}
+			if (in_inbounds) {
+				for (i = 1; i <= length($0); i++) {
+					ch = substr($0, i, 1)
+					if (ch == "[") depth++
+					else if (ch == "]") depth--
+				}
+				if (depth <= 0)
+					in_inbounds = 0
+				next
+			}
+			print
+		}
+		END {
+			if (!replaced)
+				exit 1
+		}
+	' "$src" > "$dst"
+}
+
 case "$NEW_INDEX" in
 	''|*[!0-9]*)
 		echo "invalid_index"
@@ -80,31 +123,34 @@ fi
 
 SELECTED_CANDIDATE="${SELECTED_LINK_FILE}.candidate.$$"
 CONFIG_CANDIDATE="${ENGINE_CONFIG}.candidate.$$"
+CONFIG_VALIDATE="${ENGINE_CONFIG}.validate.$$"
 CONFIG_BACKUP="${ENGINE_CONFIG}.server-backup.$$"
-rm -f "$SELECTED_CANDIDATE" "$CONFIG_CANDIDATE" "$CONFIG_BACKUP"
+rm -f "$SELECTED_CANDIDATE" "$CONFIG_CANDIDATE" "$CONFIG_VALIDATE" "$CONFIG_BACKUP"
 
 printf '%s\n' "$NEW_INDEX" > "$SELECTED_CANDIDATE" || {
-	rm -f "$SELECTED_CANDIDATE" "$CONFIG_CANDIDATE" "$CONFIG_BACKUP"
+	rm -f "$SELECTED_CANDIDATE" "$CONFIG_CANDIDATE" "$CONFIG_VALIDATE" "$CONFIG_BACKUP"
 	echo "selection_write_failed"
 	exit 1
 }
 
 if ! OUT_CFG="$CONFIG_CANDIDATE" SELECTED_LINK_FILE="$SELECTED_CANDIDATE" "$BUILD_SCRIPT"; then
-	rm -f "$SELECTED_CANDIDATE" "$CONFIG_CANDIDATE" "$CONFIG_BACKUP"
+	rm -f "$SELECTED_CANDIDATE" "$CONFIG_CANDIDATE" "$CONFIG_VALIDATE" "$CONFIG_BACKUP"
 	log "server index $NEW_INDEX rejected: candidate config build failed, keeping current tunnel"
 	echo "config_build_failed"
 	exit 1
 fi
 
-if ! "$ENGINE_BIN" run -test -config "$CONFIG_CANDIDATE" >/dev/null 2>&1; then
-	rm -f "$SELECTED_CANDIDATE" "$CONFIG_CANDIDATE" "$CONFIG_BACKUP"
+if ! make_validation_config "$CONFIG_CANDIDATE" "$CONFIG_VALIDATE" ||
+	! "$ENGINE_BIN" run -test -config "$CONFIG_VALIDATE" >/dev/null 2>&1; then
+	rm -f "$SELECTED_CANDIDATE" "$CONFIG_CANDIDATE" "$CONFIG_VALIDATE" "$CONFIG_BACKUP"
 	log "server index $NEW_INDEX rejected: candidate xray validation failed, keeping current tunnel"
 	echo "config_invalid"
 	exit 1
 fi
+rm -f "$CONFIG_VALIDATE"
 
 if [ -s "$ENGINE_CONFIG" ] && ! cp "$ENGINE_CONFIG" "$CONFIG_BACKUP" 2>/dev/null; then
-	rm -f "$SELECTED_CANDIDATE" "$CONFIG_CANDIDATE" "$CONFIG_BACKUP"
+	rm -f "$SELECTED_CANDIDATE" "$CONFIG_CANDIDATE" "$CONFIG_VALIDATE" "$CONFIG_BACKUP"
 	log "cannot switch server: failed to back up current xray config"
 	echo "config_backup_failed"
 	exit 1
@@ -112,7 +158,7 @@ fi
 
 if ! mv "$CONFIG_CANDIDATE" "$ENGINE_CONFIG"; then
 	[ -s "$CONFIG_BACKUP" ] && mv "$CONFIG_BACKUP" "$ENGINE_CONFIG" 2>/dev/null || true
-	rm -f "$SELECTED_CANDIDATE" "$CONFIG_CANDIDATE" "$CONFIG_BACKUP"
+	rm -f "$SELECTED_CANDIDATE" "$CONFIG_CANDIDATE" "$CONFIG_VALIDATE" "$CONFIG_BACKUP"
 	log "cannot switch server: failed to install candidate xray config"
 	echo "config_install_failed"
 	exit 1
@@ -120,7 +166,7 @@ fi
 
 if ! mv "$SELECTED_CANDIDATE" "$SELECTED_LINK_FILE"; then
 	[ -s "$CONFIG_BACKUP" ] && mv "$CONFIG_BACKUP" "$ENGINE_CONFIG" 2>/dev/null || true
-	rm -f "$SELECTED_CANDIDATE" "$CONFIG_CANDIDATE" "$CONFIG_BACKUP"
+	rm -f "$SELECTED_CANDIDATE" "$CONFIG_CANDIDATE" "$CONFIG_VALIDATE" "$CONFIG_BACKUP"
 	log "cannot switch server: failed to persist selected server index"
 	echo "selection_write_failed"
 	exit 1

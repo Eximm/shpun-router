@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=shpun-router
 PKG_VERSION:=1.1.0
-PKG_RELEASE:=39
+PKG_RELEASE:=40
 
 PKG_MAINTAINER:=Shpun VPN
 PKG_LICENSE:=MIT
