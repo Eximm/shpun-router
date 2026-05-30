@@ -2131,7 +2131,7 @@ ensure_transparent_rules() {
 	if [ -s "$UDP_READY_FILE" ]; then
 		udp_rules="$(nft list chain inet shpun prerouting_mangle 2>/dev/null || true)"
 		printf '%s\n' "$udp_rules" | grep -q "@always_vpn.*tproxy.*:${TPROXY_PORT}" || repair=1
-		printf '%s\n' "$udp_rules" | grep -q "meta l4proto udp tproxy.*:${TPROXY_PORT}" || repair=1
+		printf '%s\n' "$udp_rules" | grep -q "meta l4proto udp.*tproxy.*:${TPROXY_PORT}" || repair=1
 		ip rule show 2>/dev/null | grep -q "fwmark 0x${TPROXY_MARK}" || repair=1
 		ip route show table "$TPROXY_TABLE" 2>/dev/null | grep -q "local default dev lo" || repair=1
 	fi
