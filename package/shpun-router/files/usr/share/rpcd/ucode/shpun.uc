@@ -32,6 +32,7 @@ const ROUTES_MODE     = ROUTES_DIR + "/mode";
 const ROUTES_VER      = ROUTES_DIR + "/ru.version";
 const ROUTES_LASTCHK  = ROUTES_DIR + "/last_check";
 const ROUTES_CIDRS    = ROUTES_DIR + "/ru.cidrs";
+const SMART_RU_DOMAINS = ROUTES_DIR + "/presets/smart_ru.domains";
 const ROUTER_PROFILE  = ROUTES_DIR + "/router_profile";
 const ROUTING_SETTER  = DIR + "/set-routing-mode.sh";
 
@@ -546,19 +547,31 @@ return {
 					let ver  = readfile(ROUTES_VER) || "";
 					let ts   = readfile(ROUTES_LASTCHK) || "";
 					let cnt  = 0;
+					let smart_cnt = 0;
 
 					if (exists(ROUTES_CIDRS)) {
 						let out = readcmd("wc -l < " + ROUTES_CIDRS + " 2>/dev/null");
 						if (out != "") cnt = +out;
 					}
+					if (exists(SMART_RU_DOMAINS)) {
+						let out = readcmd("grep -cvE '^[[:space:]]*($|#)' " + SMART_RU_DOMAINS + " 2>/dev/null");
+						if (out != "") smart_cnt = +out;
+					}
+
+					mode = trim(mode != "" ? mode : "full");
+					let active_cnt = mode == "smart_ru" ? smart_cnt : cnt;
+					let active_kind = mode == "smart_ru" ? "domains" : "cidr";
 
 					return {
 						ok:             1,
-						mode:           mode != "" ? mode : "full",
+						mode:           mode,
 						routes_version: ver  != "" ? ver  : "0",
 						last_check:     ts   != "" ? ts   : "0",
 						routes_count:   cnt,
-						has_routes:     exists(ROUTES_CIDRS) && cnt > 0,
+						smart_domains_count: smart_cnt,
+						active_routes_count: active_cnt,
+						active_routes_kind: active_kind,
+						has_routes:     active_cnt > 0 || mode == "full",
 						router_profile: readfile(ROUTER_PROFILE) || ""
 					};
 				} catch(e) {

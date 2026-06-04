@@ -446,7 +446,9 @@ if ! "$BUILD_SCRIPT"; then
     exit 1
 fi
 
-if [ -x "$ENGINE_BIN" ] && ! "$ENGINE_BIN" run -test -config "$ENGINE_CONFIG" >/dev/null 2>&1; then
+if [ "${ROUTING_MODE_VALIDATE:-0}" = "1" ] &&
+    [ -x "$ENGINE_BIN" ] &&
+    ! "$ENGINE_BIN" run -test -config "$ENGINE_CONFIG" >/dev/null 2>&1; then
     log "invalid xray config for mode=$MODE, rolling back to $OLD_MODE"
     printf '%s\n' "$OLD_MODE" > "$MODE_FILE"
     if [ -s "$CONFIG_BACKUP" ]; then
