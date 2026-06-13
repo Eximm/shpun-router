@@ -401,12 +401,6 @@ elif [ "$MODE" = "split_ru" ]; then
     fi
 fi
 
-if [ "$MODE" = "$OLD_MODE" ]; then
-    log "mode already set to $MODE, keeping current VPN process"
-    echo "ok"
-    exit 0
-fi
-
 if [ ! -x "$BUILD_SCRIPT" ]; then
     log "cannot switch to mode=$MODE: xray config builder is missing"
     echo "config_build_failed"
