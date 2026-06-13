@@ -2165,9 +2165,9 @@ recover_failed_tunnel() {
 	log "tunnel probe failure confirmed, keeping current xray session and refreshing transparent rules"
 	ensure_transparent_rules || true
 	apply_protected_dns_forwarding
-	echo "ok" > "$VPN_READY_FILE"
-	rm -f "$VERROR_FILE"
-	return 0
+	rm -f "$VPN_READY_FILE"
+	echo "tunnel_probe_failed" > "$VERROR_FILE"
+	return 1
 
 }
 
@@ -2344,6 +2344,67 @@ fetch_subscription_once() {
 	fi
 
 	return 1
+}
+
+subscription_file_valid() {
+	[ -s "$SUB_FILE" ] || return 1
+	jsonfilter -i "$SUB_FILE" -e '@.subscription.links[0]' >/dev/null 2>&1
+}
+
+restore_subscription_from_profile_url() {
+	local config_url tmp_sub sub_url
+
+	[ -s "$CONFIG_URL_FILE" ] || return 1
+
+	config_url="$(cat "$CONFIG_URL_FILE" 2>/dev/null | tr -d '\r\n ' || true)"
+	case "$config_url" in
+		http://*|https://*) ;;
+		*) return 1 ;;
+	esac
+
+	detect_http_client
+	[ -n "$HTTP_BIN" ] || {
+		log "profile restore: no HTTP client"
+		return 1
+	}
+	ensure_bootstrap_dns
+
+	config_url="$(public_config_url "$config_url")"
+	save_config_url "$config_url" >/dev/null 2>&1 || true
+	config_url="$(append_format_json "$config_url")"
+
+	tmp_sub="${SUB_FILE}.profile.tmp"
+	rm -f "$tmp_sub"
+
+	log "profile restore: fetching router profile from saved router_config_url"
+	if ! http_get_to_file "$config_url" "$tmp_sub" >/dev/null 2>&1; then
+		log "profile restore: failed to download router profile"
+		rm -f "$tmp_sub"
+		return 1
+	fi
+
+	if [ ! -s "$tmp_sub" ]; then
+		log "profile restore: downloaded router profile is empty"
+		rm -f "$tmp_sub"
+		return 1
+	fi
+
+	sub_url="$(extract_subscription_url_from_json_file "$tmp_sub" || echo "")"
+	[ -n "$sub_url" ] && save_subscription_url "$sub_url" >/dev/null 2>&1 || true
+	save_router_software_metadata_file "$tmp_sub" >/dev/null 2>&1 || true
+
+	if ! normalize_subscription_file "$tmp_sub"; then
+		log "profile restore: downloaded router profile format is unsupported"
+		rm -f "$tmp_sub"
+		return 1
+	fi
+
+	mv "$tmp_sub" "$SUB_FILE"
+	reset_subscription_unavailable_count
+	ensure_selected_link_valid
+	date +%s > "$LAST_CHECK_FILE"
+	log "profile restore: subscription json restored to $SUB_FILE"
+	return 0
 }
 
 refresh_subscription_from_url() {
@@ -2524,12 +2585,29 @@ ensure_vpn_from_subscription() {
 
 poll_subscription_loop() {
 	if [ -s "$SUB_FILE" ]; then
-		save_router_software_metadata_file "$SUB_FILE" >/dev/null 2>&1 || true
-		log "subscription.json already present, skipping router_public"
-		if [ -s "$VPN_READY_FILE" ] && [ -s "$ENGINE_CONFIG" ] && is_vpn_process_running; then
-			log "vpn already running, keeping current tunnel"
+		if ! subscription_file_valid; then
+			log "subscription.json is present but invalid, trying saved profile restore"
+			if restore_subscription_from_profile_url; then
+				ensure_routes_ready
+				ensure_vpn_from_subscription
+				return 0
+			fi
+			log "saved profile restore failed, removing invalid subscription.json"
+			rm -f "$SUB_FILE"
+		else
+			save_router_software_metadata_file "$SUB_FILE" >/dev/null 2>&1 || true
+			log "subscription.json already present, skipping router_public"
+			if [ -s "$VPN_READY_FILE" ] && [ -s "$ENGINE_CONFIG" ] && is_vpn_process_running; then
+				log "vpn already running, keeping current tunnel"
+				return 0
+			fi
+			ensure_vpn_from_subscription
 			return 0
 		fi
+	fi
+
+	if restore_subscription_from_profile_url; then
+		ensure_routes_ready
 		ensure_vpn_from_subscription
 		return 0
 	fi
@@ -2851,6 +2929,13 @@ main_loop() {
 		if [ ! -s "$SUB_FILE" ]; then
 			poll_subscription_loop
 		else
+			if ! subscription_file_valid; then
+				log "subscription.json became invalid, entering recovery flow"
+				poll_subscription_loop
+				sleep "$MAIN_LOOP_SLEEP"
+				continue
+			fi
+
 			if [ ! -s "$VPN_READY_FILE" ]; then
 				ensure_vpn_from_subscription
 			fi

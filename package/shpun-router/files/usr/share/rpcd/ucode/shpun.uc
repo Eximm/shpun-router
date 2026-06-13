@@ -74,6 +74,28 @@ function exists(path) {
 	} catch(e) { return false; }
 }
 
+function parse_json_safe(raw) {
+	try {
+		return raw ? json(raw) : null;
+	} catch(e) {
+		return null;
+	}
+}
+
+function has_valid_subscription(raw) {
+	let data = parse_json_safe(raw);
+	if (!data)
+		return false;
+
+	if (data.subscription && type(data.subscription.links) == "array" && length(data.subscription.links) > 0)
+		return true;
+
+	if (type(data.links) == "array" && length(data.links) > 0)
+		return true;
+
+	return false;
+}
+
 function read_fw_current() {
 	let v = "";
 	if (exists(FW_CUR_NEW))       v = readfile(FW_CUR_NEW);
@@ -300,7 +322,7 @@ function get_current_server() {
 		return null;
 
 	let raw = readfile(SUB);
-	let data = json(raw);
+	let data = parse_json_safe(raw);
 	if (!data)
 		return null;
 
@@ -489,7 +511,7 @@ return {
 
 					let res = {
 						code:             code_raw || "",
-						has_sub:          (sub_raw != ""),
+						has_sub:          has_valid_subscription(sub_raw),
 						subscription_url: sub_url || "",
 						vpn_ready:        exists(READY),
 						udp_ready:        exists(UDP_READY),
@@ -626,7 +648,7 @@ return {
 					if (!raw || length(raw) == 0)
 						return { ok: 1, vpn: [], direct: [] };
 
-					let data = json(raw);
+					let data = parse_json_safe(raw);
 					if (!data)
 						return { ok: 1, vpn: [], direct: [] };
 
@@ -687,7 +709,7 @@ return {
 
 					let json_str = "{\"vpn\":" + json_array(vpn_ok) + ",\"direct\":" + json_array(direct_ok) + "}";
 					let old_raw = readfile(CUSTOM_FILE) || "";
-					let old_data = old_raw ? json(old_raw) : null;
+					let old_data = parse_json_safe(old_raw);
 
 					if (old_raw == json_str)
 						return {
@@ -760,7 +782,7 @@ return {
 						return { ok: 1, selected: 0, servers: [] };
 
 					let raw = readfile(SUB);
-					let data = json(raw);
+					let data = parse_json_safe(raw);
 					if (!data)
 						return { ok: 0, error: "invalid subscription json" };
 
@@ -806,7 +828,7 @@ return {
 						return { ok: 0, error: "subscription.json not found" };
 
 					let raw = readfile(SUB);
-					let data = json(raw);
+					let data = parse_json_safe(raw);
 					if (!data)
 						return { ok: 0, error: "invalid subscription json" };
 
