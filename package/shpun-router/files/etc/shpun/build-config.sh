@@ -621,6 +621,43 @@ EOF
             printf '%s' "$PARAMS" | tr '&' '\n' | awk -F= -v k="$1" '$1==k {sub(/^[^=]*=/,""); print; exit}'
         }
 
+        get_first_param() {
+            for key in "$@"; do
+                val="$(get_param "$key")"
+                [ -n "$val" ] && {
+                    printf '%s' "$val"
+                    return 0
+                }
+            done
+            return 0
+        }
+
+        is_enabled_value() {
+            case "$(printf '%s' "$1" | tr 'A-Z' 'a-z')" in
+                1|true|yes|on|enabled) return 0 ;;
+                *) return 1 ;;
+            esac
+        }
+
+        csv_part() {
+            printf '%s' "$1" | awk -F, -v n="$2" '{gsub(/^[ \t]+|[ \t]+$/, "", $n); print $n}'
+        }
+
+        json_csv_array() {
+            printf '%s' "$1" | tr ',' '\n' | awk '
+                function esc(s) {
+                    gsub(/^[ \t]+|[ \t]+$/, "", s)
+                    gsub(/\\/,"\\\\",s)
+                    gsub(/"/,"\\\"",s)
+                    return s
+                }
+                esc($0) != "" {
+                    if (n++ > 0) printf ", "
+                    printf "\"%s\"", esc($0)
+                }
+            '
+        }
+
         SECURITY="$(url_decode "$(get_param security)")"
         TYPE="$(url_decode "$(get_param type)")"
         HOST="$(url_decode "$(get_param host)")"
@@ -633,11 +670,46 @@ EOF
         ALPN="$(url_decode "$(get_param alpn)")"
         ENCRYPTION="$(url_decode "$(get_param encryption)")"
         HEADER_TYPE="$(url_decode "$(get_param headerType)")"
+        SPX="$(url_decode "$(get_first_param spx spiderX spiderx)")"
+        PACKET_ENCODING="$(url_decode "$(get_first_param packetEncoding packet_encoding)")"
+        MUX_RAW="$(url_decode "$(get_first_param mux muxEnabled mux_enabled)")"
+        MUX_CONCURRENCY="$(url_decode "$(get_first_param muxConcurrency mux_concurrency)")"
+        FRAGMENT_RAW="$(url_decode "$(get_first_param fragment fragmentTemplate fragment_template fragmentPattern fragment_pattern)")"
+        FRAGMENT_PACKETS="$(url_decode "$(get_first_param fragmentPackets fragmentPacket fragment_packets fragment_packet packets)")"
+        FRAGMENT_LENGTH="$(url_decode "$(get_first_param fragmentLength fragmentSize fragment_length fragment_size length)")"
+        FRAGMENT_INTERVAL="$(url_decode "$(get_first_param fragmentInterval fragment_interval interval)")"
+        NOISE_RAW="$(url_decode "$(get_first_param noise noisePattern noise_pattern)")"
+        NOISE_TYPE="$(url_decode "$(get_first_param noiseType noise_type)")"
+        NOISE_PACKET="$(url_decode "$(get_first_param noisePacket noisePackets noise_packet noise_packets packet)")"
+        NOISE_DELAY="$(url_decode "$(get_first_param noiseDelay noise_delay delay)")"
+        RANDOM_UA="$(url_decode "$(get_first_param randomUserAgent random_user_agent userAgentRandom user_agent_random randomUA random_ua)")"
 
         [ -z "$TYPE" ]       && TYPE="tcp"
         [ -z "$FP" ]         && FP="chrome"
         [ -z "$ENCRYPTION" ] && ENCRYPTION="none"
         [ -z "$SNI" ]        && SNI="$HOST"
+        [ -z "$SPX" ]        && SPX="/"
+
+        if [ -n "$FRAGMENT_RAW" ]; then
+            [ -n "$FRAGMENT_LENGTH" ]   || FRAGMENT_LENGTH="$(csv_part "$FRAGMENT_RAW" 1)"
+            [ -n "$FRAGMENT_INTERVAL" ] || FRAGMENT_INTERVAL="$(csv_part "$FRAGMENT_RAW" 2)"
+            [ -n "$FRAGMENT_PACKETS" ]  || FRAGMENT_PACKETS="$(csv_part "$FRAGMENT_RAW" 3)"
+        fi
+
+        if [ -n "$NOISE_RAW" ]; then
+            noise_rest="$NOISE_RAW"
+            case "$noise_rest" in
+                *:*)
+                    [ -n "$NOISE_TYPE" ] || NOISE_TYPE="${noise_rest%%:*}"
+                    noise_rest="${noise_rest#*:}"
+                    ;;
+            esac
+            [ -n "$NOISE_PACKET" ] || NOISE_PACKET="$(csv_part "$noise_rest" 1)"
+            [ -n "$NOISE_DELAY" ]  || NOISE_DELAY="$(csv_part "$noise_rest" 2)"
+        fi
+
+        [ -n "$FRAGMENT_PACKETS" ] || FRAGMENT_PACKETS="tlshello"
+        [ -n "$NOISE_PACKET" ] && [ -z "$NOISE_TYPE" ] && NOISE_TYPE="rand"
 
         if [ -z "$UUID" ] || [ -z "$SERVER" ] || [ -z "$PORT" ]; then
             logger -t shpun-build "Invalid VLESS link (uuid/server/port missing)"
@@ -652,9 +724,96 @@ EOF
         esac
 
         if [ -n "$FLOW" ]; then
-            USER_FLOW_LINE=",\n                \"flow\": \"$FLOW\""
+            USER_FLOW_LINE=$(cat <<EOF
+,
+                "flow": "$FLOW"
+EOF
+)
         else
             USER_FLOW_LINE=""
+        fi
+        if [ -n "$PACKET_ENCODING" ]; then
+            USER_PACKET_ENCODING_LINE=$(cat <<EOF
+,
+                "packetEncoding": "$PACKET_ENCODING"
+EOF
+)
+        else
+            USER_PACKET_ENCODING_LINE=""
+        fi
+
+        MUX_BLOCK=""
+        if is_enabled_value "$MUX_RAW"; then
+            case "$MUX_CONCURRENCY" in
+                ''|*[!0-9]*) MUX_CONCURRENCY=8 ;;
+            esac
+            MUX_BLOCK=$(cat <<EOF
+      "mux": {
+        "enabled": true,
+        "concurrency": $MUX_CONCURRENCY
+      },
+EOF
+)
+        fi
+
+        NOISES_BLOCK=""
+        if [ -n "$NOISE_TYPE" ] && [ -n "$NOISE_PACKET" ]; then
+            [ -n "$NOISE_DELAY" ] || NOISE_DELAY="10-16"
+            NOISES_BLOCK=$(cat <<EOF
+,
+        "noises": [
+          {
+            "type": "$NOISE_TYPE",
+            "packet": "$NOISE_PACKET",
+            "delay": "$NOISE_DELAY"
+          }
+        ]
+EOF
+)
+        fi
+
+        DIALER_SOCKOPT_BLOCK=""
+        FRAGMENT_OUTBOUND_BLOCK=""
+        if [ -n "$FRAGMENT_LENGTH" ] || [ -n "$FRAGMENT_INTERVAL" ] || [ -n "$NOISES_BLOCK" ]; then
+            [ -n "$FRAGMENT_LENGTH" ] || FRAGMENT_LENGTH="10-20"
+            [ -n "$FRAGMENT_INTERVAL" ] || FRAGMENT_INTERVAL="10-50"
+            DIALER_SOCKOPT_BLOCK=$(cat <<EOF
+        "sockopt": {
+          "dialerProxy": "fragment"
+        },
+EOF
+)
+            FRAGMENT_OUTBOUND_BLOCK=$(cat <<EOF
+    {
+      "tag": "fragment",
+      "protocol": "freedom",
+      "settings": {
+        "fragment": {
+          "packets": "$FRAGMENT_PACKETS",
+          "length": "$FRAGMENT_LENGTH",
+          "interval": "$FRAGMENT_INTERVAL"
+        }$NOISES_BLOCK
+      }
+    },
+EOF
+)
+            logger -t shpun-build "VLESS masking enabled: fragment packets=$FRAGMENT_PACKETS length=$FRAGMENT_LENGTH interval=$FRAGMENT_INTERVAL noise=${NOISE_TYPE:-none}"
+        fi
+
+        if is_enabled_value "$RANDOM_UA"; then
+            logger -t shpun-build "VLESS random user-agent requested by link but ignored: Xray router config has no HTTP user-agent layer for REALITY TCP"
+        fi
+
+        TLS_ALPN_LINE=""
+        if [ -n "$ALPN" ]; then
+            ALPN_ARRAY="$(json_csv_array "$ALPN")"
+            if [ -n "$ALPN_ARRAY" ]; then
+                TLS_ALPN_LINE=$(cat <<EOF
+,
+          "alpn": [$ALPN_ARRAY]
+EOF
+)
+            fi
         fi
 
         TCP_HEADER_BLOCK=""
@@ -678,13 +837,13 @@ EOF
       "streamSettings": {
         "network": "$TYPE",
         "security": "reality",
-$TCP_HEADER_BLOCK        "realitySettings": {
+$TCP_HEADER_BLOCK$DIALER_SOCKOPT_BLOCK        "realitySettings": {
           "show": false,
           "fingerprint": "$FP",
           "serverName": "$SNI",
           "publicKey": "$PBK",
           "shortId": "$SID",
-          "spiderX": "/"
+          "spiderX": "$SPX"
         }
       }
 EOF
@@ -694,10 +853,10 @@ EOF
       "streamSettings": {
         "network": "$TYPE",
         "security": "tls",
-$TCP_HEADER_BLOCK        "tlsSettings": {
+$TCP_HEADER_BLOCK$DIALER_SOCKOPT_BLOCK        "tlsSettings": {
           "serverName": "$SNI",
           "fingerprint": "$FP",
-          "allowInsecure": false
+          "allowInsecure": false$TLS_ALPN_LINE
         }
       }
 EOF
@@ -803,14 +962,16 @@ EOF
             "users": [
               {
                 "id": "$UUID",
-                "encryption": "$ENCRYPTION"$USER_FLOW_LINE
+                "encryption": "$ENCRYPTION"$USER_FLOW_LINE$USER_PACKET_ENCODING_LINE
               }
             ]
           }
         ]
       },
+$MUX_BLOCK
 $STREAM_SETTINGS
     },
+$FRAGMENT_OUTBOUND_BLOCK
     {
       "tag": "direct",
       "protocol": "freedom",
