@@ -456,11 +456,11 @@ function exit_probe() {
 	let proxy = "http://127.0.0.1:" + HTTP_PROXY_PORT;
 	let cmd =
 		"if command -v curl >/dev/null 2>&1; then " +
-			"curl -sS -m 4 -x " + proxy + " -w '\\n%{time_total}' http://api.ipify.org 2>/dev/null; " +
+			"curl -sS -A ShpunRouter -m 4 -x " + proxy + " -w '\\n%{time_total}' http://api.ipify.org 2>/dev/null; " +
 		"else " +
 			"START=$(cut -d' ' -f1 /proc/uptime 2>/dev/null); " +
 			"IP=$(env http_proxy=" + proxy + " HTTP_PROXY=" + proxy + " " +
-				"uclient-fetch -q -T 4 -Y on -O - http://api.ipify.org 2>/dev/null | tr -d '\\r\\n '); " +
+				"uclient-fetch -q -U ShpunRouter -T 4 -Y on -O - http://api.ipify.org 2>/dev/null | tr -d '\\r\\n '); " +
 			"RC=$?; END=$(cut -d' ' -f1 /proc/uptime 2>/dev/null); " +
 			"[ \"$RC\" -eq 0 ] && [ -n \"$IP\" ] || exit 1; " +
 			"printf '%s\\n' \"$IP\"; " +

@@ -38,7 +38,7 @@ CONFIG_API_URL_DEFAULT="https://router.shpun.net/profile"
 SUBSCRIPTION_MIRROR_BASE_URL_DEFAULT="https://mirepo.space"
 SUB_UNAVAILABLE_RESET_LIMIT_DEFAULT=3
 SUB_CHECK_INTERVAL_DEFAULT=21600
-HTTP_USER_AGENT_DEFAULT="Mozilla/5.0 (compatible; ShpunRouter/1.1)"
+HTTP_USER_AGENT_DEFAULT="ShpunRouter"
 
 MIN_UPTIME_DEFAULT=120
 NET_FAIL_TIMEOUT_DEFAULT=180
@@ -605,7 +605,8 @@ load_conf() {
 	[ -z "$ENGINE_CONFIG" ]         && ENGINE_CONFIG="/etc/shpun/xray.json"
 	[ -z "$SUB_CHECK_INTERVAL" ]    && SUB_CHECK_INTERVAL="$SUB_CHECK_INTERVAL_DEFAULT"
 	[ -z "$SUB_UNAVAILABLE_RESET_LIMIT" ] && SUB_UNAVAILABLE_RESET_LIMIT="$SUB_UNAVAILABLE_RESET_LIMIT_DEFAULT"
-	[ -z "$HTTP_USER_AGENT" ]       && HTTP_USER_AGENT="$HTTP_USER_AGENT_DEFAULT"
+	# Keep router requests clearly identifiable in upstream statistics.
+	HTTP_USER_AGENT="$HTTP_USER_AGENT_DEFAULT"
 
 	[ -z "$MIN_UPTIME" ]            && MIN_UPTIME="$MIN_UPTIME_DEFAULT"
 	[ -z "$NET_FAIL_TIMEOUT" ]      && NET_FAIL_TIMEOUT="$NET_FAIL_TIMEOUT_DEFAULT"
@@ -1927,13 +1928,13 @@ probe_url_direct() {
 
 	case "$HTTP_BIN" in
 		curl)
-			curl -fsS -m 5 -o /dev/null "$url" >/dev/null 2>&1
+			curl -fsS -A "$HTTP_USER_AGENT" -m 5 -o /dev/null "$url" >/dev/null 2>&1
 			;;
 		wget)
-			wget -q -T 5 -O /dev/null "$url" >/dev/null 2>&1
+			wget -q -U "$HTTP_USER_AGENT" -T 5 -O /dev/null "$url" >/dev/null 2>&1
 			;;
 		uclient-fetch)
-			uclient-fetch -q -T 5 -O /dev/null "$url" >/dev/null 2>&1
+			uclient-fetch -q -U "$HTTP_USER_AGENT" -T 5 -O /dev/null "$url" >/dev/null 2>&1
 			;;
 		*)
 			return 1
@@ -1947,15 +1948,15 @@ probe_url_through_tunnel() {
 
 	case "$HTTP_BIN" in
 		curl)
-			curl -fsS -m 8 -x "$proxy" "$url" >/dev/null 2>&1
+			curl -fsS -A "$HTTP_USER_AGENT" -m 8 -x "$proxy" "$url" >/dev/null 2>&1
 			;;
 		wget)
 			env http_proxy="$proxy" HTTP_PROXY="$proxy" \
-				wget -q -T 8 -Y on -O /dev/null "$url" >/dev/null 2>&1
+				wget -q -U "$HTTP_USER_AGENT" -T 8 -Y on -O /dev/null "$url" >/dev/null 2>&1
 			;;
 		uclient-fetch)
 			env http_proxy="$proxy" HTTP_PROXY="$proxy" \
-				uclient-fetch -q -T 8 -Y on -O /dev/null "$url" >/dev/null 2>&1
+				uclient-fetch -q -U "$HTTP_USER_AGENT" -T 8 -Y on -O /dev/null "$url" >/dev/null 2>&1
 			;;
 		*)
 			return 1
@@ -2041,7 +2042,7 @@ probe_tunnel_exit_url_http() {
 
 	case "$HTTP_BIN" in
 		curl)
-			out="$(curl -fsS -m 8 -x "$proxy" -w '\n%{time_total}' "$url" 2>/dev/null)" || return 1
+			out="$(curl -fsS -A "$HTTP_USER_AGENT" -m 8 -x "$proxy" -w '\n%{time_total}' "$url" 2>/dev/null)" || return 1
 			ip="$(printf '%s\n' "$out" | sed '$d' | head -n 1 | tr -d '\r\n ')"
 			sec="$(printf '%s\n' "$out" | tail -n 1)"
 			check_ms="$(seconds_to_ms "$sec")"
@@ -2050,10 +2051,10 @@ probe_tunnel_exit_url_http() {
 			start="$(cut -d' ' -f1 /proc/uptime 2>/dev/null)"
 			case "$HTTP_BIN" in
 				wget)
-					ip="$(env http_proxy="$proxy" HTTP_PROXY="$proxy" wget -q -T 8 -Y on -O - "$url" 2>/dev/null | tr -d '\r\n ')"
+					ip="$(env http_proxy="$proxy" HTTP_PROXY="$proxy" wget -q -U "$HTTP_USER_AGENT" -T 8 -Y on -O - "$url" 2>/dev/null | tr -d '\r\n ')"
 					;;
 				uclient-fetch)
-					ip="$(env http_proxy="$proxy" HTTP_PROXY="$proxy" uclient-fetch -q -T 8 -Y on -O - "$url" 2>/dev/null | tr -d '\r\n ')"
+					ip="$(env http_proxy="$proxy" HTTP_PROXY="$proxy" uclient-fetch -q -U "$HTTP_USER_AGENT" -T 8 -Y on -O - "$url" 2>/dev/null | tr -d '\r\n ')"
 					;;
 			esac
 			[ -n "$ip" ] || return 1
@@ -2075,7 +2076,7 @@ probe_tunnel_exit_url_socks() {
 	local out ip sec check_ms
 
 	[ "$HTTP_BIN" = "curl" ] || return 1
-	out="$(curl -fsS -m 8 -x "$proxy" -w '\n%{time_total}' "$url" 2>/dev/null)" || return 1
+	out="$(curl -fsS -A "$HTTP_USER_AGENT" -m 8 -x "$proxy" -w '\n%{time_total}' "$url" 2>/dev/null)" || return 1
 	ip="$(printf '%s\n' "$out" | sed '$d' | head -n 1 | tr -d '\r\n ')"
 	sec="$(printf '%s\n' "$out" | tail -n 1)"
 	check_ms="$(seconds_to_ms "$sec")"

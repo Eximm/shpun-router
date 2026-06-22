@@ -161,6 +161,8 @@ PRESET_DOMAINS: dict[str, list[str]] = {
         "*.okkocdn.ru",
         "okko-cdn.ru",
         "*.okko-cdn.ru",
+        "bcvcdn.com",
+        "*.bcvcdn.com",
         "cdnvideo.ru",
         "*.cdnvideo.ru",
         "kinopoisk.ru",

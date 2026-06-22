@@ -27,6 +27,7 @@ SMART_RU_DOMAINS_SHA_FILE="$ROUTES_DIR/presets/smart_ru.domains.sha256"
 ROUTES_URL_BASE_DEFAULT="https://spb.shpyn.online/files/routes"
 SPLIT_RU_MIN_MEM_KB_DEFAULT=131072
 SPLIT_RU_WARN_MEM_KB_DEFAULT=196608
+HTTP_USER_AGENT_DEFAULT="ShpunRouter"
 
 HTTP_BIN=""
 
@@ -74,6 +75,7 @@ load_conf() {
     [ -z "$SPLIT_RU_WARN_MEM_KB" ] && SPLIT_RU_WARN_MEM_KB="$SPLIT_RU_WARN_MEM_KB_DEFAULT"
     [ -z "$ENGINE_BIN" ] && ENGINE_BIN="$ENGINE_BIN_DEFAULT"
     [ -z "$ENGINE_CONFIG" ] && ENGINE_CONFIG="$ENGINE_CONFIG_DEFAULT"
+    HTTP_USER_AGENT="$HTTP_USER_AGENT_DEFAULT"
 
     case "$SPLIT_RU_MIN_MEM_KB" in
         ''|*[!0-9]*) SPLIT_RU_MIN_MEM_KB="$SPLIT_RU_MIN_MEM_KB_DEFAULT" ;;
@@ -100,9 +102,9 @@ http_get_to_file() {
     out="$2"
 
     case "$HTTP_BIN" in
-        curl) curl -fsS "$url" -o "$out" ;;
-        wget) wget -qO "$out" "$url" ;;
-        uclient-fetch) uclient-fetch -qO "$out" "$url" ;;
+        curl) curl -fsS -A "$HTTP_USER_AGENT" "$url" -o "$out" ;;
+        wget) wget -q -U "$HTTP_USER_AGENT" -O "$out" "$url" ;;
+        uclient-fetch) uclient-fetch -q -U "$HTTP_USER_AGENT" -O "$out" "$url" ;;
         *) return 1 ;;
     esac
 }
@@ -111,9 +113,9 @@ http_get_stdout() {
     url="$1"
 
     case "$HTTP_BIN" in
-        curl) curl -fsS "$url" ;;
-        wget) wget -qO- "$url" ;;
-        uclient-fetch) uclient-fetch -qO- "$url" ;;
+        curl) curl -fsS -A "$HTTP_USER_AGENT" "$url" ;;
+        wget) wget -q -U "$HTTP_USER_AGENT" -O- "$url" ;;
+        uclient-fetch) uclient-fetch -q -U "$HTTP_USER_AGENT" -O- "$url" ;;
         *) return 1 ;;
     esac
 }

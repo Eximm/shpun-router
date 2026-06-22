@@ -22,6 +22,7 @@ LOCK_FILE="/var/run/shpun-update.lock"
 
 LOG_TAG="shpun-update"
 PKG_NAME="shpun-router"
+HTTP_USER_AGENT="ShpunRouter"
 
 log() {
 	logger -t "$LOG_TAG" "$*"
@@ -137,7 +138,7 @@ if [ -s "$CONFIG_URL_FILE" ]; then
 	case "$CONFIG_URL" in
 		http://*|https://*)
 			META_FILE="/tmp/shpun-router-update-meta.json"
-			if ! uclient-fetch -qO "$META_FILE" "$(append_format_json "$CONFIG_URL")" >/dev/null 2>&1; then
+			if ! uclient-fetch -q -U "$HTTP_USER_AGENT" -O "$META_FILE" "$(append_format_json "$CONFIG_URL")" >/dev/null 2>&1; then
 				log "router_config metadata refresh failed, using local subscription metadata"
 				rm -f "$META_FILE"
 				META_FILE=""
@@ -273,7 +274,7 @@ TMP_IPK="/tmp/${PKG_NAME}_update.ipk"
 
 log "downloading update from: $UPDATE_URL"
 
-if ! uclient-fetch -qO "$TMP_IPK" "$UPDATE_URL"; then
+if ! uclient-fetch -q -U "$HTTP_USER_AGENT" -O "$TMP_IPK" "$UPDATE_URL"; then
 	log "download failed"
 	rm -f "$TMP_IPK"
 	exit 1
