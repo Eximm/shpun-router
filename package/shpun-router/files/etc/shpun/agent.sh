@@ -866,16 +866,19 @@ download_subscription_from_url_file() {
 	log "fetching $label subscription"
 	rm -f "$out"
 	if ! http_get_to_file "$url" "$out" >/dev/null 2>&1; then
+		log "$label subscription download failed"
 		rm -f "$out"
 		return 1
 	fi
 
 	if [ ! -s "$out" ]; then
+		log "$label subscription download returned empty body"
 		rm -f "$out"
 		return 1
 	fi
 
 	if ! normalize_subscription_file "$out"; then
+		log "$label subscription format is unsupported"
 		rm -f "$out"
 		return 1
 	fi
@@ -2441,6 +2444,30 @@ refresh_subscription_from_url() {
 	return 1
 }
 
+restore_subscription_from_url_file() {
+	local url_file="${1:-$SUB_URL_FILE}"
+	local label="${2:-direct}"
+	local tmp_sub
+
+	tmp_sub="${SUB_FILE}.${label}.restore.tmp"
+	rm -f "$tmp_sub"
+
+	download_subscription_from_url_file "$tmp_sub" "$url_file" "$label" || return 1
+	rewrite_subscription_with_metadata "$tmp_sub" "$SUB_FILE" "$tmp_sub" >/dev/null 2>&1 || true
+
+	if ! mv "$tmp_sub" "$SUB_FILE"; then
+		log "$label restore: failed to install subscription"
+		rm -f "$tmp_sub"
+		return 1
+	fi
+
+	reset_subscription_unavailable_count
+	ensure_selected_link_valid
+	date +%s > "$LAST_CHECK_FILE"
+	log "$label restore: subscription json restored from saved subscription source"
+	return 0
+}
+
 ensure_vpn_from_subscription() {
 	local old_config_sha active_config_sha new_config_sha vpn_was_running config_backup config_lock_owned=0
 
@@ -2587,7 +2614,19 @@ ensure_vpn_from_subscription() {
 poll_subscription_loop() {
 	if [ -s "$SUB_FILE" ]; then
 		if ! subscription_file_valid; then
-			log "subscription.json is present but invalid, trying saved profile restore"
+			log "subscription.json is present but invalid, trying saved direct subscription restore"
+			if restore_subscription_from_url_file "$SUB_URL_FILE" "direct"; then
+				ensure_routes_ready
+				ensure_vpn_from_subscription
+				return 0
+			fi
+			log "saved direct subscription restore failed, trying mirror subscription restore"
+			if restore_subscription_from_url_file "$SUB_MIRROR_URL_FILE" "mirror"; then
+				ensure_routes_ready
+				ensure_vpn_from_subscription
+				return 0
+			fi
+			log "saved mirror subscription restore failed, trying saved profile restore"
 			if restore_subscription_from_profile_url; then
 				ensure_routes_ready
 				ensure_vpn_from_subscription
@@ -2605,6 +2644,18 @@ poll_subscription_loop() {
 			ensure_vpn_from_subscription
 			return 0
 		fi
+	fi
+
+	if restore_subscription_from_url_file "$SUB_URL_FILE" "direct"; then
+		ensure_routes_ready
+		ensure_vpn_from_subscription
+		return 0
+	fi
+
+	if restore_subscription_from_url_file "$SUB_MIRROR_URL_FILE" "mirror"; then
+		ensure_routes_ready
+		ensure_vpn_from_subscription
+		return 0
 	fi
 
 	if restore_subscription_from_profile_url; then

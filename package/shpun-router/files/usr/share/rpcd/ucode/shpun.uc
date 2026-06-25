@@ -540,12 +540,6 @@ return {
 						let current_server = get_current_server();
 						if (current_server) {
 							let server_public = public_server_info(current_server);
-							let exit = exit_probe();
-							if (exit) {
-								server_public.exit_ip = exit.ip;
-								server_public.exit_check_ms = exit.check_ms;
-								server_public.exit_ping_ms = tcp_ping_ms(exit.ip, 0);
-							}
 
 							if (!server_public.exit_ip) {
 								let exit_ip = safe_public_ip(readfile(TUNNEL_EXIT_IP));
