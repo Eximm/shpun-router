@@ -1,6 +1,4 @@
-﻿'use strict';
-
-import { open, popen } from 'fs';
+import { open, popen } from "fs";
 
 const DIR       = "/etc/shpun";
 const CODE      = DIR + "/router_code";
@@ -62,7 +60,7 @@ function readcmd(cmd) {
 
 function norm(v) {
 	if (v == null) return "";
-	return '' + v;
+	return "" + v;
 }
 
 function exists(path) {
@@ -169,7 +167,7 @@ function validate_ip_cidr(entry) {
 
 	for (let i = 0; i < 4; i++) {
 		let octet = int(parts[i]);
-		if (parts[i] != '' + octet) return false;
+		if (parts[i] != "" + octet) return false;
 		if (octet < 0 || octet > 255) return false;
 	}
 
