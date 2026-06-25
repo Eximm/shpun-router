@@ -184,12 +184,17 @@ function compareVersions(a, b) {
 }
 
 function buildStatusBadge(state) {
+	if (state && state.ok === 0)
+		return E('span', { 'class': 'shpun-badge shpun-badge--err' }, [ E('span', { 'class': 'shpun-badge-dot' }), 'Ошибка виджета' ]);
+
 	var hasCode = !!(state.code && state.code.trim().length > 0);
 	var hasSub  = !!state.has_sub;
 	var ready   = !!state.vpn_ready;
 	var err     = (state.vpn_error || '').trim();
 	var cls, text;
 	if (err)                              { cls = 'shpun-badge shpun-badge--err';  text = 'Ошибка подключения'; }
+	else if (!hasCode && hasSub && ready) { cls = 'shpun-badge shpun-badge--ok';   text = 'VPN подключен'; }
+	else if (!hasCode && hasSub)          { cls = 'shpun-badge shpun-badge--warn'; text = 'Подключаемся'; }
 	else if (!hasCode)                    { cls = 'shpun-badge shpun-badge--off';  text = 'Подготовка'; }
 	else if (hasCode && !hasSub)          { cls = 'shpun-badge shpun-badge--warn'; text = 'Ожидает привязки'; }
 	else if (hasCode && hasSub && !ready) { cls = 'shpun-badge shpun-badge--warn'; text = 'Подключаемся'; }
@@ -613,6 +618,7 @@ return view.extend({
 		var hasSub   = !!state.has_sub;
 		var vpnReady = !!state.vpn_ready;
 		var err      = (state.vpn_error || '').trim();
+		var stateErr = (state.ok === 0 && state.error) ? String(state.error) : '';
 
 		var routing       = state.routing || {};
 		var routingMode   = String(routing.mode || 'full').trim();
@@ -642,7 +648,8 @@ return view.extend({
 			: fwCurrentDisplay;
 
 		var hintText =
-			!code     ? 'Роутер готовится к привязке. После генерации кода откройте ShpunApp и оформите услугу для роутера.'
+			stateErr  ? ('Ошибка чтения состояния виджета: ' + stateErr)
+			: !code && !hasSub ? 'Роутер готовится к привязке. После генерации кода откройте ShpunApp и оформите услугу для роутера.'
 			: !hasSub ? 'Откройте ShpunApp, закажите или активируйте услугу и привяжите роутер по этому коду.'
 			: !vpnReady ? (err ? 'Ошибка: ' + err : 'Привязка найдена. Роутер поднимает VPN…')
 			: 'Роутер подключен. Серверы, маршруты и обновления доступны прямо в этом виджете.';
@@ -693,7 +700,8 @@ return view.extend({
 							E('div', { 'class': 'shpun-field' }, [
 								E('div', { 'class': 'shpun-field-label' }, 'Статус услуги'),
 								E('div', { 'class': 'shpun-field-value' }, [
-									!code ? 'Ожидает генерации кода'
+									stateErr ? 'Ошибка виджета'
+									: !code && !hasSub ? 'Ожидает генерации кода'
 									: !hasSub ? 'Ожидает привязки'
 									: vpnReady ? 'Подключен'
 									: err ? 'Ошибка подключения' : 'Подключение…'

@@ -1,4 +1,4 @@
-'use strict';
+﻿'use strict';
 
 import { open, popen } from 'fs';
 
@@ -247,6 +247,25 @@ function cleanup_server_name(name, proto) {
 	return name || "Server";
 }
 
+function link_value(link) {
+	if (type(link) == "string")
+		return trim(norm(link));
+
+	if (type(link) == "object") {
+		let keys = ["url", "link", "uri", "vless", "ss"];
+		for (let i = 0; i < length(keys); i++) {
+			let value = link[keys[i]];
+			if (type(value) == "string") {
+				value = trim(norm(value));
+				if (substr(value, 0, 5) == "ss://" || substr(value, 0, 8) == "vless://")
+					return value;
+			}
+		}
+	}
+
+	return "";
+}
+
 function parse_link_info(link, idx, selected) {
 	link = link_value(link);
 
@@ -303,24 +322,6 @@ function parse_link_info(link, idx, selected) {
 	};
 }
 
-function link_value(link) {
-	if (type(link) == "string")
-		return trim(norm(link));
-
-	if (type(link) == "object") {
-		let keys = ["url", "link", "uri", "vless", "ss"];
-		for (let i = 0; i < length(keys); i++) {
-			let value = link[keys[i]];
-			if (type(value) == "string") {
-				value = trim(norm(value));
-				if (substr(value, 0, 5) == "ss://" || substr(value, 0, 8) == "vless://")
-					return value;
-			}
-		}
-	}
-
-	return "";
-}
 
 function public_server_info(info) {
 	if (!info)
@@ -521,6 +522,10 @@ return {
 				try {
 					let code_raw = readfile(CODE);
 					let sub_raw  = readfile(SUB);
+					let sub_data = parse_json_safe(sub_raw);
+					let has_sub  = has_valid_subscription(sub_raw);
+					if (!trim(code_raw) && sub_data && sub_data.code)
+						code_raw = norm(sub_data.code);
 					let sub_url  = trim(readfile(SUB_URL));
 					let err_raw  = readfile(VERROR);
 					let fw_cur   = read_fw_current();
@@ -530,7 +535,7 @@ return {
 
 					let res = {
 						code:             code_raw || "",
-						has_sub:          has_valid_subscription(sub_raw),
+						has_sub:          has_sub,
 						subscription_url: sub_url || "",
 						vpn_ready:        exists(READY),
 						udp_ready:        exists(UDP_READY),
@@ -566,7 +571,7 @@ return {
 							res.current_server = server_public;
 						}
 					} catch(e) {
-						res.current_server_error = String(e);
+						res.current_server_error = ("" + e);
 					}
 
 					if (fw_cur  != "") res.fw_current = fw_cur;
@@ -574,7 +579,7 @@ return {
 
 					return res;
 				} catch(e) {
-					return { ok: 0, error: String(e) };
+					return { ok: 0, error: ("" + e) };
 				}
 			}
 		},
@@ -614,7 +619,7 @@ return {
 						router_profile: readfile(ROUTER_PROFILE) || ""
 					};
 				} catch(e) {
-					return { ok: 0, error: String(e) };
+					return { ok: 0, error: ("" + e) };
 				}
 			}
 		},
@@ -650,7 +655,7 @@ return {
 
 					return { ok: 1, mode: mode, applied_mode: applied };
 				} catch(e) {
-					return { ok: 0, error: String(e) };
+					return { ok: 0, error: ("" + e) };
 				}
 			}
 		},
@@ -675,7 +680,7 @@ return {
 						direct: data.direct || []
 					};
 				} catch(e) {
-					return { ok: 0, error: String(e) };
+					return { ok: 0, error: ("" + e) };
 				}
 			}
 		},
@@ -787,7 +792,7 @@ return {
 						warning:      warning
 					};
 				} catch(e) {
-					return { ok: 0, error: String(e) };
+					return { ok: 0, error: ("" + e) };
 				}
 			}
 		},
@@ -825,7 +830,7 @@ return {
 						servers: servers
 					};
 				} catch(e) {
-					return { ok: 0, error: String(e) };
+					return { ok: 0, error: ("" + e) };
 				}
 			}
 		},
@@ -878,7 +883,7 @@ return {
 
 					return { ok: 1, selected: idx };
 				} catch(e) {
-					return { ok: 0, error: String(e) };
+					return { ok: 0, error: ("" + e) };
 				}
 			}
 		},
@@ -904,7 +909,7 @@ return {
 
 					return { ok: 1, msg: "ota check started" };
 				} catch(e) {
-					return { ok: 0, error: String(e) };
+					return { ok: 0, error: ("" + e) };
 				}
 			}
 		},
@@ -920,7 +925,7 @@ return {
 
 					return { ok: 1, msg: "ota install started" };
 				} catch(e) {
-					return { ok: 0, error: String(e) };
+					return { ok: 0, error: ("" + e) };
 				}
 			}
 		},
@@ -943,7 +948,7 @@ return {
 
 					return { ok: 1, msg: "connection refresh started", clears_subscription_cache: true };
 				} catch(e) {
-					return { ok: 0, error: String(e) };
+					return { ok: 0, error: ("" + e) };
 				}
 			}
 		},
@@ -978,9 +983,10 @@ return {
 
 					return { ok: 1, msg: "vpn reset to initial state" };
 				} catch(e) {
-					return { ok: 0, error: String(e) };
+					return { ok: 0, error: ("" + e) };
 				}
 			}
 		}
 	}
 };
+
