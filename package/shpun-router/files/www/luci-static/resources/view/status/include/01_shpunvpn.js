@@ -96,7 +96,7 @@ function injectStyles() {
 		+ '.shpun-code-copy:hover{color:#c4b5fd;border-bottom-color:#a78bfa;}'
 		+ '.shpun-fw-badge{display:inline-block;margin-left:8px;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:800;color:#bfdbfe;background:rgba(96,165,250,.16);border:1px solid rgba(96,165,250,.22);animation:shpun-fw-pulse 1.8s ease-in-out infinite;}'
 		+ '@keyframes shpun-fw-pulse{0%{box-shadow:0 0 0 0 rgba(96,165,250,.35);}70%{box-shadow:0 0 0 8px rgba(96,165,250,0);}100%{box-shadow:0 0 0 0 rgba(96,165,250,0);}}'
-		+ '.shpun-actions{margin-top:auto;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;align-items:stretch;}'
+		+ '.shpun-actions{margin-top:auto;display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;align-items:stretch;}'
 		+ '.shpun-col-side{display:flex;flex-direction:column;min-height:100%;}'
 		+ '.shpun-side-card{width:100%;height:100%;padding:12px;border-radius:18px;background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.02));border:1px solid rgba(120,140,180,.14);display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:8px;}'
 		+ '.shpun-side-title{font-size:13px;font-weight:800;color:#fff;text-align:center;line-height:1.3;}'
@@ -737,6 +737,7 @@ return view.extend({
 
 						E('div', { 'class': 'shpun-actions' }, [
 							E('button', { 'class': 'shpun-btn shpun-btn--ghost',   'click': ui.createHandlerFn(this, 'handleRefresh') }, 'Обновить статус'),
+							E('button', { 'class': 'shpun-btn shpun-btn--primary', 'click': ui.createHandlerFn(this, 'handleRefreshConnection') }, 'Переподключить'),
 							E('button', { 'class': 'shpun-btn shpun-btn--ghost',   'click': ui.createHandlerFn(this, 'handleServers') }, 'Серверы'),
 							E('button', { 'class': 'shpun-btn shpun-btn--ghost',   'click': ui.createHandlerFn(this, 'handleCustomRoutes') }, 'Доп. маршруты'),
 							E('button', { 'class': 'shpun-btn shpun-btn--ghost',   'click': ui.createHandlerFn(this, 'handleUpdateFirmware') }, hasNewFw ? ('Установить ' + fwLatest) : 'Проверить обновление'),
@@ -947,14 +948,14 @@ return view.extend({
 		if (!code) { ui.addNotification(null, E('p', {}, 'Сначала дождитесь генерации кода.'), 'warning'); return; }
 
 		ui.showModal('Обновить подключение', [
-			E('p', {}, 'Роутер заново получит конфигурацию и пересоберёт подключение.'),
+			E('p', {}, 'Роутер заново получит подписку, пересоберёт конфиг и переподключит VPN. Код привязки и настройки маршрутов сохранятся.'),
 			E('div', { 'style': 'margin-top:10px;text-align:right' }, [
 				E('button', { 'class': 'btn', 'click': function() { ui.hideModal(); } }, 'Отмена'),
 				E('button', {
 					'class': 'btn cbi-button cbi-button-apply', 'style': 'margin-left:8px',
 					'click': function() {
 						ui.hideModal();
-						ui.addNotification(null, E('p', {}, 'Обновление подключения запущено.'), 'info');
+						ui.addNotification(null, E('p', {}, 'Переподключение запущено. Обычно это занимает 10-20 секунд.'), 'info');
 						callShpunRefreshConnection().then(function(res) {
 							res = res || {};
 							if (!res.ok) ui.addNotification(null, E('p', {}, 'Не удалось запустить: ' + (res.error || 'ошибка')), 'error');

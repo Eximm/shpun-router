@@ -928,19 +928,20 @@ return {
 		refresh_connection: {
 			call: function(req) {
 				try {
-					if (!exists(CODE)) return { ok: 0, error: "router_code not found" };
-					if (!exists(SUB))  return { ok: 0, error: "subscription.json not found" };
 					if (!exists("/etc/init.d/shpun-agent"))
 						return { ok: 0, error: "shpun-agent init script not found" };
 
 					let cmd =
-						"rm -f " + DIR + "/last_sub_check " + VERROR + " >/dev/null 2>&1; " +
-						"/etc/init.d/shpun-agent restart >/dev/null 2>&1 &";
+						"sh -c '" +
+							"rm -f " + SUB + " " + DIR + "/last_sub_check " +
+							VERROR + " " + CONFIG_PENDING + " >/dev/null 2>&1; " +
+							"/etc/init.d/shpun-agent restart >/dev/null 2>&1" +
+						"' &";
 
 					let p = popen(cmd);
 					if (p) p.close();
 
-					return { ok: 1, msg: "connection refresh started" };
+					return { ok: 1, msg: "connection refresh started", clears_subscription_cache: true };
 				} catch(e) {
 					return { ok: 0, error: String(e) };
 				}
