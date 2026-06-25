@@ -121,17 +121,35 @@ case "$SELECTED_LINK_INDEX" in
     ''|*[!0-9]*) SELECTED_LINK_INDEX=0 ;;
 esac
 
-LINK="$(jsonfilter -i "$SUB_FILE" -e "@.subscription.links[$SELECTED_LINK_INDEX]" 2>/dev/null)"
+get_subscription_link() {
+    idx="$1"
+
+    for base in "@.subscription.links[$idx]" "@.links[$idx]"; do
+        for suffix in "" ".url" ".link" ".uri" ".vless" ".ss"; do
+            val="$(jsonfilter -i "$SUB_FILE" -e "${base}${suffix}" 2>/dev/null | head -n 1 | tr -d '\r\n')"
+            case "$val" in
+                ss://*|vless://*)
+                    printf '%s\n' "$val"
+                    return 0
+                    ;;
+            esac
+        done
+    done
+
+    return 1
+}
+
+LINK="$(get_subscription_link "$SELECTED_LINK_INDEX" || true)"
 
 if [ -z "$LINK" ] && [ "$SELECTED_LINK_INDEX" != "0" ]; then
     logger -t shpun-build "selected link index $SELECTED_LINK_INDEX not found, fallback to 0"
     SELECTED_LINK_INDEX=0
     echo "0" > "$SELECTED_LINK_FILE" 2>/dev/null || true
-    LINK="$(jsonfilter -i "$SUB_FILE" -e '@.subscription.links[0]' 2>/dev/null)"
+    LINK="$(get_subscription_link 0 || true)"
 fi
 
 [ -n "$LINK" ] || {
-    logger -t shpun-build "No links[0] in subscription"
+    logger -t shpun-build "No usable links[0] in subscription"
     exit 1
 }
 
@@ -665,7 +683,7 @@ EOF
         PBK="$(url_decode "$(get_param pbk)")"
         SID="$(url_decode "$(get_param sid)")"
         FP="$(url_decode "$(get_param fp)")"
-        FLOW="$(url_decode "$(get_param flow)")"
+        FLOW="$(url_decode "$(get_first_param flow xtlsFlow xtls_flow vlessFlow vless_flow)")"
         SNI="$(url_decode "$(get_param sni)")"
         ALPN="$(url_decode "$(get_param alpn)")"
         ENCRYPTION="$(url_decode "$(get_param encryption)")"
@@ -729,6 +747,7 @@ EOF
                 "flow": "$FLOW"
 EOF
 )
+            logger -t shpun-build "VLESS user flow enabled: $FLOW"
         else
             USER_FLOW_LINE=""
         fi
@@ -1019,7 +1038,7 @@ $SMART_RU_RULE
 }
 EOF
 
-        logger -t shpun-build "xray config built (VLESS, TCP+UDP, server=$(mask_host "$SERVER"):$PORT, security=${SECURITY:-none}, redir=$REDIR_PORT, tproxy=$TPROXY_PORT)"
+        logger -t shpun-build "xray config built (VLESS, TCP+UDP, server=$(mask_host "$SERVER"):$PORT, security=${SECURITY:-none}, flow=${FLOW:-none}, redir=$REDIR_PORT, tproxy=$TPROXY_PORT)"
         exit 0
         ;;
 

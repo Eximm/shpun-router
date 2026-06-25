@@ -248,7 +248,7 @@ function cleanup_server_name(name, proto) {
 }
 
 function parse_link_info(link, idx, selected) {
-	link = trim(norm(link));
+	link = link_value(link);
 
 	let proto = "";
 	let rest = link;
@@ -301,6 +301,25 @@ function parse_link_info(link, idx, selected) {
 		port: port,
 		name: name
 	};
+}
+
+function link_value(link) {
+	if (type(link) == "string")
+		return trim(norm(link));
+
+	if (type(link) == "object") {
+		let keys = ["url", "link", "uri", "vless", "ss"];
+		for (let i = 0; i < length(keys); i++) {
+			let value = link[keys[i]];
+			if (type(value) == "string") {
+				value = trim(norm(value));
+				if (substr(value, 0, 5) == "ss://" || substr(value, 0, 8) == "vless://")
+					return value;
+			}
+		}
+	}
+
+	return "";
 }
 
 function public_server_info(info) {
