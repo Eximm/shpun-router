@@ -1145,7 +1145,7 @@ write_links_json_from_lines() {
 	count=0
 	printf '{"subscription":{"links":[' > "$out" || return 1
 
-	while IFS= read -r line; do
+	while IFS= read -r line || [ -n "$line" ]; do
 		line="$(printf '%s' "$line" | tr -d '\r')"
 		case "$line" in
 			ss://*|vless://*) ;;
@@ -1207,7 +1207,7 @@ rewrite_subscription_with_metadata() {
 	count=0
 
 	printf '{"subscription":{"links":[' > "$out" || return 1
-	jsonfilter -i "$file" -e '@.subscription.links[*]' 2>/dev/null | while IFS= read -r line; do
+	jsonfilter -i "$file" -e '@.subscription.links[*]' 2>/dev/null | while IFS= read -r line || [ -n "$line" ]; do
 		line="$(printf '%s' "$line" | tr -d '\r')"
 		case "$line" in
 			ss://*|vless://*) ;;
@@ -1338,7 +1338,7 @@ normalize_subscription_file() {
 
 	printf '{"subscription":{"links":[' > "$tmp" || return 1
 
-	while IFS= read -r line; do
+	while IFS= read -r line || [ -n "$line" ]; do
 		line="$(printf '%s' "$line" | tr -d '\r')"
 		case "$line" in
 			ss://*|vless://*) ;;
