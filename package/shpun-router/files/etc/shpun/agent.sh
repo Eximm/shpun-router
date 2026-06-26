@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# shpun-agent (Xray + Shadowsocks/VLESS transparent edition)
+# shpun-agent (Xray transparent VPN)
 #
 
 STATE_DIR="/etc/shpun"
@@ -11,6 +11,8 @@ SUB_MIRROR_URL_FILE="$STATE_DIR/subscription_mirror_url"
 CONFIG_URL_FILE="$STATE_DIR/router_config_url"
 UPDATE_URL_FILE="$STATE_DIR/router_update_url"
 UPDATE_MIN_VERSION_FILE="$STATE_DIR/router_min_version"
+UPDATE_AUTO_FILE="$STATE_DIR/router_auto_install"
+UPDATE_SHA256_FILE="$STATE_DIR/router_update_sha256"
 FW_LATEST_FILE="$STATE_DIR/fw_latest"
 ROUTER_LATEST_VERSION_FILE="$STATE_DIR/router_latest_version"
 VPN_READY_FILE="$STATE_DIR/vpn_ready"
@@ -1020,7 +1022,7 @@ effective_latest_router_version() {
 
 save_router_software_metadata_file() {
 	local file="$1"
-	local version update_url min_version effective_version
+	local version update_url min_version auto_install update_sha256 effective_version
 
 	[ -s "$file" ] || return 1
 
@@ -1033,6 +1035,12 @@ save_router_software_metadata_file() {
 	min_version="$(jsonfilter -i "$file" -e '@.router_software.min_version' 2>/dev/null || echo "")"
 	[ -z "$min_version" ] && min_version="$(jsonfilter -i "$file" -e '@.router_software_current.min_version' 2>/dev/null || echo "")"
 
+	auto_install="$(jsonfilter -i "$file" -e '@.router_software.auto_install' 2>/dev/null || echo "")"
+	[ -z "$auto_install" ] && auto_install="$(jsonfilter -i "$file" -e '@.router_software_current.auto_install' 2>/dev/null || echo "")"
+
+	update_sha256="$(jsonfilter -i "$file" -e '@.router_software.sha256' 2>/dev/null || echo "")"
+	[ -z "$update_sha256" ] && update_sha256="$(jsonfilter -i "$file" -e '@.router_software_current.sha256' 2>/dev/null || echo "")"
+
 	[ -n "$version" ] && {
 		effective_version="$(effective_latest_router_version "$version")"
 		printf '%s\n' "$effective_version" > "$FW_LATEST_FILE"
@@ -1044,6 +1052,22 @@ save_router_software_metadata_file() {
 	esac
 
 	[ -n "$min_version" ] && printf '%s\n' "$min_version" > "$UPDATE_MIN_VERSION_FILE"
+
+	case "$auto_install" in
+		1|true|yes|on) printf '1\n' > "$UPDATE_AUTO_FILE" ;;
+		*) printf '0\n' > "$UPDATE_AUTO_FILE" ;;
+	esac
+
+	update_sha256="$(printf '%s' "$update_sha256" | tr 'A-F' 'a-f' | tr -d '\r\n ')"
+	case "$update_sha256" in
+		????????????????????????????????????????????????????????????????)
+			case "$update_sha256" in
+				*[!0-9a-f]*) rm -f "$UPDATE_SHA256_FILE" ;;
+				*) printf '%s\n' "$update_sha256" > "$UPDATE_SHA256_FILE" ;;
+			esac
+			;;
+		*) rm -f "$UPDATE_SHA256_FILE" ;;
+	esac
 }
 
 save_router_software_metadata_text() {
@@ -1088,8 +1112,14 @@ base64_decode_subscription() {
 		*) rm -f "$b64"; return 1 ;;
 	esac
 
+	if command -v base64 >/dev/null 2>&1 &&
+		base64 -d "$b64" > "$out" 2>/dev/null; then
+		rm -f "$b64"
+		return 0
+	fi
+
 	if command -v ucode >/dev/null 2>&1 &&
-		ucode -e "let fs = require('fs'); let s = fs.readfile('$b64'); print(b64dec(s));" > "$out" 2>/dev/null; then
+		ucode -e "let fs = require(\"fs\"); let s = fs.readfile(\"$b64\"); print(b64dec(s));" > "$out" 2>/dev/null; then
 		rm -f "$b64"
 		return 0
 	fi
@@ -1280,6 +1310,7 @@ normalize_subscription_file() {
 	if ! grep -qE '^(ss|vless)://' "$file" 2>/dev/null; then
 		decoded="${file}.decoded"
 		if base64_decode_subscription "$file" "$decoded" && grep -qE '(ss|vless)://' "$decoded" 2>/dev/null; then
+			log "subscription payload decoded from base64"
 			mv "$decoded" "$file"
 		else
 			rm -f "$decoded"

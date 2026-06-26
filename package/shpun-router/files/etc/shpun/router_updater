@@ -7,6 +7,8 @@ SUB_FILE="$CONF_DIR/subscription.json"
 CONFIG_URL_FILE="$CONF_DIR/router_config_url"
 UPDATE_URL_FILE="$CONF_DIR/router_update_url"
 UPDATE_MIN_VERSION_FILE="$CONF_DIR/router_min_version"
+UPDATE_AUTO_FILE="$CONF_DIR/router_auto_install"
+UPDATE_SHA256_FILE="$CONF_DIR/router_update_sha256"
 
 # новые имена (для ucode / виджета)
 FW_CURRENT_FILE="$CONF_DIR/fw_current"
@@ -177,6 +179,39 @@ MIN_VER="$(
 	|| echo ""
 )"
 
+AUTO_INSTALL="$(
+	json_value_from_sources '@.router_software.auto_install' "$META_FILE" \
+	|| json_value_from_sources '@.router_software_current.auto_install' "$META_FILE" \
+	|| json_value_from_sources '@.router_software.auto_install' "$SUB_FILE" \
+	|| json_value_from_sources '@.router_software_current.auto_install' "$SUB_FILE" \
+	|| file_value_from_sources "$UPDATE_AUTO_FILE" \
+	|| echo "0"
+)"
+
+UPDATE_SHA256="$(
+	json_value_from_sources '@.router_software.sha256' "$META_FILE" \
+	|| json_value_from_sources '@.router_software_current.sha256' "$META_FILE" \
+	|| json_value_from_sources '@.router_software.sha256' "$SUB_FILE" \
+	|| json_value_from_sources '@.router_software_current.sha256' "$SUB_FILE" \
+	|| file_value_from_sources "$UPDATE_SHA256_FILE" \
+	|| echo ""
+)"
+
+# A successfully fetched metadata document is authoritative. Missing policy
+# fields must disable automation instead of inheriting a previous release.
+if [ -n "$META_FILE" ] && [ -s "$META_FILE" ]; then
+	AUTO_INSTALL="$(
+		json_value_from_sources '@.router_software.auto_install' "$META_FILE" \
+		|| json_value_from_sources '@.router_software_current.auto_install' "$META_FILE" \
+		|| echo "0"
+	)"
+	UPDATE_SHA256="$(
+		json_value_from_sources '@.router_software.sha256' "$META_FILE" \
+		|| json_value_from_sources '@.router_software_current.sha256' "$META_FILE" \
+		|| echo ""
+	)"
+fi
+
 case "$UPDATE_URL" in
 	http://*|https://*) printf '%s\n' "$UPDATE_URL" >"$UPDATE_URL_FILE" ;;
 	*) UPDATE_URL="" ;;
@@ -186,6 +221,24 @@ esac
 	echo "$REMOTE_VER" >"$LATEST_VER_FILE"
 }
 [ -n "$MIN_VER" ] && echo "$MIN_VER" >"$UPDATE_MIN_VERSION_FILE"
+case "$AUTO_INSTALL" in
+	1|true|yes|on) AUTO_INSTALL=1 ;;
+	*) AUTO_INSTALL=0 ;;
+esac
+echo "$AUTO_INSTALL" >"$UPDATE_AUTO_FILE"
+
+UPDATE_SHA256="$(printf '%s' "$UPDATE_SHA256" | tr 'A-F' 'a-f' | tr -d '\r\n ')"
+case "$UPDATE_SHA256" in
+	????????????????????????????????????????????????????????????????)
+		case "$UPDATE_SHA256" in *[!0-9a-f]*) UPDATE_SHA256="" ;; esac
+		;;
+	*) UPDATE_SHA256="" ;;
+esac
+if [ -n "$UPDATE_SHA256" ]; then
+	echo "$UPDATE_SHA256" >"$UPDATE_SHA256_FILE"
+else
+	rm -f "$UPDATE_SHA256_FILE"
+fi
 
 # --- read local version (новые + старые имена) ---
 LOCAL_VER=""
@@ -198,6 +251,21 @@ elif [ -f "$LOCAL_VER_FILE_LEGACY" ]; then
 fi
 
 log "start update check: local=${LOCAL_VER:-none}, remote=${REMOTE_VER:-none}, min=${MIN_VER:-none}"
+
+if [ "${AUTO_ONLY:-0}" = "1" ] && [ "$AUTO_INSTALL" != "1" ]; then
+	log "automatic install is not enabled for remote version ${REMOTE_VER:-unknown}"
+	exit 0
+fi
+
+if [ "${AUTO_ONLY:-0}" = "1" ] && [ -z "$UPDATE_SHA256" ]; then
+	log "automatic install refused: update sha256 is missing or invalid"
+	exit 1
+fi
+
+if [ "${AUTO_ONLY:-0}" = "1" ] && { [ -z "$LOCAL_VER" ] || [ -z "$REMOTE_VER" ]; }; then
+	log "automatic install refused: local or remote version is unknown"
+	exit 1
+fi
 
 # --- корректно обновляем latest-файлы с учётом сравнения версий ---
 LATEST_EFFECTIVE=""
@@ -270,6 +338,11 @@ else
 	log "one of versions is empty (local='${LOCAL_VER:-}', remote='${REMOTE_VER:-}'), will update anyway if URL is set"
 fi
 
+if [ "${CHECK_ONLY:-0}" = "1" ]; then
+	log "CHECK_ONLY=1, skipping install (check mode)"
+	exit 0
+fi
+
 TMP_IPK="/tmp/${PKG_NAME}_update.ipk"
 
 log "downloading update from: $UPDATE_URL"
@@ -283,6 +356,26 @@ fi
 # --- size check ---
 if [ ! -s "$TMP_IPK" ]; then
 	log "downloaded file is empty"
+	rm -f "$TMP_IPK"
+	exit 1
+fi
+
+if [ -n "$UPDATE_SHA256" ]; then
+	if ! command -v sha256sum >/dev/null 2>&1; then
+		log "sha256sum is unavailable; refusing verified update"
+		rm -f "$TMP_IPK"
+		exit 1
+	fi
+
+	ACTUAL_SHA256="$(sha256sum "$TMP_IPK" 2>/dev/null | awk '{print $1}')"
+	if [ "$ACTUAL_SHA256" != "$UPDATE_SHA256" ]; then
+		log "update checksum mismatch"
+		rm -f "$TMP_IPK"
+		exit 1
+	fi
+	log "update checksum verified"
+elif [ "${AUTO_ONLY:-0}" = "1" ]; then
+	log "automatic install refused: update checksum is required"
 	rm -f "$TMP_IPK"
 	exit 1
 fi
@@ -323,6 +416,8 @@ rm -f "$CONF_DIR/vpn_ready" "$CONF_DIR/xray_config_pending" "$CONF_DIR/dns_proxy
 
 # rpcd reload is safe
 /etc/init.d/rpcd restart 2>/dev/null || true
+/etc/init.d/shpun-auto-update enable 2>/dev/null || true
+/etc/init.d/shpun-auto-update start 2>/dev/null || true
 
 log "update finished OK"
 exit 0

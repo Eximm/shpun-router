@@ -1,8 +1,8 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=shpun-router
-PKG_VERSION:=1.1.1
-PKG_RELEASE:=6
+PKG_VERSION:=1.1.2
+PKG_RELEASE:=1
 
 PKG_MAINTAINER:=Shpun VPN
 PKG_LICENSE:=MIT
@@ -62,6 +62,7 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_BIN) ./files/etc/shpun/firewall-xray.sh         $(1)/etc/shpun/firewall-xray.sh
 	$(INSTALL_BIN) ./files/etc/shpun/dns-xray.sh              $(1)/etc/shpun/dns-xray.sh
 	$(INSTALL_BIN) ./files/etc/shpun/router_updater           $(1)/etc/shpun/router_updater
+	$(INSTALL_BIN) ./files/etc/shpun/auto-update-loop.sh      $(1)/etc/shpun/auto-update-loop.sh
 	$(INSTALL_BIN) ./files/etc/shpun/set-routing-mode.sh      $(1)/etc/shpun/set-routing-mode.sh
 	$(INSTALL_BIN) ./files/etc/shpun/apply-custom-routes.sh   $(1)/etc/shpun/apply-custom-routes.sh
 
@@ -76,6 +77,7 @@ define Package/$(PKG_NAME)/install
 	# --- init scripts ---
 	$(INSTALL_BIN) ./files/etc/init.d/shpun-agent             $(1)/etc/init.d/shpun-agent
 	$(INSTALL_BIN) ./files/etc/init.d/shpun-vpn               $(1)/etc/init.d/shpun-vpn
+	$(INSTALL_BIN) ./files/etc/init.d/shpun-auto-update       $(1)/etc/init.d/shpun-auto-update
 
 	# --- rpcd ucode backend ---
 	$(INSTALL_DATA) ./files/usr/share/rpcd/ucode/shpun.uc     $(1)/usr/share/rpcd/ucode/shpun.uc
@@ -122,6 +124,7 @@ define Package/$(PKG_NAME)/postinst
 
 	/etc/init.d/shpun-agent enable 2>/dev/null || true
 	/etc/init.d/shpun-vpn enable 2>/dev/null || true
+	/etc/init.d/shpun-auto-update enable 2>/dev/null || true
 
 	/etc/init.d/rpcd restart 2>/dev/null || true
 
@@ -135,6 +138,7 @@ define Package/$(PKG_NAME)/postinst
 		/etc/init.d/shpun-vpn stop 2>/dev/null || true
 		rm -f /etc/shpun/vpn_ready /etc/shpun/xray_config_pending /etc/shpun/dns_proxy_ready 2>/dev/null || true
 		/etc/init.d/shpun-agent start 2>/dev/null || true
+		/etc/init.d/shpun-auto-update restart 2>/dev/null || true
 	fi
 }
 exit 0

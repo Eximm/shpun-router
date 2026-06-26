@@ -115,7 +115,7 @@ function injectStyles() {
 		+ '.shpun-btn--danger:hover{background:rgba(122,29,42,.50);}'
 		+ '.shpun-btn.is-active{background:linear-gradient(135deg,rgba(79,70,229,.90),rgba(99,102,241,.82));border-color:rgba(140,130,255,.28);color:#fff;box-shadow:0 8px 18px rgba(76,70,180,.18);}'
 		/* modal custom routes — тёмная тема как у виджета */
-		+ '.shpun-modal-wrap{background:linear-gradient(135deg,rgba(6,18,36,.99) 0%,rgba(8,24,50,.99) 50%,rgba(20,19,58,.99) 100%);border-radius:16px;padding:20px;color:#eef2ff;min-width:480px;}'
+		+ '.shpun-modal-wrap{width:min(680px,calc(100vw - 48px));max-width:100%;box-sizing:border-box;background:linear-gradient(135deg,rgba(6,18,36,.99) 0%,rgba(8,24,50,.99) 50%,rgba(20,19,58,.99) 100%);border-radius:16px;padding:20px;color:#eef2ff;}'
 		+ '.shpun-modal-desc{font-size:12px;color:#9fb0c8;margin-bottom:14px;line-height:1.5;}'
 		+ '.shpun-modal-help{margin:-4px 0 14px;padding:9px 11px;border-radius:10px;background:rgba(15,23,42,.50);border:1px solid rgba(120,140,180,.14);color:#b8c3d9;font-size:11px;line-height:1.45;}'
 		+ '.shpun-modal-help code{font-family:monospace;color:#e0e7ff;background:rgba(99,102,241,.14);border:1px solid rgba(99,102,241,.18);border-radius:5px;padding:1px 4px;}'
@@ -151,6 +151,8 @@ function injectStyles() {
 		+ '.shpun-modal-btn:hover{background:rgba(25,35,54,.96);}'
 		+ '.shpun-modal-btn--primary{background:linear-gradient(135deg,rgba(79,70,229,.90),rgba(99,102,241,.82));border-color:rgba(140,130,255,.28);color:#fff;}'
 		+ '.shpun-modal-btn--primary:hover{background:linear-gradient(135deg,rgba(88,80,238,.96),rgba(110,114,248,.88));}'
+		+ '.shpun-modal-btn--danger{background:rgba(101,24,34,.58);border-color:rgba(248,113,113,.34);color:#fecaca;}'
+		+ '.shpun-modal-btn--danger:hover{background:rgba(122,29,42,.68);}'
 		+ '@media(max-width:980px){.shpun-card-main{grid-template-columns:1fr;}.shpun-fields-grid{grid-template-columns:repeat(2,minmax(0,1fr));}.shpun-actions{grid-template-columns:repeat(3,minmax(0,1fr));}.shpun-side-flex-spacer{display:none;}}'
 		+ '@media(max-width:640px){.shpun-widget-card{padding:14px;border-radius:18px;}.shpun-title{font-size:18px;}.shpun-fields-grid{grid-template-columns:1fr;}.shpun-routing-actions{grid-template-columns:1fr;}.shpun-actions{grid-template-columns:repeat(2,minmax(0,1fr));}.shpun-modal-cols{grid-template-columns:1fr;}.shpun-btn{font-size:12px;}}';
 
@@ -236,7 +238,7 @@ function buildServerBadges(server) {
 		return [];
 
 	var proto = String(server.proto || '').toLowerCase();
-	var protoLabel = proto === 'vless' ? 'VLESS' : (proto === 'ss' ? 'SS' : proto.toUpperCase());
+	var protoLabel = proto === 'vless' ? 'VLESS' : (proto.toUpperCase() || 'VPN');
 	var location = formatServerLocation(server.name || server.host || 'Server', protoLabel);
 	var exitPing = parseInt(server.exit_ping_ms, 10);
 	var badges = [
@@ -339,7 +341,7 @@ function formatServerLocation(name, protoLabel) {
 	if (protoLabel)
 		name = name.replace(new RegExp('\\s*' + protoLabel + '\\s*$', 'i'), '');
 
-	name = name.replace(/\s*(VLESS|Shadowsocks|SS)\s*$/i, '').trim();
+	name = name.replace(/\s*VLESS\s*$/i, '').trim();
 	name = name.replace(/[-–—]\s*$/g, '').trim();
 
 	return name || 'Server';
@@ -526,15 +528,19 @@ function openServersModal() {
 
 		function markSelected() {
 			rows.forEach(function(row) {
-				row.node.className = 'shpun-server-row' + (row.index === chosen ? ' is-selected' : '');
+				var active = row.index === chosen;
+				row.node.className = 'shpun-server-row' + (active ? ' is-selected' : '');
+				row.badge.className = 'shpun-server-kind ' + (active ? 'shpun-server-kind--main' : 'shpun-server-kind--reserve');
+				row.badge.textContent = active ? 'Выбран' : 'Доступен';
 			});
 		}
 
 		servers.forEach(function(s) {
 			var proto = String(s.proto || 'vpn').toLowerCase();
-			var protoLabel = proto === 'vless' ? 'VLESS' : (proto === 'ss' ? 'Shadowsocks' : proto.toUpperCase());
-			var isMain = proto === 'vless';
+			var protoLabel = proto === 'vless' ? 'VLESS' : (proto.toUpperCase() || 'VPN');
+			var isSelected = s.index === selected;
 			var location = formatServerLocation(s.name || ('Server ' + s.index), protoLabel);
+			var badge = E('span', { 'class': 'shpun-server-kind ' + (isSelected ? 'shpun-server-kind--main' : 'shpun-server-kind--reserve') }, isSelected ? 'Текущий' : 'Доступен');
 			var row = E('button', {
 				'type': 'button',
 				'class': 'shpun-server-row' + (s.index === selected ? ' is-selected' : ''),
@@ -546,16 +552,15 @@ function openServersModal() {
 			}, [
 				E('span', { 'class': 'shpun-server-location', 'title': location }, location),
 				E('span', { 'class': 'shpun-server-proto' }, protoLabel),
-				E('span', { 'class': 'shpun-server-kind ' + (isMain ? 'shpun-server-kind--main' : 'shpun-server-kind--reserve') }, isMain ? 'Рекомендуем' : 'Резерв')
+				badge
 			]);
-			rows.push({ index: s.index, node: row });
+			rows.push({ index: s.index, node: row, badge: badge });
 			list.appendChild(row);
 		});
 
 		ui.showModal('Серверы VPN', [
 			E('div', { 'class': 'shpun-modal-wrap' }, [
-				E('div', { 'class': 'shpun-modal-desc' }, 'Выберите сервер. VPN будет перезапущен с новым профилем.'),
-				E('div', { 'class': 'shpun-server-note' }, 'Используйте VLESS как основной вариант. Shadowsocks оставлен как резервный режим и может быть менее стабильным.'),
+				E('div', { 'class': 'shpun-modal-desc' }, 'Выберите VPN-сервер. Роутер применит новый профиль и переподключит туннель.'),
 				list,
 				E('div', { 'class': 'shpun-modal-footer' }, [
 					E('button', { 'type': 'button', 'class': 'shpun-modal-btn', 'click': function() { ui.hideModal(); } }, 'Отмена'),
@@ -844,25 +849,24 @@ return view.extend({
 			if (!hasRoutes) {
 				// Маршруты не скачаны — предупреждаем пользователя
 				ui.showModal('Переключение режима маршрутизации', [
-					E('p', {}, [
-						E('strong', {}, 'Внимание: '),
-						'Список российских адресов ещё не загружен.'
-					]),
-					E('p', {}, 'После переключения роутер автоматически скачает маршруты (~8000 адресов) и применит их. На медленных роутерах (MIPS) это может занять несколько минут — в это время нагрузка на процессор будет высокой.'),
-					E('p', {}, 'Интернет продолжит работать через туннель, пока маршруты применяются.'),
-					E('div', { 'style': 'margin-top:10px;text-align:right' }, [
-						E('button', {
-							'class': 'btn',
-							'click': function() { ui.hideModal(); }
-						}, 'Отмена'),
-						E('button', {
-							'class': 'btn cbi-button cbi-button-apply',
-							'style': 'margin-left:8px',
-							'click': function() {
-								ui.hideModal();
-								view._applyRoutingMode(targetMode);
-							}
-						}, 'Всё равно переключить')
+					E('div', { 'class': 'shpun-modal-wrap' }, [
+						E('div', { 'class': 'shpun-modal-desc' }, 'Список российских адресов ещё не загружен. Роутер скачает и применит его автоматически. На слабом устройстве это может занять несколько минут.'),
+						E('div', { 'class': 'shpun-modal-help' }, 'Пока маршруты применяются, интернет продолжит работать через VPN.'),
+						E('div', { 'class': 'shpun-modal-footer' }, [
+							E('button', {
+								'type': 'button',
+								'class': 'shpun-modal-btn',
+								'click': function() { ui.hideModal(); }
+							}, 'Отмена'),
+							E('button', {
+								'type': 'button',
+								'class': 'shpun-modal-btn shpun-modal-btn--primary',
+								'click': function() {
+									ui.hideModal();
+									view._applyRoutingMode(targetMode);
+								}
+							}, 'Переключить режим')
+						])
 					])
 				]);
 				return;
@@ -924,20 +928,23 @@ return view.extend({
 
 		if (hasNew) {
 			ui.showModal('Обновление прошивки', [
-				E('p', {}, [ 'Доступна новая версия: ', E('strong', {}, fwCurrentRaw || '—'), ' → ', E('strong', {}, fwLatest), '.' ]),
-				E('p', {}, 'Установить? VPN-соединение будет перезапущено.'),
-				E('div', { 'style': 'margin-top:10px;text-align:right' }, [
-					E('button', { 'class': 'btn', 'click': function() { ui.hideModal(); } }, 'Отмена'),
-					E('button', {
-						'class': 'btn cbi-button cbi-button-apply', 'style': 'margin-left:8px',
-						'click': function() {
-							ui.hideModal();
-							ui.addNotification(null, E('p', {}, 'Установка обновления запущена.'), 'info');
-							callShpunOtaInstall().catch(function(err) {
-								ui.addNotification(null, E('p', {}, 'Ошибка: ' + String(err)), 'error');
-							});
-						}
-					}, 'Установить ' + fwLatest)
+				E('div', { 'class': 'shpun-modal-wrap' }, [
+					E('div', { 'class': 'shpun-modal-desc' }, [ 'Доступна новая версия: ', E('strong', {}, fwCurrentRaw || '—'), ' → ', E('strong', {}, fwLatest), '.' ]),
+					E('div', { 'class': 'shpun-modal-help' }, 'Во время установки VPN ненадолго переподключится. Настройки и привязка сохранятся.'),
+					E('div', { 'class': 'shpun-modal-footer' }, [
+						E('button', { 'type': 'button', 'class': 'shpun-modal-btn', 'click': function() { ui.hideModal(); } }, 'Отмена'),
+						E('button', {
+							'type': 'button',
+							'class': 'shpun-modal-btn shpun-modal-btn--primary',
+							'click': function() {
+								ui.hideModal();
+								ui.addNotification(null, E('p', {}, 'Установка обновления запущена.'), 'info');
+								callShpunOtaInstall().catch(function(err) {
+									ui.addNotification(null, E('p', {}, 'Ошибка: ' + String(err)), 'error');
+								});
+							}
+						}, 'Установить ' + fwLatest)
+					])
 				])
 			]);
 			return;
@@ -956,22 +963,26 @@ return view.extend({
 		if (!code) { ui.addNotification(null, E('p', {}, 'Сначала дождитесь генерации кода.'), 'warning'); return; }
 
 		ui.showModal('Обновить подключение', [
-			E('p', {}, 'Роутер заново получит подписку, пересоберёт конфиг и переподключит VPN. Код привязки и настройки маршрутов сохранятся.'),
-			E('div', { 'style': 'margin-top:10px;text-align:right' }, [
-				E('button', { 'class': 'btn', 'click': function() { ui.hideModal(); } }, 'Отмена'),
-				E('button', {
-					'class': 'btn cbi-button cbi-button-apply', 'style': 'margin-left:8px',
-					'click': function() {
-						ui.hideModal();
-						ui.addNotification(null, E('p', {}, 'Переподключение запущено. Обычно это занимает 10-20 секунд.'), 'info');
-						callShpunRefreshConnection().then(function(res) {
-							res = res || {};
-							if (!res.ok) ui.addNotification(null, E('p', {}, 'Не удалось запустить: ' + (res.error || 'ошибка')), 'error');
-						}).catch(function(err) {
-							ui.addNotification(null, E('p', {}, 'Ошибка: ' + String(err)), 'error');
-						});
-					}
-				}, 'Обновить подключение')
+			E('div', { 'class': 'shpun-modal-wrap' }, [
+				E('div', { 'class': 'shpun-modal-desc' }, 'Роутер загрузит свежий список серверов, пересоберёт конфигурацию и переподключит VPN.'),
+				E('div', { 'class': 'shpun-modal-help' }, 'Привязка и настройки маршрутизации сохранятся. Обычно операция занимает 10-20 секунд.'),
+				E('div', { 'class': 'shpun-modal-footer' }, [
+					E('button', { 'type': 'button', 'class': 'shpun-modal-btn', 'click': function() { ui.hideModal(); } }, 'Отмена'),
+					E('button', {
+						'type': 'button',
+						'class': 'shpun-modal-btn shpun-modal-btn--primary',
+						'click': function() {
+							ui.hideModal();
+							ui.addNotification(null, E('p', {}, 'Обновление подключения запущено.'), 'info');
+							callShpunRefreshConnection().then(function(res) {
+								res = res || {};
+								if (!res.ok) ui.addNotification(null, E('p', {}, 'Не удалось запустить: ' + (res.error || 'ошибка')), 'error');
+							}).catch(function(err) {
+								ui.addNotification(null, E('p', {}, 'Ошибка: ' + String(err)), 'error');
+							});
+						}
+					}, 'Обновить подключение')
+				])
 			])
 		]);
 	},
@@ -979,22 +990,26 @@ return view.extend({
 	handleResetVpn: function(ev) {
 		if (ev) ev.preventDefault();
 		ui.showModal('Сброс конфигурации', [
-			E('p', {}, 'Полный сброс. Новый код, привязка и конфигурация VPN будут потеряны.'),
-			E('div', { 'style': 'margin-top:10px;text-align:right' }, [
-				E('button', { 'class': 'btn', 'click': function() { ui.hideModal(); } }, 'Отмена'),
-				E('button', {
-					'class': 'btn cbi-button cbi-button-negative', 'style': 'margin-left:8px',
-					'click': function() {
-						ui.hideModal();
-						callShpunResetVpn().then(function(res) {
-							res = res || {};
-							if (res.ok) ui.addNotification(null, E('p', {}, 'Конфигурация сброшена.'), 'info');
-							else ui.addNotification(null, E('p', {}, 'Не удалось сбросить: ' + (res.error || 'ошибка')), 'error');
-						}).catch(function(err) {
-							ui.addNotification(null, E('p', {}, 'Ошибка: ' + String(err)), 'error');
-						});
-					}
-				}, 'Сбросить конфиг')
+			E('div', { 'class': 'shpun-modal-wrap' }, [
+				E('div', { 'class': 'shpun-modal-desc' }, 'Роутер удалит привязку, VPN-конфигурацию и создаст новый код подключения.'),
+				E('div', { 'class': 'shpun-server-note' }, 'Это действие нельзя отменить. Для повторного подключения потребуется заново привязать роутер в ShpunApp.'),
+				E('div', { 'class': 'shpun-modal-footer' }, [
+					E('button', { 'type': 'button', 'class': 'shpun-modal-btn', 'click': function() { ui.hideModal(); } }, 'Отмена'),
+					E('button', {
+						'type': 'button',
+						'class': 'shpun-modal-btn shpun-modal-btn--danger',
+						'click': function() {
+							ui.hideModal();
+							callShpunResetVpn().then(function(res) {
+								res = res || {};
+								if (res.ok) ui.addNotification(null, E('p', {}, 'Конфигурация сброшена.'), 'info');
+								else ui.addNotification(null, E('p', {}, 'Не удалось сбросить: ' + (res.error || 'ошибка')), 'error');
+							}).catch(function(err) {
+								ui.addNotification(null, E('p', {}, 'Ошибка: ' + String(err)), 'error');
+							});
+						}
+					}, 'Сбросить конфигурацию')
+				])
 			])
 		]);
 	},
