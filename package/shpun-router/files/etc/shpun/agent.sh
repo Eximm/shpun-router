@@ -61,7 +61,7 @@ TUNNEL_EXIT_PROBE_URLS_DEFAULT="http://api.ipify.org http://ifconfig.me/ip http:
 TUNNEL_PROBE_FALLBACK_URL_DEFAULT="http://cp.cloudflare.com/generate_204"
 TUNNEL_PROBE_SECONDARY_URL_DEFAULT="http://connectivitycheck.gstatic.com/generate_204"
 DNS_BOOTSTRAP_ENABLE_DEFAULT=1
-DNS_BOOTSTRAP_SERVERS_DEFAULT="1.1.1.1 1.0.0.1 8.8.8.8 8.8.4.4 9.9.9.9 208.67.222.222 208.67.220.220 77.88.8.8 77.88.8.1"
+DNS_BOOTSTRAP_SERVERS_DEFAULT="77.88.8.8 77.88.8.1 1.1.1.1 1.0.0.1 8.8.8.8 8.8.4.4 9.9.9.9"
 DNS_BOOTSTRAP_TEST_DOMAINS_DEFAULT="router.shpun.net spb.shpyn.online"
 
 ROUTES_DIR="$STATE_DIR/routes"
@@ -396,13 +396,29 @@ uci_list_has_value() {
 }
 
 ensure_bootstrap_dns() {
-	local dns good_dns changed=0
+	local dns good_dns changed=0 current_cache
 
 	[ "$DNS_BOOTSTRAP_ENABLE" = "1" ] || return 0
 	command -v uci >/dev/null 2>&1 || return 0
-	dns_bootstrap_needed || return 0
 
-	log "local DNS cannot resolve bootstrap domains, applying fallback DNS servers"
+	current_cache="$(uci -q get dhcp.@dnsmasq[0].cachesize 2>/dev/null || echo 0)"
+	case "$current_cache" in
+		''|*[!0-9]*) current_cache=0 ;;
+	esac
+
+	if [ "$(uci -q get dhcp.@dnsmasq[0].noresolv 2>/dev/null || echo 0)" = "1" ] &&
+		[ "$current_cache" -ge 1000 ] 2>/dev/null; then
+		for dns in $DNS_BOOTSTRAP_SERVERS; do
+			uci_list_has_value "dhcp.@dnsmasq[0].server" "$dns" || {
+				changed=1
+				break
+			}
+		done
+		[ "$changed" -eq 0 ] && return 0
+		changed=0
+	fi
+
+	log "ensuring stable public DNS servers for router and LAN clients"
 
 	for dns in $DNS_BOOTSTRAP_SERVERS; do
 		if dns_server_can_resolve "$dns"; then
@@ -417,15 +433,11 @@ ensure_bootstrap_dns() {
 		good_dns="$DNS_BOOTSTRAP_SERVERS"
 	fi
 
-	uci -q set dhcp.@dnsmasq[0].resolvfile='/tmp/resolv.conf.d/resolv.conf.auto' && changed=1
-	uci -q delete dhcp.@dnsmasq[0].noresolv 2>/dev/null && changed=1
-
-	if uci -q get network.wwan >/dev/null 2>&1; then
-		uci -q set network.wwan.peerdns='0' && changed=1
-		uci -q delete network.wwan.dns 2>/dev/null || true
-		for dns in $good_dns; do
-			uci -q add_list network.wwan.dns="$dns" && changed=1
-		done
+	if [ "$(uci -q get dhcp.@dnsmasq[0].noresolv 2>/dev/null || echo 0)" != "1" ]; then
+		uci -q set dhcp.@dnsmasq[0].noresolv='1' && changed=1
+	fi
+	if [ "$current_cache" -lt 1000 ] 2>/dev/null; then
+		uci -q set dhcp.@dnsmasq[0].cachesize='1000' && changed=1
 	fi
 
 	for dns in $good_dns; do
@@ -435,18 +447,12 @@ ensure_bootstrap_dns() {
 	done
 
 	if [ "$changed" -eq 1 ]; then
-		uci -q commit network 2>/dev/null || true
 		uci -q commit dhcp 2>/dev/null || true
-		/etc/init.d/network reload >/dev/null 2>&1 || true
 		/etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
 		sleep 2
 	fi
 
-	if dns_bootstrap_needed; then
-		log "fallback DNS applied but bootstrap domains still do not resolve"
-	else
-		log "fallback DNS applied successfully"
-	fi
+	log "stable public DNS configuration applied"
 }
 
 http_get_to_file() {
@@ -2911,6 +2917,7 @@ main_loop() {
 	ensure_state_dir
 	ensure_routes_dir
 	migrate_legacy_gateway_state
+	[ -x /etc/shpun/disable-flow-offload.sh ] && /etc/shpun/disable-flow-offload.sh apply || true
 	ensure_lan_ipv6_disabled
 	apply_always_vpn_live_rules
 
@@ -2927,6 +2934,7 @@ main_loop() {
 
 	while :; do
 		load_conf
+		[ -x /etc/shpun/disable-flow-offload.sh ] && /etc/shpun/disable-flow-offload.sh apply || true
 		ensure_lan_ipv6_disabled
 
 		if ! is_vpn_process_running; then

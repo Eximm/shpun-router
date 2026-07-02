@@ -1,8 +1,8 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=shpun-router
-PKG_VERSION:=1.1.2
-PKG_RELEASE:=2
+PKG_VERSION:=1.1.3
+PKG_RELEASE:=1
 
 PKG_MAINTAINER:=Shpun VPN
 PKG_LICENSE:=MIT
@@ -63,6 +63,7 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_BIN) ./files/etc/shpun/dns-xray.sh              $(1)/etc/shpun/dns-xray.sh
 	$(INSTALL_BIN) ./files/etc/shpun/router_updater           $(1)/etc/shpun/router_updater
 	$(INSTALL_BIN) ./files/etc/shpun/auto-update-loop.sh      $(1)/etc/shpun/auto-update-loop.sh
+	$(INSTALL_BIN) ./files/etc/shpun/disable-flow-offload.sh  $(1)/etc/shpun/disable-flow-offload.sh
 	$(INSTALL_BIN) ./files/etc/shpun/set-routing-mode.sh      $(1)/etc/shpun/set-routing-mode.sh
 	$(INSTALL_BIN) ./files/etc/shpun/apply-custom-routes.sh   $(1)/etc/shpun/apply-custom-routes.sh
 
@@ -121,6 +122,7 @@ define Package/$(PKG_NAME)/postinst
 		/etc/shpun/routes/presets/always_vpn.cidrs-opkg-new 2>/dev/null || true
 
 	chmod +x /etc/shpun/*.sh 2>/dev/null || true
+	/etc/shpun/disable-flow-offload.sh apply 2>/dev/null || true
 
 	/etc/init.d/shpun-agent enable 2>/dev/null || true
 	/etc/init.d/shpun-vpn enable 2>/dev/null || true
