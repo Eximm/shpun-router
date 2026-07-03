@@ -19,6 +19,7 @@ VPN_READY_FILE="$STATE_DIR/vpn_ready"
 LAST_CHECK_FILE="$STATE_DIR/last_sub_check"
 SUB_UNAVAILABLE_COUNT_FILE="$STATE_DIR/subscription_unavailable_count"
 ENGINE_DOWNLOAD_FAIL_FILE="$STATE_DIR/engine_download_last_fail"
+ROUTER_HWID_FILE="$STATE_DIR/router_hwid"
 CONF="$STATE_DIR/agent.conf"
 
 VERROR_FILE="$STATE_DIR/vpn_error"
@@ -472,6 +473,116 @@ http_get_to_file() {
 	esac
 }
 
+clean_http_header_value() {
+	printf '%s' "$1" | tr -d '\r\n' | cut -c1-96
+}
+
+ensure_router_hwid() {
+	local hwid tmp
+
+	hwid="$(cat "$ROUTER_HWID_FILE" 2>/dev/null | tr -d '\r\n ' || true)"
+	case "$hwid" in
+		????????-????-????-????-????????????)
+			case "$hwid" in
+				*[!0-9A-Fa-f-]*) ;;
+				*) printf '%s\n' "$hwid"; return 0 ;;
+			esac
+			;;
+	esac
+
+	hwid="$(cat /proc/sys/kernel/random/uuid 2>/dev/null | tr -d '\r\n ' || true)"
+	case "$hwid" in
+		????????-????-????-????-????????????) ;;
+		*)
+			hwid="$(cat "$CODE_FILE" 2>/dev/null | tr -cd 'A-Za-z0-9_-' | cut -c1-36)"
+			;;
+	esac
+	[ -n "$hwid" ] || return 1
+
+	tmp="${ROUTER_HWID_FILE}.tmp.$$"
+	printf '%s\n' "$hwid" > "$tmp" || return 1
+	chmod 600 "$tmp" 2>/dev/null || true
+	mv "$tmp" "$ROUTER_HWID_FILE" || return 1
+	log "generated persistent router HWID for subscription client identification"
+	printf '%s\n' "$hwid"
+}
+
+load_subscription_device_info() {
+	local board_json version_file
+
+	SUB_DEVICE_HWID="$(ensure_router_hwid 2>/dev/null || true)"
+	SUB_DEVICE_OS="OpenWrt"
+	SUB_DEVICE_OS_VERSION=""
+	SUB_DEVICE_MODEL=""
+	SUB_CLIENT_VERSION=""
+
+	if [ -f /etc/openwrt_release ]; then
+		. /etc/openwrt_release
+		SUB_DEVICE_OS_VERSION="${DISTRIB_RELEASE:-}"
+	fi
+
+	if command -v ubus >/dev/null 2>&1 && command -v jsonfilter >/dev/null 2>&1; then
+		board_json="$(ubus call system board 2>/dev/null || true)"
+		SUB_DEVICE_MODEL="$(printf '%s' "$board_json" | jsonfilter -e '@.model' 2>/dev/null || true)"
+		[ -n "$SUB_DEVICE_OS_VERSION" ] || \
+			SUB_DEVICE_OS_VERSION="$(printf '%s' "$board_json" | jsonfilter -e '@.release.version' 2>/dev/null || true)"
+	fi
+
+	for version_file in "$STATE_DIR/router_software_version" "$STATE_DIR/router_version" "$STATE_DIR/fw_current"; do
+		[ -s "$version_file" ] || continue
+		SUB_CLIENT_VERSION="$(cat "$version_file" 2>/dev/null | tr -d '\r\n ' || true)"
+		[ -n "$SUB_CLIENT_VERSION" ] && break
+	done
+
+	[ -n "$SUB_DEVICE_MODEL" ] || SUB_DEVICE_MODEL="OpenWrt Router"
+	[ -n "$SUB_DEVICE_OS_VERSION" ] || SUB_DEVICE_OS_VERSION="unknown"
+	[ -n "$SUB_CLIENT_VERSION" ] || SUB_CLIENT_VERSION="unknown"
+
+	SUB_DEVICE_HWID="$(clean_http_header_value "$SUB_DEVICE_HWID")"
+	SUB_DEVICE_OS="$(clean_http_header_value "$SUB_DEVICE_OS")"
+	SUB_DEVICE_OS_VERSION="$(clean_http_header_value "$SUB_DEVICE_OS_VERSION")"
+	SUB_DEVICE_MODEL="$(clean_http_header_value "$SUB_DEVICE_MODEL")"
+	SUB_CLIENT_VERSION="$(clean_http_header_value "$SUB_CLIENT_VERSION")"
+}
+
+http_get_subscription_to_file() {
+	local url="$1"
+	local out="$2"
+	local user_agent
+
+	load_subscription_device_info
+	[ -n "$SUB_DEVICE_HWID" ] || return 1
+	user_agent="ShpunRouter/$SUB_CLIENT_VERSION"
+
+	case "$HTTP_BIN" in
+		curl)
+			curl -fsS -A "$user_agent" \
+				-H "x-hwid: $SUB_DEVICE_HWID" \
+				-H "x-device-os: $SUB_DEVICE_OS" \
+				-H "x-ver-os: $SUB_DEVICE_OS_VERSION" \
+				-H "x-device-model: $SUB_DEVICE_MODEL" \
+				"$url" -o "$out"
+			;;
+		wget)
+			wget -q -U "$user_agent" \
+				--header="x-hwid: $SUB_DEVICE_HWID" \
+				--header="x-device-os: $SUB_DEVICE_OS" \
+				--header="x-ver-os: $SUB_DEVICE_OS_VERSION" \
+				--header="x-device-model: $SUB_DEVICE_MODEL" \
+				-O "$out" "$url"
+			;;
+		uclient-fetch)
+			uclient-fetch -q -U "$user_agent" \
+				--header="x-hwid: $SUB_DEVICE_HWID" \
+				--header="x-device-os: $SUB_DEVICE_OS" \
+				--header="x-ver-os: $SUB_DEVICE_OS_VERSION" \
+				--header="x-device-model: $SUB_DEVICE_MODEL" \
+				-O "$out" "$url"
+			;;
+		*) return 1 ;;
+	esac
+}
+
 http_get_stdout() {
 	local url="$1"
 
@@ -878,7 +989,7 @@ download_subscription_from_url_file() {
 
 	log "fetching $label subscription"
 	rm -f "$out"
-	if ! http_get_to_file "$url" "$out" >/dev/null 2>&1; then
+	if ! http_get_subscription_to_file "$url" "$out" >/dev/null 2>&1; then
 		log "$label subscription download failed"
 		rm -f "$out"
 		return 1
