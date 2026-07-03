@@ -391,8 +391,13 @@ dns_bootstrap_needed() {
 uci_list_has_value() {
 	local option="$1"
 	local value="$2"
+	local values
 
-	uci -q get "$option" 2>/dev/null | tr ' ' '\n' | grep -Fxq "$value"
+	values="$(uci -q get "$option" 2>/dev/null)" || return 1
+	case " $values " in
+		*" $value "*) return 0 ;;
+	esac
+	return 1
 }
 
 ensure_bootstrap_dns() {
