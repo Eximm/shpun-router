@@ -2,7 +2,7 @@ name: Build shpun-router OpenWrt package
 
 on:
   push:
-    branches: [ main ]
+    branches: [ shpun-router ]
   pull_request:
   workflow_dispatch:
 
@@ -16,11 +16,9 @@ jobs:
       PACKAGE_NAME: shpun-router
 
     steps:
-      # --- Checkout ---
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      # --- Deps ---
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -28,7 +26,6 @@ jobs:
             build-essential libncurses5-dev gawk unzip file \
             libssl-dev wget python3 zstd
 
-      # --- SDK cache ---
       - name: Cache OpenWrt SDK
         id: cache-sdk
         uses: actions/cache@v4
@@ -36,7 +33,6 @@ jobs:
           path: sdk
           key: linux-openwrt-sdk-24.10.3-ath79-v1
 
-      # --- Download SDK if not cached ---
       - name: Download & unpack OpenWrt SDK (on cache miss)
         if: steps.cache-sdk.outputs.cache-hit != 'true'
         run: |
@@ -46,25 +42,21 @@ jobs:
           mv "$SDK_DIR" sdk
           ls -la sdk
 
-      # --- Initial config (only on cache miss) ---
       - name: Configure SDK (only once)
         if: steps.cache-sdk.outputs.cache-hit != 'true'
         working-directory: sdk
         run: |
           make defconfig
 
-      # Debug cache
       - name: Debug cache hit
         run: echo "SDK cache hit = ${{ steps.cache-sdk.outputs.cache-hit }}"
 
-      # Info
       - name: SDK info
         working-directory: sdk
         run: |
           pwd
           ls -la
 
-      # --- Copy package to SDK ---
       - name: Copy package into SDK
         run: |
           mkdir -p sdk/package
@@ -72,25 +64,21 @@ jobs:
           cp -r package/${PACKAGE_NAME} sdk/package/
           ls -la sdk/package/${PACKAGE_NAME}
 
-      # --- Clean package before build ---
       - name: Clean package
         working-directory: sdk
         run: |
           make package/${PACKAGE_NAME}/clean V=s || true
 
-      # --- Build ---
       - name: Build package
         working-directory: sdk
         run: |
           make package/${PACKAGE_NAME}/compile -j"$(nproc)" V=s
 
-      # --- List compiled IPKs ---
       - name: List built packages
         working-directory: sdk
         run: |
           find bin -name "*${PACKAGE_NAME}*.ipk" -print || echo "No ipk found"
 
-      # --- Create clean OTA filename ---
       - name: Create clean OTA filename
         id: ota
         working-directory: sdk
@@ -117,7 +105,6 @@ jobs:
           ls -lh "$CLEAN_IPK"
           echo "clean_ipk=sdk/$CLEAN_IPK" >> "$GITHUB_OUTPUT"
 
-      # --- Upload OTA artifact ---
       - name: Upload shpun-router OTA package
         uses: actions/upload-artifact@v4
         with:
