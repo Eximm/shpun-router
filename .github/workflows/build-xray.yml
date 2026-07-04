@@ -2,55 +2,139 @@ name: Build Xray binaries for all router architectures
 
 on:
   workflow_dispatch:
+    inputs:
+      xray_ref:
+        description: "Xray-core version/tag. Example: v26.6.27 or latest"
+        required: true
+        default: "latest"
+
   push:
     paths:
       - ".github/workflows/build-xray.yml"
 
 jobs:
+  resolve-version:
+    runs-on: ubuntu-latest
+
+    outputs:
+      xray_ref: ${{ steps.resolve.outputs.xray_ref }}
+
+    steps:
+      - name: Resolve Xray-core version
+        id: resolve
+        shell: bash
+        env:
+          REQUESTED_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.xray_ref || 'latest' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+
+          if [ "$REQUESTED_REF" = "latest" ] || [ -z "$REQUESTED_REF" ]; then
+            XRAY_REF="$(curl -fsSL \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              https://api.github.com/repos/XTLS/Xray-core/releases \
+              | jq -r '[.[] | select(.draft == false)][0].tag_name')"
+          else
+            XRAY_REF="$REQUESTED_REF"
+          fi
+
+          if [ -z "$XRAY_REF" ] || [ "$XRAY_REF" = "null" ]; then
+            echo "Failed to resolve Xray-core version"
+            exit 1
+          fi
+
+          echo "Using Xray-core ref: $XRAY_REF"
+          echo "xray_ref=$XRAY_REF" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: resolve-version
     runs-on: ubuntu-latest
 
     strategy:
+      fail-fast: false
       matrix:
         include:
           - arch: mips_24kc
             goarch: mips
+            goarm: ""
             gomips: softfloat
+
           - arch: mipsel_24kc
             goarch: mipsle
+            goarm: ""
             gomips: softfloat
+
           - arch: armv7
             goarch: arm
-            goarm: 7
+            goarm: "7"
+            gomips: ""
+
           - arch: aarch64
             goarch: arm64
+            goarm: ""
+            gomips: ""
+
           - arch: amd64
             goarch: amd64
+            goarm: ""
+            gomips: ""
 
     steps:
       - name: Checkout Xray source
         uses: actions/checkout@v4
         with:
           repository: XTLS/Xray-core
-          ref: v1.8.24   # <-- можно обновлять вручную
+          ref: ${{ needs.resolve-version.outputs.xray_ref }}
 
       - name: Install Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Show build info
+        run: |
+          echo "Xray ref: ${{ needs.resolve-version.outputs.xray_ref }}"
+          echo "Router arch: ${{ matrix.arch }}"
+          echo "GOARCH: ${{ matrix.goarch }}"
+          echo "GOARM: ${{ matrix.goarm }}"
+          echo "GOMIPS: ${{ matrix.gomips }}"
+          go version
+          git rev-parse --short HEAD
 
       - name: Build Xray
         env:
+          CGO_ENABLED: 0
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
           GOARM: ${{ matrix.goarm }}
           GOMIPS: ${{ matrix.gomips }}
         run: |
+          set -e
+
           mkdir -p build/${{ matrix.arch }}
-          go build -o build/${{ matrix.arch }}/xray ./main
+
+          go build \
+            -trimpath \
+            -ldflags="-s -w" \
+            -o build/${{ matrix.arch }}/xray \
+            ./main
+
+          chmod +x build/${{ matrix.arch }}/xray
+
+          sha256sum build/${{ matrix.arch }}/xray > build/${{ matrix.arch }}/xray.sha256
+
+          echo "Build result:"
+          ls -lh build/${{ matrix.arch }}/
+
+          echo "Binary info:"
+          file build/${{ matrix.arch }}/xray
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: xray-${{ matrix.arch }}
-          path: build/${{ matrix.arch }}/xray
+          name: xray-${{ needs.resolve-version.outputs.xray_ref }}-${{ matrix.arch }}
+          path: |
+            build/${{ matrix.arch }}/xray
+            build/${{ matrix.arch }}/xray.sha256
