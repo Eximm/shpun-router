@@ -40,6 +40,13 @@ append_format_json() {
 	esac
 }
 
+update_url_matches_package() {
+	case "$1" in
+		http://*.ipk|https://*.ipk|http://*.ipk\?*|https://*.ipk\?*) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
 json_value_from_sources() {
 	local expr="$1"
 	shift
@@ -200,6 +207,21 @@ UPDATE_SHA256="$(
 # A successfully fetched metadata document is authoritative. Missing policy
 # fields must disable automation instead of inheriting a previous release.
 if [ -n "$META_FILE" ] && [ -s "$META_FILE" ]; then
+	REMOTE_VER="$(
+		json_value_from_sources '@.router_software.version' "$META_FILE" \
+		|| json_value_from_sources '@.router_software_current.version' "$META_FILE" \
+		|| echo ""
+	)"
+	UPDATE_URL="$(
+		json_value_from_sources '@.router_software.update_url' "$META_FILE" \
+		|| json_value_from_sources '@.router_software_current.update_url' "$META_FILE" \
+		|| echo ""
+	)"
+	MIN_VER="$(
+		json_value_from_sources '@.router_software.min_version' "$META_FILE" \
+		|| json_value_from_sources '@.router_software_current.min_version' "$META_FILE" \
+		|| echo ""
+	)"
 	AUTO_INSTALL="$(
 		json_value_from_sources '@.router_software.auto_install' "$META_FILE" \
 		|| json_value_from_sources '@.router_software_current.auto_install' "$META_FILE" \
@@ -213,14 +235,33 @@ if [ -n "$META_FILE" ] && [ -s "$META_FILE" ]; then
 fi
 
 case "$UPDATE_URL" in
-	http://*|https://*) printf '%s\n' "$UPDATE_URL" >"$UPDATE_URL_FILE" ;;
-	*) UPDATE_URL="" ;;
+	http://*|https://*)
+		if update_url_matches_package "$UPDATE_URL"; then
+			printf '%s\n' "$UPDATE_URL" >"$UPDATE_URL_FILE"
+		else
+			log "refusing non-IPK update URL for OpenWrt 24.x"
+			UPDATE_URL=""
+			AUTO_INSTALL=0
+			UPDATE_SHA256=""
+			rm -f "$UPDATE_URL_FILE"
+		fi
+		;;
+	*)
+		UPDATE_URL=""
+		AUTO_INSTALL=0
+		UPDATE_SHA256=""
+		rm -f "$UPDATE_URL_FILE"
+		;;
 esac
 [ -n "$REMOTE_VER" ] && {
 	echo "$REMOTE_VER" >"$FW_LATEST_FILE"
 	echo "$REMOTE_VER" >"$LATEST_VER_FILE"
 }
-[ -n "$MIN_VER" ] && echo "$MIN_VER" >"$UPDATE_MIN_VERSION_FILE"
+if [ -n "$MIN_VER" ]; then
+	echo "$MIN_VER" >"$UPDATE_MIN_VERSION_FILE"
+else
+	rm -f "$UPDATE_MIN_VERSION_FILE"
+fi
 case "$AUTO_INSTALL" in
 	1|true|yes|on) AUTO_INSTALL=1 ;;
 	*) AUTO_INSTALL=0 ;;
