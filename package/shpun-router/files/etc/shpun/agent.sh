@@ -1170,10 +1170,17 @@ save_router_software_metadata_file() {
 	}
 
 	case "$update_url" in
-		http://*|https://*) printf '%s\n' "$update_url" > "$UPDATE_URL_FILE" ;;
+		http://*.ipk|https://*.ipk|http://*.ipk\?*|https://*.ipk\?*)
+			printf '%s\n' "$update_url" > "$UPDATE_URL_FILE"
+			;;
+		*) rm -f "$UPDATE_URL_FILE" ;;
 	esac
 
-	[ -n "$min_version" ] && printf '%s\n' "$min_version" > "$UPDATE_MIN_VERSION_FILE"
+	if [ -n "$min_version" ]; then
+		printf '%s\n' "$min_version" > "$UPDATE_MIN_VERSION_FILE"
+	else
+		rm -f "$UPDATE_MIN_VERSION_FILE"
+	fi
 
 	case "$auto_install" in
 		1|true|yes|on) printf '1\n' > "$UPDATE_AUTO_FILE" ;;
