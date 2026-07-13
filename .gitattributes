@@ -1,0 +1,11 @@
+*.sh text eol=lf
+*.uc text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.conf text eol=lf
+*.cidrs text eol=lf
+*.domains text eol=lf
+Makefile text eol=lf
+package/shpun-router/files/etc/init.d/* text eol=lf
+package/shpun-router/files/etc/uci-defaults/* text eol=lf
+package/shpun-router/files/etc/shpun/router_updater text eol=lf

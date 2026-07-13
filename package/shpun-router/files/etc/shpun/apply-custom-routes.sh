@@ -118,10 +118,19 @@ append_set_batch() {
     rm -f "$tmp"
 
     if [ -s "$CUSTOM_FILE" ] && command -v jsonfilter >/dev/null 2>&1; then
-        jsonfilter -i "$CUSTOM_FILE" -e "@.${key}[*]" 2>/dev/null | tr -d '"' > "$tmp" 2>/dev/null
+        if ! jsonfilter -i "$CUSTOM_FILE" -e "@.${key}[*]" 2>/dev/null |
+            tr -d '"' > "$tmp" 2>/dev/null; then
+            rm -f "$tmp"
+            log "$set_name: failed to prepare route entries"
+            return 1
+        fi
     fi
 
-    printf 'flush set inet shpun %s\n' "$set_name" >> "$batch"
+    printf 'flush set inet shpun %s\n' "$set_name" >> "$batch" || {
+        rm -f "$tmp"
+        log "$set_name: failed to write route batch"
+        return 1
+    }
 
     chunk=""
     count=0
@@ -148,7 +157,11 @@ append_set_batch() {
             added=$((added + 1))
 
             if [ "$count" -ge "$CHUNK_SIZE" ]; then
-                printf 'add element inet shpun %s { %s }\n' "$set_name" "$chunk" >> "$batch"
+                printf 'add element inet shpun %s { %s }\n' "$set_name" "$chunk" >> "$batch" || {
+                    rm -f "$tmp"
+                    log "$set_name: failed to write route batch"
+                    return 1
+                }
                 chunk=""
                 count=0
             fi
@@ -158,7 +171,10 @@ append_set_batch() {
     rm -f "$tmp"
 
     if [ -n "$chunk" ]; then
-        printf 'add element inet shpun %s { %s }\n' "$set_name" "$chunk" >> "$batch"
+        printf 'add element inet shpun %s { %s }\n' "$set_name" "$chunk" >> "$batch" || {
+            log "$set_name: failed to write route batch"
+            return 1
+        }
     fi
 
     log "$set_name: prepared $added IP/CIDR entries, skipped $skipped domain/invalid entries"
@@ -168,6 +184,11 @@ append_set_batch() {
 apply_routes() {
     batch="/tmp/shpun_custom_all_$$.nft"
     rm -f "$batch"
+
+    : > "$batch" 2>/dev/null || {
+        log "cannot create custom routes batch; keeping current live routes"
+        return 1
+    }
 
     nft list table inet shpun >/dev/null 2>&1 || {
         log "table inet shpun not found; routes will apply on next VPN start"
@@ -187,6 +208,12 @@ apply_routes() {
     }
     append_set_batch custom_direct direct "$batch" || {
         rm -f "$batch"
+        return 1
+    }
+
+    [ -s "$batch" ] || {
+        rm -f "$batch"
+        log "custom routes batch is empty; keeping current live routes"
         return 1
     }
 

@@ -1254,7 +1254,7 @@ extract_uri_links_file() {
 	local file="$1"
 	local out="$2"
 
-	grep -oE '(ss|vless)://[^"'"'"'[:space:],<>{}]+' "$file" 2>/dev/null > "$out"
+	grep -oE 'vless://[^"'"'"'[:space:],<>{}]+' "$file" 2>/dev/null > "$out"
 	[ -s "$out" ]
 }
 
@@ -1270,7 +1270,7 @@ write_links_json_from_lines() {
 	while IFS= read -r line || [ -n "$line" ]; do
 		line="$(printf '%s' "$line" | tr -d '\r')"
 		case "$line" in
-			ss://*|vless://*) ;;
+			vless://*) ;;
 			*) continue ;;
 		esac
 
@@ -1332,7 +1332,7 @@ rewrite_subscription_with_metadata() {
 	jsonfilter -i "$file" -e '@.subscription.links[*]' 2>/dev/null | while IFS= read -r line || [ -n "$line" ]; do
 		line="$(printf '%s' "$line" | tr -d '\r')"
 		case "$line" in
-			ss://*|vless://*) ;;
+			vless://*) ;;
 			*) continue ;;
 		esac
 
@@ -1429,9 +1429,9 @@ normalize_subscription_file() {
 		return $?
 	fi
 
-	if ! grep -qE '^(ss|vless)://' "$file" 2>/dev/null; then
+	if ! grep -qE '^vless://' "$file" 2>/dev/null; then
 		decoded="${file}.decoded"
-		if base64_decode_subscription "$file" "$decoded" && grep -qE '(ss|vless)://' "$decoded" 2>/dev/null; then
+		if base64_decode_subscription "$file" "$decoded" && grep -qE 'vless://' "$decoded" 2>/dev/null; then
 			log "subscription payload decoded from base64"
 			mv "$decoded" "$file"
 		else
@@ -1439,7 +1439,7 @@ normalize_subscription_file() {
 		fi
 	fi
 
-	if ! grep -qE '(ss|vless)://' "$file" 2>/dev/null; then
+	if ! grep -qE 'vless://' "$file" 2>/dev/null; then
 		return 1
 	fi
 
@@ -1463,7 +1463,7 @@ normalize_subscription_file() {
 	while IFS= read -r line || [ -n "$line" ]; do
 		line="$(printf '%s' "$line" | tr -d '\r')"
 		case "$line" in
-			ss://*|vless://*) ;;
+			vless://*) ;;
 			*) continue ;;
 		esac
 		escaped="$(json_escape_string "$line")"
@@ -2276,6 +2276,7 @@ ensure_transparent_rules() {
 
 	[ -x /etc/shpun/firewall-xray.sh ] || return 0
 	command -v nft >/dev/null 2>&1 || return 0
+	[ -d /tmp/shpun-firewall.lock ] && return 0
 
 	mode="$(get_routing_mode)"
 	tcp_rules="$(nft list chain inet shpun prerouting 2>/dev/null || true)"

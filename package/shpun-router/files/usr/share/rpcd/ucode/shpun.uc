@@ -250,12 +250,12 @@ function link_value(link) {
 		return trim(norm(link));
 
 	if (type(link) == "object") {
-		let keys = ["url", "link", "uri", "vless", "ss"];
+		let keys = ["url", "link", "uri", "vless"];
 		for (let i = 0; i < length(keys); i++) {
 			let value = link[keys[i]];
 			if (type(value) == "string") {
 				value = trim(norm(value));
-				if (substr(value, 0, 5) == "ss://" || substr(value, 0, 8) == "vless://")
+				if (substr(value, 0, 8) == "vless://")
 					return value;
 			}
 		}

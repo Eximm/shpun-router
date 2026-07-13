@@ -146,12 +146,12 @@ nft_create_base() {
     nft add table inet shpun || return 1
 
     if [ "$MODE" = "split_ru" ]; then
-        nft add set inet shpun ru_dst '{ type ipv4_addr; flags interval; }' || return 1
+        nft add set inet shpun ru_dst '{ type ipv4_addr; flags interval; auto-merge; }' || return 1
     fi
 
-    nft add set inet shpun always_vpn '{ type ipv4_addr; flags interval; }' || return 1
-    nft add set inet shpun custom_direct '{ type ipv4_addr; flags interval; }' || return 1
-    nft add set inet shpun custom_vpn '{ type ipv4_addr; flags interval; }' || return 1
+    nft add set inet shpun always_vpn '{ type ipv4_addr; flags interval; auto-merge; }' || return 1
+    nft add set inet shpun custom_direct '{ type ipv4_addr; flags interval; auto-merge; }' || return 1
+    nft add set inet shpun custom_vpn '{ type ipv4_addr; flags interval; auto-merge; }' || return 1
 
     nft add chain inet shpun prerouting '{ type nat hook prerouting priority dstnat; policy accept; }' || return 1
 
@@ -392,7 +392,7 @@ nft_replace_cidr_set() {
     return 0
 }
 
-nft_apply_tcp_rules() {
+nft_apply_tcp_redirect_rules() {
     LAN_IF="$1"
     LAN_IP="$2"
     MODE="$3"
@@ -513,7 +513,7 @@ nft_init() {
         fi
     fi
 
-    if ! nft_apply_tcp_rules "$LAN_IF" "$LAN_IP" "$MODE"; then
+    if ! nft_apply_tcp_redirect_rules "$LAN_IF" "$LAN_IP" "$MODE"; then
         log "nft init: failed to apply tcp rules"
         nft delete table inet shpun 2>/dev/null
         tproxy_routes_del

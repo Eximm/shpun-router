@@ -23,97 +23,7 @@ command -v jsonfilter >/dev/null 2>&1 || {
 }
 
 # ==========================
-# 0. Универсальный base64-декодер (URL-safe, только awk)
-# ==========================
-b64_url_decode() {
-    local in="$1"
-    local mod out
-
-    in="${in//-/+}"
-    in="${in//_/\/}"
-
-    mod=$(( ${#in} % 4 ))
-    case "$mod" in
-        0) ;;
-        2) in="${in}==";;
-        3) in="${in}=";;
-        1)
-            logger -t shpun-build "Invalid base64 length %4==1: len=${#in}, data='$1'"
-            return 1
-            ;;
-    esac
-
-    out="$(printf '%s' "$in" | awk '
-        BEGIN {
-            b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-        }
-
-        function b64val(c,  p) {
-            if (c == "=") return -1
-            p = index(b64, c)
-            if (p == 0) return -2
-            return p - 1
-        }
-
-        function decode_quad(q,    c1,c2,c3,c4,v1,v2,v3,v4,b1,b2,b3,out) {
-            c1 = substr(q,1,1)
-            c2 = substr(q,2,1)
-            c3 = substr(q,3,1)
-            c4 = substr(q,4,1)
-
-            v1 = b64val(c1)
-            v2 = b64val(c2)
-            v3 = b64val(c3)
-            v4 = b64val(c4)
-
-            if (v1 < 0 || v2 < 0 || v3 < -1 || v4 < -1)
-                return ""
-
-            b1 = v1 * 4 + int(v2 / 16)
-            b2 = (v2 % 16) * 16 + int((v3 < 0 ? 0 : v3) / 4)
-            b3 = (v3 < 0 ? 0 : (v3 % 4) * 64) + (v4 < 0 ? 0 : v4)
-
-            out = sprintf("%c", b1)
-            if (v3 >= 0)
-                out = out sprintf("%c", b2)
-            if (v4 >= 0)
-                out = out sprintf("%c", b3)
-
-            return out
-        }
-
-        {
-            gsub(/[^A-Za-z0-9+\/=]/, "", $0)
-            line = $0
-            out  = ""
-
-            for (i = 1; i <= length(line); i += 4) {
-                quad = substr(line, i, 4)
-                if (length(quad) < 4)
-                    break
-
-                chunk = decode_quad(quad)
-                if (chunk == "") {
-                    out = ""
-                    break
-                }
-                out = out chunk
-            }
-
-            printf "%s", out
-        }
-    ' 2>/dev/null)"
-
-    if [ -z "$out" ]; then
-        logger -t shpun-build "Failed to base64-decode (awk): '$1'"
-        return 1
-    fi
-
-    printf '%s' "$out"
-}
-
-# ==========================
-# 1. Определяем тип профиля (ROUTER_PROTO)
+# 1. Select the VLESS subscription link
 # ==========================
 
 SELECTED_LINK_INDEX="$(cat "$SELECTED_LINK_FILE" 2>/dev/null | tr -d '\r\n ' || echo 0)"
@@ -125,10 +35,10 @@ get_subscription_link() {
     idx="$1"
 
     for base in "@.subscription.links[$idx]" "@.links[$idx]"; do
-        for suffix in "" ".url" ".link" ".uri" ".vless" ".ss"; do
+        for suffix in "" ".url" ".link" ".uri" ".vless"; do
             val="$(jsonfilter -i "$SUB_FILE" -e "${base}${suffix}" 2>/dev/null | head -n 1 | tr -d '\r\n')"
             case "$val" in
-                ss://*|vless://*)
+                vless://*)
                     printf '%s\n' "$val"
                     return 0
                     ;;
@@ -156,19 +66,15 @@ fi
 LINK="${LINK%\"}"
 LINK="${LINK#\"}"
 
-JSON_PROTO="$(jsonfilter -i "$SUB_FILE" -e '@.router_profile.proto' 2>/dev/null)"
-
 case "$LINK" in
-    ss://*)    ROUTER_PROTO="ss" ;;
-    vless://*) ROUTER_PROTO="vless" ;;
-    *)         ROUTER_PROTO="unknown" ;;
+    vless://*) ;;
+    *)
+        logger -t shpun-build "Unsupported subscription link scheme; VLESS is required"
+        exit 1
+        ;;
 esac
 
-if [ -n "$JSON_PROTO" ] && [ "$JSON_PROTO" != "$ROUTER_PROTO" ]; then
-    logger -t shpun-build "router_profile.proto mismatch: json='$JSON_PROTO', link_scheme='$ROUTER_PROTO' — using link_scheme"
-fi
-
-logger -t shpun-build "router profile proto=$ROUTER_PROTO selected_link=$SELECTED_LINK_INDEX"
+logger -t shpun-build "router profile proto=vless selected_link=$SELECTED_LINK_INDEX"
 
 REDIR_PORT="${REDIR_PORT:-12345}"
 TPROXY_PORT="${TPROXY_PORT:-12346}"
@@ -421,204 +327,9 @@ CUSTOM_DIRECT_RULE="$(build_custom_domain_rule direct direct)"
 CUSTOM_VPN_RULE="$(build_custom_domain_rule vpn proxy)"
 
 # ==========================
-# 2. Ветвление по типу профиля
+# 2. VLESS / Reality
 # ==========================
 
-case "$ROUTER_PROTO" in
-    ss)
-        # -------- Shadowsocks-профиль --------
-        LINK_NO_PROTO="${LINK#ss://}"
-        METHOD=""
-        PASSWORD=""
-        SERVER=""
-        PORT=""
-        BASE_PART="${LINK_NO_PROTO%%[\?#]*}"
-
-        if echo "$BASE_PART" | grep -q '@'; then
-            USERINFO="${BASE_PART%%@*}"
-            HOSTPORT="${BASE_PART#*@}"
-
-            if echo "$USERINFO" | grep -q ':'; then
-                CRED="$USERINFO"
-            else
-                CRED="$(b64_url_decode "$USERINFO")" || {
-                    logger -t shpun-build "Failed to base64-decode ss userinfo"
-                    exit 1
-                }
-            fi
-        else
-            DECODED_LINK="$(b64_url_decode "$BASE_PART")" || {
-                logger -t shpun-build "Failed to base64-decode ss link payload (old style)"
-                exit 1
-            }
-            USERINFO_HOSTPORT="$DECODED_LINK"
-            CRED="${USERINFO_HOSTPORT%%@*}"
-            HOSTPORT="${USERINFO_HOSTPORT#*@}"
-        fi
-
-        METHOD="${CRED%%:*}"
-        PASSWORD="${CRED#*:}"
-        SERVER="${HOSTPORT%%:*}"
-        PORT="${HOSTPORT##*:}"
-
-        if [ -z "$METHOD" ] || [ -z "$PASSWORD" ] || [ -z "$SERVER" ] || [ -z "$PORT" ]; then
-            logger -t shpun-build "Invalid SS link: method='$METHOD' server=$(mask_host "$SERVER") port='$PORT'"
-            exit 1
-        fi
-
-        case "$PORT" in
-            *[!0-9]*)
-                logger -t shpun-build "Invalid port in SS link: '$PORT'"
-                exit 1
-                ;;
-        esac
-
-        cat >"$OUT_CFG" <<EOF
-{
-  "log": {
-    "access": "none",
-    "error": "none",
-    "loglevel": "none"
-  },
-
-  "inbounds": [
-    {
-      "tag": "socks-in",
-      "listen": "127.0.0.1",
-      "port": 10808,
-      "protocol": "socks",
-      "settings": {
-        "auth": "noauth",
-        "udp": true
-      },
-      "sniffing": {
-        "enabled": false
-      }
-    },
-    {
-      "tag": "dns-in",
-      "listen": "127.0.0.1",
-      "port": $DNS_PROXY_PORT,
-      "protocol": "dokodemo-door",
-      "settings": {
-        "address": "1.1.1.1",
-        "port": 53,
-        "network": "tcp,udp"
-      },
-      "sniffing": {
-        "enabled": false
-      }
-    },
-    {
-      "tag": "http-in",
-      "listen": "127.0.0.1",
-      "port": $HTTP_PROXY_PORT,
-      "protocol": "http",
-      "settings": {}
-    },
-    {
-      "tag": "redir-in",
-      "listen": "0.0.0.0",
-      "port": $REDIR_PORT,
-      "protocol": "dokodemo-door",
-      "settings": {
-        "network": "tcp",
-        "followRedirect": true
-      },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": ["http", "tls"]
-      }
-    },
-    {
-      "tag": "tproxy-in",
-      "listen": "0.0.0.0",
-      "port": $TPROXY_PORT,
-      "protocol": "dokodemo-door",
-      "settings": {
-        "network": "udp",
-        "followRedirect": true
-      },
-      "streamSettings": {
-        "sockopt": {
-          "tproxy": "tproxy"
-        }
-      },
-      "sniffing": {
-        "enabled": false
-      }
-    }
-  ],
-
-  "outbounds": [
-    {
-      "tag": "proxy",
-      "protocol": "shadowsocks",
-      "settings": {
-        "servers": [
-          {
-            "address": "$SERVER",
-            "port": $PORT,
-            "method": "$METHOD",
-            "password": "$PASSWORD",
-            "udp": true
-          }
-        ]
-      }
-    },
-    {
-      "tag": "direct",
-      "protocol": "freedom",
-      "settings": {}
-    }
-  ],
-
-  "routing": {
-    "domainStrategy": "IPIfNonMatch",
-    "rules": [
-      {
-        "type": "field",
-        "inboundTag": ["dns-in"],
-        "outboundTag": "proxy"
-      },
-      {
-        "type": "field",
-        "outboundTag": "direct",
-        "ip": [
-          "127.0.0.0/8",
-          "10.0.0.0/8",
-          "172.16.0.0/12",
-          "192.168.0.0/16"
-        ],
-        "domain": [
-          "$SERVER"
-        ]
-      },
-$ALWAYS_VPN_RULE
-$CUSTOM_VPN_RULE
-$CUSTOM_DIRECT_RULE
-$SMART_RU_RULE
-      {
-        "type": "field",
-        "network": "tcp",
-        "outboundTag": "proxy"
-      },
-      {
-        "type": "field",
-        "network": "udp",
-        "outboundTag": "proxy"
-      }
-    ]
-  }
-}
-EOF
-
-        logger -t shpun-build "xray config built (Shadowsocks, TCP+UDP, server=$(mask_host "$SERVER"):$PORT, method=$METHOD, redir=$REDIR_PORT, tproxy=$TPROXY_PORT)"
-        exit 0
-        ;;
-
-    vless)
-        # -------- VLESS / Reality --------
         LINK_NO_PROTO="${LINK#vless://}"
         LINK_NO_FRAGMENT="${LINK_NO_PROTO%%#*}"
         USER_HOST="${LINK_NO_FRAGMENT%%\?*}"
@@ -1040,10 +751,3 @@ EOF
 
         logger -t shpun-build "xray config built (VLESS, TCP+UDP, server=$(mask_host "$SERVER"):$PORT, security=${SECURITY:-none}, flow=${FLOW:-none}, redir=$REDIR_PORT, tproxy=$TPROXY_PORT)"
         exit 0
-        ;;
-
-    *)
-        logger -t shpun-build "Unknown router profile proto='$ROUTER_PROTO', cannot build config"
-        exit 1
-        ;;
-esac
