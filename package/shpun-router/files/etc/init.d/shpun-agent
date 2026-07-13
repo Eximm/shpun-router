@@ -9,6 +9,13 @@ SERVICE_DAEMONIZE=0
 PROG="/etc/shpun/agent.sh"
 
 start_service() {
+	# During OTA, default_postinst starts every packaged init script. Defer the
+	# single coordinated restart to router_updater after opkg has finished.
+	[ "${SHPUN_MANAGED_UPDATE:-0}" = "1" ] && {
+		logger -t shpun-agent "managed package update: start deferred to router_updater"
+		return 0
+	}
+
 	# Не стартуем, если нет скрипта агента
 	[ -x "$PROG" ] || {
 		logger -t shpun-agent "Agent script not found or not executable: $PROG"

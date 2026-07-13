@@ -25,6 +25,13 @@ load_conf() {
 }
 
 start_service() {
+    # The managed updater starts the agent once opkg is complete. Starting
+    # Xray from default_postinst would load the large route set twice.
+    [ "${SHPUN_MANAGED_UPDATE:-0}" = "1" ] && {
+        logger -t "$LOG_TAG" "managed package update: VPN start deferred to router_updater"
+        return 0
+    }
+
     load_conf
 
     if [ -z "$ENGINE_BIN" ] || [ -z "$ENGINE_CONFIG" ]; then
