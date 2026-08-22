@@ -68,6 +68,8 @@ jobs:
         working-directory: sdk
         run: |
           make package/${PACKAGE_NAME}/clean V=s || true
+          rm -rf bin/ota
+          find bin -type f -name "${PACKAGE_NAME}_*.ipk" -delete 2>/dev/null || true
 
       - name: Build package
         working-directory: sdk
@@ -88,7 +90,7 @@ jobs:
           PKG_VERSION=$(sed -n 's/^PKG_VERSION:=\s*//p' package/${PACKAGE_NAME}/Makefile)
           echo "Detected PKG_VERSION=$PKG_VERSION"
 
-          ORIG_IPK=$(find bin -name "${PACKAGE_NAME}_*.ipk" | head -n1)
+          ORIG_IPK=$(find bin -type f -name "${PACKAGE_NAME}_*.ipk" ! -path "bin/ota/*" -print -quit)
 
           if [ -z "$ORIG_IPK" ]; then
             echo "ERROR: No shpun-router ipk found" >&2
