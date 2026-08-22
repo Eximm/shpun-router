@@ -601,8 +601,8 @@ return {
 					}
 
 					mode = trim(mode != "" ? mode : "full");
-					let active_cnt = mode == "smart_ru" ? smart_cnt : cnt;
-					let active_kind = mode == "smart_ru" ? "domains" : "cidr";
+					let active_cnt = mode == "smart_ru" ? smart_cnt : (mode == "split_ru" ? cnt : 0);
+					let active_kind = mode == "smart_ru" ? "domains" : (mode == "split_ru" ? "cidr" : "none");
 
 					return {
 						ok:             1,
@@ -987,4 +987,3 @@ return {
 		}
 	}
 };
-
