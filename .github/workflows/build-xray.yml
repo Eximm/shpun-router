@@ -6,7 +6,7 @@ on:
       xray_ref:
         description: "Xray-core version/tag. Example: v26.6.27 or latest"
         required: true
-        default: "latest"
+        default: "v26.6.27"
 
   push:
     paths:
@@ -24,7 +24,7 @@ jobs:
         id: resolve
         shell: bash
         env:
-          REQUESTED_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.xray_ref || 'latest' }}
+          REQUESTED_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.xray_ref || 'v26.6.27' }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e

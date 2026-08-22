@@ -414,7 +414,7 @@ CUSTOM_VPN_RULE="$(build_custom_domain_rule vpn proxy)"
         RANDOM_UA="$(url_decode "$(get_first_param randomUserAgent random_user_agent userAgentRandom user_agent_random randomUA random_ua)")"
 
         [ -z "$TYPE" ]       && TYPE="tcp"
-        [ -z "$FP" ]         && FP="chrome"
+        [ -z "$FP" ]         && FP="firefox"
         [ -z "$ENCRYPTION" ] && ENCRYPTION="none"
         [ -z "$SNI" ]        && SNI="$HOST"
         [ -z "$SPX" ]        && SPX="/"
@@ -657,7 +657,8 @@ EOF
       },
       "sniffing": {
         "enabled": true,
-        "destOverride": ["http", "tls"]
+        "destOverride": ["http", "tls"],
+        "routeOnly": true
       }
     },
     {

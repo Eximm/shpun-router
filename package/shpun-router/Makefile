@@ -1,8 +1,8 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=shpun-router
-PKG_VERSION:=1.1.6
-PKG_RELEASE:=2
+PKG_VERSION:=1.1.7
+PKG_RELEASE:=1
 
 PKG_MAINTAINER:=Shpun VPN
 PKG_LICENSE:=MIT
@@ -66,6 +66,7 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_BIN) ./files/etc/shpun/disable-flow-offload.sh  $(1)/etc/shpun/disable-flow-offload.sh
 	$(INSTALL_BIN) ./files/etc/shpun/set-routing-mode.sh      $(1)/etc/shpun/set-routing-mode.sh
 	$(INSTALL_BIN) ./files/etc/shpun/apply-custom-routes.sh   $(1)/etc/shpun/apply-custom-routes.sh
+	$(INSTALL_BIN) ./files/etc/shpun/xray-wrapper.sh          $(1)/etc/shpun/xray-wrapper.sh
 
 	# default config
 	$(INSTALL_CONF) ./files/etc/shpun/agent.conf              $(1)/etc/shpun/agent.conf
