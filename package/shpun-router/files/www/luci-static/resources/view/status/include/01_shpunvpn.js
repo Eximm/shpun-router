@@ -42,6 +42,31 @@ var callShpunServerSet = rpc.declare({
 	object: 'shpun', method: 'server_set', params: ['index'], expect: { '': {} }
 });
 
+function waitForRoutingMode(targetMode, timeoutMs) {
+	var started = Date.now();
+
+	function retry() {
+		return new Promise(function(resolve) {
+			window.setTimeout(resolve, 2000);
+		}).then(check);
+	}
+
+	function check() {
+		return callShpunRoutingGet().then(function(routing) {
+			var actual = String(((routing || {}).mode) || '').trim();
+			if (actual === targetMode) return routing;
+			if (Date.now() - started >= timeoutMs)
+				return Promise.reject(new Error('routing mode apply timeout'));
+			return retry();
+		}, function(err) {
+			if (Date.now() - started >= timeoutMs) return Promise.reject(err);
+			return retry();
+		});
+	}
+
+	return check();
+}
+
 /* ============================================================
  *  Styles
  * ========================================================== */
@@ -902,14 +927,12 @@ return view.extend({
 				if (err === 'smart_ru_not_ready') return Promise.reject(err);
 				return null;
 			})
-			.then(function() { return new Promise(function(r) { window.setTimeout(r, 1500); }); })
-			.then(function() {
-				return Promise.all([ callShpunState(), callShpunRoutingGet() ]).then(function(data) {
-					var actual = String(((data[1] || {}).mode) || '').trim();
-					if (actual === targetMode)
-						ui.addNotification(null, E('p', {}, 'Режим маршрутизации обновлён.'), 'info');
-					else
-						ui.addNotification(null, E('p', {}, 'Не удалось применить режим.'), 'error');
+			.then(function() { return waitForRoutingMode(targetMode, 120000); })
+			.then(function(routing) {
+				return callShpunState().then(function(state) {
+					view._state = state || {};
+					view._state.routing = routing || {};
+					ui.addNotification(null, E('p', {}, 'Режим маршрутизации обновлён.'), 'info');
 				});
 			})
 			.catch(function(err) {
