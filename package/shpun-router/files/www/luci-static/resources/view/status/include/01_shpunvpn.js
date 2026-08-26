@@ -161,11 +161,16 @@ function injectStyles() {
 		+ '.shpun-modal-input::placeholder{color:#4a5568;}'
 		+ '.shpun-server-note{margin:10px 0 12px;padding:10px 12px;border-radius:10px;background:rgba(250,204,21,.10);border:1px solid rgba(250,204,21,.22);color:#fde68a;font-size:12px;line-height:1.45;}'
 		+ '.shpun-server-list{max-height:310px;overflow-y:auto;margin-top:10px;border:1px solid rgba(120,140,180,.18);border-radius:12px;padding:6px;background:rgba(8,16,32,.50);display:flex;flex-direction:column;gap:5px;}'
-		+ '.shpun-server-row{width:100%;display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:10px;padding:9px 11px;border:1px solid rgba(120,140,180,.14);border-radius:9px;background:rgba(14,23,38,.72);color:#e6edf8;text-align:left;cursor:pointer;transition:all .14s ease;}'
+		+ '.shpun-server-row{width:100%;display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;align-items:center;gap:10px;padding:9px 11px;border:1px solid rgba(120,140,180,.14);border-radius:9px;background:rgba(14,23,38,.72);color:#e6edf8;text-align:left;cursor:pointer;transition:all .14s ease;}'
 		+ '.shpun-server-row:hover{background:rgba(25,35,54,.94);border-color:rgba(140,160,200,.30);}'
 		+ '.shpun-server-row.is-selected{background:rgba(79,70,229,.24);border-color:rgba(140,130,255,.42);box-shadow:inset 0 1px 0 rgba(255,255,255,.03);}'
 		+ '.shpun-server-location{font-size:13px;font-weight:800;color:#f8fafc;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}'
 		+ '.shpun-server-proto{font-size:11px;font-weight:800;color:#c7d2fe;text-transform:uppercase;}'
+		+ '.shpun-server-latency{min-width:54px;font-size:11px;font-weight:800;text-align:center;padding:3px 7px;border-radius:999px;border:1px solid rgba(120,140,180,.18);white-space:nowrap;}'
+		+ '.shpun-server-latency--good{color:#bbf7d0;background:rgba(22,163,74,.14);border-color:rgba(34,197,94,.24);}'
+		+ '.shpun-server-latency--medium{color:#fde68a;background:rgba(250,204,21,.10);border-color:rgba(250,204,21,.22);}'
+		+ '.shpun-server-latency--slow{color:#fecaca;background:rgba(248,113,113,.12);border-color:rgba(248,113,113,.24);}'
+		+ '.shpun-server-latency--unknown{color:#94a3b8;background:rgba(148,163,184,.08);border-color:rgba(148,163,184,.16);}'
 		+ '.shpun-server-kind{font-size:11px;font-weight:800;padding:3px 8px;border-radius:999px;border:1px solid rgba(120,140,180,.18);white-space:nowrap;}'
 		+ '.shpun-server-kind--main{color:#bbf7d0;background:rgba(22,163,74,.14);border-color:rgba(34,197,94,.24);}'
 		+ '.shpun-server-kind--reserve{color:#fde68a;background:rgba(250,204,21,.10);border-color:rgba(250,204,21,.22);}'
@@ -565,6 +570,10 @@ function openServersModal() {
 			var protoLabel = proto === 'vless' ? 'VLESS' : (proto.toUpperCase() || 'VPN');
 			var isSelected = s.index === selected;
 			var location = formatServerLocation(s.name || ('Server ' + s.index), protoLabel);
+			var latency = Number(s.latency_ms);
+			var hasLatency = s.latency_ms != null && isFinite(latency) && latency >= 0;
+			var latencyClass = !hasLatency ? 'unknown' : (latency <= 80 ? 'good' : (latency <= 160 ? 'medium' : 'slow'));
+			var latencyText = hasLatency ? (Math.round(latency) + ' мс') : '—';
 			var badge = E('span', { 'class': 'shpun-server-kind ' + (isSelected ? 'shpun-server-kind--main' : 'shpun-server-kind--reserve') }, isSelected ? 'Текущий' : 'Доступен');
 			var row = E('button', {
 				'type': 'button',
@@ -576,6 +585,10 @@ function openServersModal() {
 				}
 			}, [
 				E('span', { 'class': 'shpun-server-location', 'title': location }, location),
+				E('span', {
+					'class': 'shpun-server-latency shpun-server-latency--' + latencyClass,
+					'title': hasLatency ? 'Время отклика сервера' : 'Сервер не ответил на ping'
+				}, latencyText),
 				E('span', { 'class': 'shpun-server-proto' }, protoLabel),
 				badge
 			]);
@@ -585,7 +598,7 @@ function openServersModal() {
 
 		ui.showModal('Серверы VPN', [
 			E('div', { 'class': 'shpun-modal-wrap' }, [
-				E('div', { 'class': 'shpun-modal-desc' }, 'Выберите VPN-сервер. Роутер применит новый профиль и переподключит туннель.'),
+				E('div', { 'class': 'shpun-modal-desc' }, 'Выберите VPN-сервер. Время отклика измерено при открытии списка; после применения роутер переподключит туннель.'),
 				list,
 				E('div', { 'class': 'shpun-modal-footer' }, [
 					E('button', { 'type': 'button', 'class': 'shpun-modal-btn', 'click': function() { ui.hideModal(); } }, 'Отмена'),

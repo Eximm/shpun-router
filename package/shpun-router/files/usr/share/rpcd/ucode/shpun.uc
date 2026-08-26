@@ -374,27 +374,79 @@ function is_safe_ping_host(host) {
 	return index(host, ".") >= 0;
 }
 
-function tcp_ping_ms(host, port) {
-	host = trim(norm(host));
-	if (!is_safe_ping_host(host))
+function parse_ping_ms(value) {
+	value = trim(norm(value));
+	if (!value || value == "-")
 		return null;
 
-	let cmd = "ping -c 1 -W 1 " + host + " 2>/dev/null | sed -n 's/.*time=\\([0-9.]*\\).*/\\1/p' | head -n 1";
-
-	let out = trim(readcmd(cmd));
-	if (!out)
-		return null;
-
-	let dot = index(out, ".");
+	let dot = index(value, ".");
 	if (dot >= 0)
-		out = substr(out, 0, dot);
+		value = substr(value, 0, dot);
 
-	let ms = int(out);
+	if (!value)
+		return null;
 
+	for (let i = 0; i < length(value); i++) {
+		let ch = substr(value, i, 1);
+		if (ch < "0" || ch > "9")
+			return null;
+	}
+
+	let ms = int(value);
 	if (ms < 0 || ms > 10000)
 		return null;
 
-	return ms;
+	return ms < 1 ? 1 : ms;
+}
+
+function measure_server_latencies(servers) {
+	let latencies = [];
+	let cmd = "";
+	let pending = 0;
+
+	for (let i = 0; i < length(servers); i++) {
+		push(latencies, null);
+
+		let host = trim(norm(servers[i].host));
+		if (!is_safe_ping_host(host))
+			continue;
+
+		cmd +=
+			"(output=$(ping -n -c 1 -W 1 " + host + " 2>/dev/null); " +
+			"value=${output#*time=}; " +
+			"if [ \"$value\" = \"$output\" ]; then value=; else value=${value%% *}; fi; " +
+			"if [ -n \"$value\" ]; then printf '" + i + " %s\\n' \"$value\"; " +
+			"else printf '" + i + " -\\n'; fi) & ";
+
+		pending++;
+		if (pending >= 8) {
+			cmd += "wait; ";
+			pending = 0;
+		}
+	}
+
+	if (!cmd)
+		return latencies;
+
+	let out = trim(readcmd(cmd + "wait"));
+	if (!out)
+		return latencies;
+
+	let lines = split(out, "\n");
+	for (let i = 0; i < length(lines); i++) {
+		let line = trim(lines[i]);
+		let sep = index(line, " ");
+		if (sep < 1)
+			continue;
+
+		let idx = int(substr(line, 0, sep));
+		if (idx < 0 || idx >= length(latencies))
+			continue;
+
+		latencies[idx] = parse_ping_ms(substr(line, sep + 1));
+	}
+
+	return latencies;
 }
 
 function is_valid_ipv4(ip) {
@@ -816,9 +868,17 @@ return {
 					if (selected < 0 || selected >= length(links))
 						selected = 0;
 
-					let servers = [];
+					let parsed_servers = [];
 					for (let i = 0; i < length(links); i++) {
-						push(servers, public_server_info(parse_link_info(links[i], i, i == selected)));
+						push(parsed_servers, parse_link_info(links[i], i, i == selected));
+					}
+
+					let latencies = measure_server_latencies(parsed_servers);
+					let servers = [];
+					for (let i = 0; i < length(parsed_servers); i++) {
+						let server = public_server_info(parsed_servers[i]);
+						server.latency_ms = latencies[i];
+						push(servers, server);
 					}
 
 					return {
