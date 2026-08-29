@@ -16,7 +16,7 @@ define Package/shpun-router
   SUBMENU:=VPN
   TITLE:=Shpun Router integration (ucode backend)
   PKGARCH:=all
-  DEPENDS:=+luci-base +jsonfilter +ucode +ucode-mod-fs +ucode-mod-uci +rpcd-mod-ucode +kmod-nft-tproxy
+  DEPENDS:=+luci-base +jsonfilter +ucode +ucode-mod-fs +ucode-mod-uci +rpcd-mod-ucode +kmod-nft-tproxy +curl
 endef
 
 define Package/$(PKG_NAME)/description

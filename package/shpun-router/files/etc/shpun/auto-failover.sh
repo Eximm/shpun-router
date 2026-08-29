@@ -19,6 +19,8 @@ HTTP_PROXY_PORT_DEFAULT=10809
 TUNNEL_PROBE_URL_DEFAULT="http://api.ipify.org"
 TUNNEL_PROBE_FALLBACK_URL_DEFAULT="http://cp.cloudflare.com/generate_204"
 TUNNEL_PROBE_SECONDARY_URL_DEFAULT="http://connectivitycheck.gstatic.com/generate_204"
+TUNNEL_QUALITY_PROBE_URL_DEFAULT="https://speed.cloudflare.com/__down?bytes=8192"
+TUNNEL_QUALITY_PROBE_MIN_BYTES_DEFAULT=8192
 
 log() {
 	logger -t "$LOGTAG" "$*"
@@ -75,11 +77,30 @@ probe_url_through_tunnel() {
 	esac
 }
 
+probe_tunnel_quality() {
+	proxy="http://127.0.0.1:${HTTP_PROXY_PORT}"
+	tmp="/tmp/shpun-failover-quality.$$"
+	[ "$HTTP_BIN" = "curl" ] || return 0
+	rm -f "$tmp"
+
+	if ! curl -fsSL -A ShpunRouter -m 8 -x "$proxy" -o "$tmp" "$TUNNEL_QUALITY_PROBE_URL" >/dev/null 2>&1; then
+		rm -f "$tmp"
+		return 1
+	fi
+
+	bytes="$(wc -c < "$tmp" 2>/dev/null | tr -d ' ')"
+	rm -f "$tmp"
+	case "$bytes" in ''|*[!0-9]*) return 1 ;; esac
+	[ "$bytes" -ge "$TUNNEL_QUALITY_PROBE_MIN_BYTES" ]
+}
+
 probe_tunnel() {
-	probe_url_through_tunnel "$TUNNEL_PROBE_URL" && return 0
-	probe_url_through_tunnel "$TUNNEL_PROBE_FALLBACK_URL" && return 0
-	probe_url_through_tunnel "$TUNNEL_PROBE_SECONDARY_URL" && return 0
-	return 1
+	if ! probe_url_through_tunnel "$TUNNEL_PROBE_URL" &&
+		! probe_url_through_tunnel "$TUNNEL_PROBE_FALLBACK_URL" &&
+		! probe_url_through_tunnel "$TUNNEL_PROBE_SECONDARY_URL"; then
+		return 1
+	fi
+	probe_tunnel_quality
 }
 
 wait_for_candidate() {
@@ -114,10 +135,13 @@ switch_to() {
 [ -z "$TUNNEL_PROBE_URL" ] && TUNNEL_PROBE_URL="$TUNNEL_PROBE_URL_DEFAULT"
 [ -z "$TUNNEL_PROBE_FALLBACK_URL" ] && TUNNEL_PROBE_FALLBACK_URL="$TUNNEL_PROBE_FALLBACK_URL_DEFAULT"
 [ -z "$TUNNEL_PROBE_SECONDARY_URL" ] && TUNNEL_PROBE_SECONDARY_URL="$TUNNEL_PROBE_SECONDARY_URL_DEFAULT"
+[ -z "$TUNNEL_QUALITY_PROBE_URL" ] && TUNNEL_QUALITY_PROBE_URL="$TUNNEL_QUALITY_PROBE_URL_DEFAULT"
+[ -z "$TUNNEL_QUALITY_PROBE_MIN_BYTES" ] && TUNNEL_QUALITY_PROBE_MIN_BYTES="$TUNNEL_QUALITY_PROBE_MIN_BYTES_DEFAULT"
 
 case "$AUTO_FAILOVER_COOLDOWN" in ''|*[!0-9]*) AUTO_FAILOVER_COOLDOWN="$AUTO_FAILOVER_COOLDOWN_DEFAULT" ;; esac
 case "$AUTO_FAILOVER_MAX_CANDIDATES" in ''|*[!0-9]*) AUTO_FAILOVER_MAX_CANDIDATES="$AUTO_FAILOVER_MAX_CANDIDATES_DEFAULT" ;; esac
 case "$AUTO_FAILOVER_READY_TIMEOUT" in ''|*[!0-9]*) AUTO_FAILOVER_READY_TIMEOUT="$AUTO_FAILOVER_READY_TIMEOUT_DEFAULT" ;; esac
+case "$TUNNEL_QUALITY_PROBE_MIN_BYTES" in ''|*[!0-9]*) TUNNEL_QUALITY_PROBE_MIN_BYTES="$TUNNEL_QUALITY_PROBE_MIN_BYTES_DEFAULT" ;; esac
 
 lock_acquire || exit 0
 
@@ -178,4 +202,3 @@ done
 log "no tested server restored the tunnel; returning to original index $current"
 switch_to "$current" || true
 exit 1
-

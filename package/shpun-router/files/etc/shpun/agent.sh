@@ -64,6 +64,8 @@ TUNNEL_PROBE_URL_DEFAULT="http://api.ipify.org"
 TUNNEL_EXIT_PROBE_URLS_DEFAULT="http://api.ipify.org http://ifconfig.me/ip http://icanhazip.com"
 TUNNEL_PROBE_FALLBACK_URL_DEFAULT="http://cp.cloudflare.com/generate_204"
 TUNNEL_PROBE_SECONDARY_URL_DEFAULT="http://connectivitycheck.gstatic.com/generate_204"
+TUNNEL_QUALITY_PROBE_URL_DEFAULT="https://speed.cloudflare.com/__down?bytes=8192"
+TUNNEL_QUALITY_PROBE_MIN_BYTES_DEFAULT=8192
 DNS_BOOTSTRAP_ENABLE_DEFAULT=1
 DNS_BOOTSTRAP_SERVERS_DEFAULT="77.88.8.8 77.88.8.1 1.1.1.1 1.0.0.1 8.8.8.8 8.8.4.4 9.9.9.9"
 DNS_BOOTSTRAP_TEST_DOMAINS_DEFAULT="router.shpun.net spb.shpyn.online"
@@ -755,6 +757,11 @@ load_conf() {
 	[ -z "$TUNNEL_EXIT_PROBE_URLS" ] && TUNNEL_EXIT_PROBE_URLS="$TUNNEL_EXIT_PROBE_URLS_DEFAULT"
 	[ -z "$TUNNEL_PROBE_FALLBACK_URL" ] && TUNNEL_PROBE_FALLBACK_URL="$TUNNEL_PROBE_FALLBACK_URL_DEFAULT"
 	[ -z "$TUNNEL_PROBE_SECONDARY_URL" ] && TUNNEL_PROBE_SECONDARY_URL="$TUNNEL_PROBE_SECONDARY_URL_DEFAULT"
+	[ -z "$TUNNEL_QUALITY_PROBE_URL" ] && TUNNEL_QUALITY_PROBE_URL="$TUNNEL_QUALITY_PROBE_URL_DEFAULT"
+	[ -z "$TUNNEL_QUALITY_PROBE_MIN_BYTES" ] && TUNNEL_QUALITY_PROBE_MIN_BYTES="$TUNNEL_QUALITY_PROBE_MIN_BYTES_DEFAULT"
+	case "$TUNNEL_QUALITY_PROBE_MIN_BYTES" in
+		''|*[!0-9]*) TUNNEL_QUALITY_PROBE_MIN_BYTES="$TUNNEL_QUALITY_PROBE_MIN_BYTES_DEFAULT" ;;
+	esac
 	[ -z "$DNS_BOOTSTRAP_ENABLE" ] && DNS_BOOTSTRAP_ENABLE="$DNS_BOOTSTRAP_ENABLE_DEFAULT"
 	[ -z "$DNS_BOOTSTRAP_SERVERS" ] && DNS_BOOTSTRAP_SERVERS="$DNS_BOOTSTRAP_SERVERS_DEFAULT"
 	[ -z "$DNS_BOOTSTRAP_TEST_DOMAINS" ] && DNS_BOOTSTRAP_TEST_DOMAINS="$DNS_BOOTSTRAP_TEST_DOMAINS_DEFAULT"
@@ -2136,6 +2143,25 @@ probe_url_through_tunnel() {
 	esac
 }
 
+probe_tunnel_quality() {
+	local proxy="http://127.0.0.1:${HTTP_PROXY_PORT}"
+	local tmp="/tmp/shpun-quality-probe.$$" bytes
+
+	[ -n "$TUNNEL_QUALITY_PROBE_URL" ] || return 0
+	[ "$HTTP_BIN" = "curl" ] || return 0
+	rm -f "$tmp"
+
+	if ! curl -fsSL -A "$HTTP_USER_AGENT" -m 8 -x "$proxy" -o "$tmp" "$TUNNEL_QUALITY_PROBE_URL" >/dev/null 2>&1; then
+		rm -f "$tmp"
+		return 1
+	fi
+
+	bytes="$(wc -c < "$tmp" 2>/dev/null | tr -d ' ')"
+	rm -f "$tmp"
+	case "$bytes" in ''|*[!0-9]*) return 1 ;; esac
+	[ "$bytes" -ge "$TUNNEL_QUALITY_PROBE_MIN_BYTES" ]
+}
+
 seconds_to_ms() {
 	awk -v v="$1" 'BEGIN {
 		if (v == "") { print ""; exit }
@@ -2267,7 +2293,7 @@ probe_tunnel_exit_cache() {
 	return 1
 }
 
-check_tunnel_connectivity() {
+check_tunnel_connectivity_basic() {
 	detect_http_client
 	[ -n "$HTTP_BIN" ] || return 1
 
@@ -2285,6 +2311,14 @@ check_tunnel_connectivity() {
 	fi
 
 	return 1
+}
+
+check_tunnel_connectivity() {
+	check_tunnel_connectivity_basic || return 1
+	probe_tunnel_quality || {
+		log "tunnel quality probe failed"
+		return 1
+	}
 }
 
 ensure_transparent_rules() {
