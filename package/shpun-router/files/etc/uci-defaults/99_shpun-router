@@ -34,7 +34,17 @@ mkdir -p /etc/shpun/routes 2>/dev/null || true
 [ -f /etc/shpun/routes/ru.cidrs ] || : > /etc/shpun/routes/ru.cidrs
 
 # ==========================
-# 4. Отложенная активация rpcd и очистки старой сети
+# 4. Отключить стандартное уведомление attended sysupgrade при входе
+# ==========================
+# Обновления Shpun показываются своим OTA-виджетом. В некоторых сборках LuCI
+# штатное уведомление падает с "_(...).format is not a function".
+if uci -q get attendedsysupgrade.client >/dev/null 2>&1; then
+    uci set attendedsysupgrade.client.login_check_for_upgrades='0'
+    uci commit attendedsysupgrade
+fi
+
+# ==========================
+# 5. Отложенная активация rpcd и очистки старой сети
 # ==========================
 (
     sleep 5
@@ -43,7 +53,7 @@ mkdir -p /etc/shpun/routes 2>/dev/null || true
 ) &
 
 # ==========================
-# 5. Удаляем себя
+# 6. Удаляем себя
 # ==========================
 rm -f /etc/uci-defaults/99_shpun-router
 

@@ -4,6 +4,85 @@
 'require ui';
 'require poll';
 
+/* OpenWrt 25.12 may ship status widgets which use String.format() without
+ * loading the legacy cbi.js helper. Keep the stock widgets working, but do
+ * not load cbi.js as a LuCI module (it is not a module factory). */
+if (typeof String.prototype.format !== 'function') {
+	String.prototype.format = function() {
+		var htmlEsc = [/&/g, '&#38;', /"/g, '&#34;', /'/g, '&#39;', /</g, '&#60;', />/g, '&#62;'];
+		var quotEsc = [/"/g, '&#34;', /'/g, '&#39;'];
+
+		function esc(value, replacements) {
+			if (value == null || typeof value === 'object' || typeof value === 'function')
+				return '';
+			value = String(value);
+			for (var i = 0; i < replacements.length; i += 2)
+				value = value.replace(replacements[i], replacements[i + 1]);
+			return value;
+		}
+
+		var str = this;
+		var out = '';
+		var index = 0;
+		var match;
+		var re = /^(([^%]*)%('.|0|\x20)?(-)?(\d+)?(\.\d+)?(%|b|c|d|u|f|o|s|x|X|q|h|j|t|m))/;
+
+		while ((match = re.exec(str)) !== null) {
+			var whole = match[1];
+			var left = match[2];
+			var pad = match[3] ? (match[3].charAt(0) === "'" ? match[3].charAt(1) : match[3]) : ' ';
+			var justify = match[4];
+			var minLength = match[5] ? Number(match[5]) : 0;
+			var precision = match[6] ? Number(match[6].substring(1)) : -1;
+			var type = match[7];
+			var value;
+
+			if (type === '%') {
+				value = '%';
+			} else if (index < arguments.length) {
+				var param = arguments[index++];
+				switch (type) {
+				case 'b': value = Math.floor(+param || 0).toString(2); break;
+				case 'c': value = String.fromCharCode(+param || 0); break;
+				case 'd': value = Math.floor(+param || 0).toFixed(0); break;
+				case 'u': var n = +param || 0; value = Math.floor(n < 0 ? 0x100000000 + n : n).toFixed(0); break;
+				case 'f': value = precision > -1 ? (+param || 0).toFixed(precision) : (+param || 0); break;
+				case 'o': value = Math.floor(+param || 0).toString(8); break;
+				case 's': value = param; break;
+				case 'x': value = Math.floor(+param || 0).toString(16).toLowerCase(); break;
+				case 'X': value = Math.floor(+param || 0).toString(16).toUpperCase(); break;
+				case 'h': value = esc(param, htmlEsc); break;
+				case 'q': value = esc(param, quotEsc); break;
+				case 'j': try { value = JSON.stringify(param); } catch (e) { value = ''; } break;
+				case 'm':
+					var base = minLength || 1000;
+					var digits = match[6] ? ~~(10 * +('0' + match[6])) : 2;
+					var units = [' ', ' K', ' M', ' G', ' T', ' P', ' E'];
+					var unit = 0;
+					var scaled = +param || 0;
+					while (unit < units.length && scaled > base) { scaled /= base; unit++; }
+					value = unit ? scaled.toFixed(digits) + units[unit] + (base === 1024 ? 'i' : '') : scaled + ' ';
+					minLength = 0;
+					break;
+				default: value = param;
+				}
+			}
+
+			value = String(value == null ? '' : value);
+			while (value.length < minLength)
+				value = justify === '-' ? value + pad : pad + value;
+			out += left + value;
+			str = str.substring(whole.length);
+		}
+
+		return out + str;
+	};
+
+	String.format = function() {
+		return String.prototype.format.apply(arguments[0], Array.prototype.slice.call(arguments, 1));
+	};
+}
+
 /* ============================================================
  *  RPC
  * ========================================================== */
@@ -72,7 +151,6 @@ function waitForRoutingMode(targetMode, timeoutMs) {
  * ========================================================== */
 
 function injectStyles() {
-	if (document.getElementById('shpun-widget-style')) return;
 	var css = ''
 		+ '.shpun-widget-card{position:relative;margin:0 0 16px;padding:20px;border-radius:24px;overflow:hidden;color:#eef2ff;background:linear-gradient(135deg,rgba(6,18,36,.98) 0%,rgba(8,24,50,.98) 42%,rgba(20,19,58,.98) 100%);border:1px solid rgba(110,130,185,.18);box-shadow:0 18px 44px rgba(0,0,0,.28);}'
 		+ '.shpun-widget-card:before{content:"";position:absolute;inset:0;pointer-events:none;background:radial-gradient(circle at 0% 0%,rgba(95,140,255,.15),transparent 30%),radial-gradient(circle at 100% 0%,rgba(139,92,246,.14),transparent 28%),radial-gradient(circle at 50% 100%,rgba(59,130,246,.08),transparent 35%);}'
@@ -160,16 +238,22 @@ function injectStyles() {
 		+ '.shpun-modal-input:focus{border-color:rgba(140,130,255,.45);background:rgba(12,22,44,.80);}'
 		+ '.shpun-modal-input::placeholder{color:#4a5568;}'
 		+ '.shpun-server-note{margin:10px 0 12px;padding:10px 12px;border-radius:10px;background:rgba(250,204,21,.10);border:1px solid rgba(250,204,21,.22);color:#fde68a;font-size:12px;line-height:1.45;}'
+		+ '.shpun-server-switch{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:10px;padding:4px;border:1px solid rgba(120,140,180,.16);border-radius:11px;background:rgba(8,16,32,.48);}'
+		+ '.shpun-server-switch-btn{padding:7px 10px;border:1px solid transparent;border-radius:8px;background:transparent;color:#94a3b8;font-size:12px;font-weight:850;cursor:pointer;transition:all .14s ease;}'
+		+ '.shpun-server-switch-btn:hover{color:#e2e8f0;background:rgba(30,41,59,.56);}'
+		+ '.shpun-server-switch-btn.is-active{color:#eef2ff;background:rgba(79,70,229,.30);border-color:rgba(129,140,248,.36);box-shadow:inset 0 1px 0 rgba(255,255,255,.04);}'
+		+ '.shpun-server-switch-btn:disabled{opacity:.38;cursor:default;}'
 		+ '.shpun-server-list{max-height:310px;overflow-y:auto;margin-top:10px;border:1px solid rgba(120,140,180,.18);border-radius:12px;padding:6px;background:rgba(8,16,32,.50);display:flex;flex-direction:column;gap:5px;}'
-		+ '.shpun-server-row{width:100%;display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;align-items:center;gap:10px;padding:9px 11px;border:1px solid rgba(120,140,180,.14);border-radius:9px;background:rgba(14,23,38,.72);color:#e6edf8;text-align:left;cursor:pointer;transition:all .14s ease;}'
+		+ '.shpun-server-row{width:100%;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:10px;padding:9px 11px;border:1px solid rgba(120,140,180,.14);border-radius:9px;background:rgba(14,23,38,.72);color:#e6edf8;text-align:left;cursor:pointer;transition:all .14s ease;}'
 		+ '.shpun-server-row:hover{background:rgba(25,35,54,.94);border-color:rgba(140,160,200,.30);}'
 		+ '.shpun-server-row.is-selected{background:rgba(79,70,229,.24);border-color:rgba(140,130,255,.42);box-shadow:inset 0 1px 0 rgba(255,255,255,.03);}'
 		+ '.shpun-server-location{font-size:13px;font-weight:800;color:#f8fafc;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}'
+		+ '.shpun-server-meta{display:inline-flex;align-items:center;justify-content:flex-end;gap:7px;min-width:0;white-space:nowrap;}'
 		+ '.shpun-server-proto{font-size:11px;font-weight:800;color:#c7d2fe;text-transform:uppercase;}'
-		+ '.shpun-server-latency{min-width:54px;font-size:11px;font-weight:800;text-align:center;padding:3px 7px;border-radius:999px;border:1px solid rgba(120,140,180,.18);white-space:nowrap;}'
-		+ '.shpun-server-latency--good{color:#bbf7d0;background:rgba(22,163,74,.14);border-color:rgba(34,197,94,.24);}'
-		+ '.shpun-server-latency--medium{color:#fde68a;background:rgba(250,204,21,.10);border-color:rgba(250,204,21,.22);}'
-		+ '.shpun-server-latency--slow{color:#fecaca;background:rgba(248,113,113,.12);border-color:rgba(248,113,113,.24);}'
+		+ '.shpun-server-latency{display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;min-width:58px;font-size:11px;font-weight:900;text-align:center;padding:3px 8px;border-radius:999px;border:1px solid rgba(120,140,180,.18);white-space:nowrap;}'
+		+ '.shpun-server-row .shpun-server-latency--good{color:#86efac!important;background:rgba(22,163,74,.22)!important;border-color:rgba(74,222,128,.42)!important;box-shadow:inset 0 0 0 1px rgba(34,197,94,.05);}'
+		+ '.shpun-server-row .shpun-server-latency--medium{color:#fde047!important;background:rgba(202,138,4,.22)!important;border-color:rgba(250,204,21,.42)!important;box-shadow:inset 0 0 0 1px rgba(250,204,21,.05);}'
+		+ '.shpun-server-row .shpun-server-latency--slow{color:#fca5a5!important;background:rgba(220,38,38,.22)!important;border-color:rgba(248,113,113,.44)!important;box-shadow:inset 0 0 0 1px rgba(248,113,113,.05);}'
 		+ '.shpun-server-latency--unknown{color:#94a3b8;background:rgba(148,163,184,.08);border-color:rgba(148,163,184,.16);}'
 		+ '.shpun-server-kind{font-size:11px;font-weight:800;padding:3px 8px;border-radius:999px;border:1px solid rgba(120,140,180,.18);white-space:nowrap;}'
 		+ '.shpun-server-kind--main{color:#bbf7d0;background:rgba(22,163,74,.14);border-color:rgba(34,197,94,.24);}'
@@ -184,13 +268,16 @@ function injectStyles() {
 		+ '.shpun-modal-btn--danger{background:rgba(101,24,34,.58);border-color:rgba(248,113,113,.34);color:#fecaca;}'
 		+ '.shpun-modal-btn--danger:hover{background:rgba(122,29,42,.68);}'
 		+ '@media(max-width:980px){.shpun-card-main{grid-template-columns:1fr;}.shpun-fields-grid{grid-template-columns:repeat(2,minmax(0,1fr));}.shpun-actions{grid-template-columns:repeat(3,minmax(0,1fr));}.shpun-side-flex-spacer{display:none;}}'
-		+ '@media(max-width:640px){.shpun-widget-card{padding:14px;border-radius:18px;}.shpun-title{font-size:18px;}.shpun-fields-grid{grid-template-columns:1fr;}.shpun-routing-actions{grid-template-columns:1fr;}.shpun-actions{grid-template-columns:repeat(2,minmax(0,1fr));}.shpun-modal-cols{grid-template-columns:1fr;}.shpun-btn{font-size:12px;}}';
+		+ '@media(max-width:640px){.shpun-widget-card{padding:14px;border-radius:18px;}.shpun-title{font-size:18px;}.shpun-fields-grid{grid-template-columns:1fr;}.shpun-routing-actions{grid-template-columns:1fr;}.shpun-actions{grid-template-columns:repeat(2,minmax(0,1fr));}.shpun-modal-cols{grid-template-columns:1fr;}.shpun-server-row{gap:6px;}.shpun-server-meta{gap:5px;}.shpun-server-proto{display:none;}.shpun-btn{font-size:12px;}}';
 
-	var s = document.createElement('style');
-	s.id = 'shpun-widget-style';
-	s.type = 'text/css';
-	s.appendChild(document.createTextNode(css));
-	document.head.appendChild(s);
+	var s = document.getElementById('shpun-widget-style');
+	if (!s) {
+		s = document.createElement('style');
+		s.id = 'shpun-widget-style';
+		s.type = 'text/css';
+		document.head.appendChild(s);
+	}
+	s.textContent = css;
 }
 
 /* ============================================================
@@ -377,6 +464,18 @@ function formatServerLocation(name, protoLabel) {
 	return name || 'Server';
 }
 
+function getServerConnectionGroup(server, location) {
+	var label = String(location || '').toLowerCase();
+	var host = String((server || {}).host || '').toLowerCase();
+
+	if (label.indexOf('напрямую') >= 0)
+		return 'direct';
+	if (label.indexOf('через рф') >= 0)
+		return 'gateway';
+
+	return /^rush[0-9]*\.lenivo\.site$/.test(host) ? 'gateway' : 'direct';
+}
+
 /* ============================================================
  *  Custom routes modal
  *  Живёт вне #view — LuCI его не трогает никогда
@@ -555,6 +654,10 @@ function openServersModal() {
 		var chosen = selected;
 		var list = E('div', { 'class': 'shpun-server-list' });
 		var rows = [];
+		var groupCounts = { gateway: 0, direct: 0 };
+		var activeGroup = 'gateway';
+		var gatewayButton;
+		var directButton;
 
 		function markSelected() {
 			rows.forEach(function(row) {
@@ -565,16 +668,40 @@ function openServersModal() {
 			});
 		}
 
+		function renderGroup() {
+			while (list.firstChild) list.removeChild(list.firstChild);
+			rows.forEach(function(row) {
+				if (row.group === activeGroup)
+					list.appendChild(row.node);
+			});
+			gatewayButton.className = 'shpun-server-switch-btn' + (activeGroup === 'gateway' ? ' is-active' : '');
+			directButton.className = 'shpun-server-switch-btn' + (activeGroup === 'direct' ? ' is-active' : '');
+			list.scrollTop = 0;
+		}
+
 		servers.forEach(function(s) {
 			var proto = String(s.proto || 'vpn').toLowerCase();
 			var protoLabel = proto === 'vless' ? 'VLESS' : (proto.toUpperCase() || 'VPN');
 			var isSelected = s.index === selected;
 			var location = formatServerLocation(s.name || ('Server ' + s.index), protoLabel);
+			var group = getServerConnectionGroup(s, location);
+			groupCounts[group]++;
+			if (isSelected)
+				activeGroup = group;
 			var latency = Number(s.latency_ms);
 			var hasLatency = s.latency_ms != null && isFinite(latency) && latency >= 0;
 			var latencyClass = !hasLatency ? 'unknown' : (latency <= 80 ? 'good' : (latency <= 160 ? 'medium' : 'slow'));
 			var latencyText = hasLatency ? (Math.round(latency) + ' мс') : '—';
 			var badge = E('span', { 'class': 'shpun-server-kind ' + (isSelected ? 'shpun-server-kind--main' : 'shpun-server-kind--reserve') }, isSelected ? 'Текущий' : 'Доступен');
+			var latencyNode = E('span', {
+				'class': 'shpun-server-latency shpun-server-latency--' + latencyClass,
+				'title': hasLatency ? 'Время отклика сервера' : 'Сервер не ответил на ping'
+			}, latencyText);
+			var meta = E('span', { 'class': 'shpun-server-meta' }, [
+				latencyNode,
+				E('span', { 'class': 'shpun-server-proto' }, protoLabel),
+				badge
+			]);
 			var row = E('button', {
 				'type': 'button',
 				'class': 'shpun-server-row' + (s.index === selected ? ' is-selected' : ''),
@@ -585,20 +712,30 @@ function openServersModal() {
 				}
 			}, [
 				E('span', { 'class': 'shpun-server-location', 'title': location }, location),
-				E('span', {
-					'class': 'shpun-server-latency shpun-server-latency--' + latencyClass,
-					'title': hasLatency ? 'Время отклика сервера' : 'Сервер не ответил на ping'
-				}, latencyText),
-				E('span', { 'class': 'shpun-server-proto' }, protoLabel),
-				badge
+				meta
 			]);
-			rows.push({ index: s.index, node: row, badge: badge });
-			list.appendChild(row);
+			rows.push({ index: s.index, node: row, badge: badge, group: group });
 		});
+
+		gatewayButton = E('button', {
+			'type': 'button',
+			'class': 'shpun-server-switch-btn',
+			'disabled': groupCounts.gateway === 0 ? true : null,
+			'click': function(ev) { ev.preventDefault(); activeGroup = 'gateway'; renderGroup(); }
+		}, 'Через РФ · ' + groupCounts.gateway);
+		directButton = E('button', {
+			'type': 'button',
+			'class': 'shpun-server-switch-btn',
+			'disabled': groupCounts.direct === 0 ? true : null,
+			'click': function(ev) { ev.preventDefault(); activeGroup = 'direct'; renderGroup(); }
+		}, 'Напрямую · ' + groupCounts.direct);
+		var serverSwitch = E('div', { 'class': 'shpun-server-switch' }, [ gatewayButton, directButton ]);
+		renderGroup();
 
 		ui.showModal('Серверы VPN', [
 			E('div', { 'class': 'shpun-modal-wrap' }, [
 				E('div', { 'class': 'shpun-modal-desc' }, 'Выберите VPN-сервер. Время отклика измерено при открытии списка; после применения роутер переподключит туннель.'),
+				serverSwitch,
 				list,
 				E('div', { 'class': 'shpun-modal-footer' }, [
 					E('button', { 'type': 'button', 'class': 'shpun-modal-btn', 'click': function() { ui.hideModal(); } }, 'Отмена'),

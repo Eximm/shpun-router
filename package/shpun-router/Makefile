@@ -2,7 +2,8 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=shpun-router
 PKG_VERSION:=1.1.7
-PKG_RELEASE:=3
+PKG_RELEASE:=4
+SHPUN_LUCI_TAG:=$(subst .,_,$(PKG_VERSION))_r$(PKG_RELEASE)
 
 PKG_MAINTAINER:=Shpun VPN
 PKG_LICENSE:=MIT
@@ -59,6 +60,7 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_BIN) ./files/etc/shpun/build-config.sh          $(1)/etc/shpun/build-config.sh
 	$(INSTALL_BIN) ./files/etc/shpun/rebuild-config-deferred.sh $(1)/etc/shpun/rebuild-config-deferred.sh
 	$(INSTALL_BIN) ./files/etc/shpun/switch-server.sh         $(1)/etc/shpun/switch-server.sh
+	$(INSTALL_BIN) ./files/etc/shpun/auto-failover.sh         $(1)/etc/shpun/auto-failover.sh
 	$(INSTALL_BIN) ./files/etc/shpun/gen_code.sh              $(1)/etc/shpun/gen_code.sh
 	$(INSTALL_BIN) ./files/etc/shpun/firewall-xray.sh         $(1)/etc/shpun/firewall-xray.sh
 	$(INSTALL_BIN) ./files/etc/shpun/dns-xray.sh              $(1)/etc/shpun/dns-xray.sh
@@ -91,10 +93,12 @@ define Package/$(PKG_NAME)/install
 	# --- Status widget descriptor (JSON) ---
 	$(INSTALL_DATA) ./files/usr/share/luci/status/include/01_shpunvpn.json \
 		$(1)/usr/share/luci/status/include/01_shpunvpn.json
+	$(SED) 's|status/include/01_shpunvpn|status/include/01_shpunvpn_$(SHPUN_LUCI_TAG)|' \
+		$(1)/usr/share/luci/status/include/01_shpunvpn.json
 
 	# --- Status widget JS ---
 	$(INSTALL_DATA) ./files/www/luci-static/resources/view/status/include/01_shpunvpn.js \
-		$(1)/www/luci-static/resources/view/status/include/01_shpunvpn.js
+		$(1)/www/luci-static/resources/view/status/include/01_shpunvpn_$(SHPUN_LUCI_TAG).js
 
 	# --- uci-defaults ---
 	$(INSTALL_BIN) ./files/etc/uci-defaults/99_shpun-router   $(1)/etc/uci-defaults/99_shpun-router

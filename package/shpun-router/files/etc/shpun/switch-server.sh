@@ -175,6 +175,9 @@ if ! mv "$SELECTED_CANDIDATE" "$SELECTED_LINK_FILE"; then
 fi
 
 rm -f "$CONFIG_BACKUP" "$CONFIG_PENDING_FILE" "$CONFIG_ACTIVE_FILE" "$VERROR_FILE" "$VPN_READY_FILE"
+if [ "${SHPUN_AUTO_FAILOVER:-0}" != "1" ]; then
+	rm -f /etc/shpun/auto_failover_last_attempt /etc/shpun/auto_failover_last_success /etc/shpun/auto_failover_from
+fi
 log "server index $NEW_INDEX validated, restarting VPN once to apply it"
 /etc/init.d/shpun-vpn stop >/dev/null 2>&1 || true
 /etc/init.d/shpun-agent restart >/dev/null 2>&1 &
