@@ -1,8 +1,8 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=shpun-router
-PKG_VERSION:=1.1.7
-PKG_RELEASE:=4
+PKG_VERSION:=1.1.8
+PKG_RELEASE:=1
 SHPUN_LUCI_TAG:=$(subst .,_,$(PKG_VERSION))_r$(PKG_RELEASE)
 
 PKG_MAINTAINER:=Shpun VPN
@@ -28,6 +28,7 @@ Shpun Router Integration:
  - OTA firmware update (from widget)
  - subscription server selection from LuCI widget
  - live server latency in the LuCI server list
+ - automatic server selection by latency and verified tunnel quality
  - route feed update for split routing and smart RU presets
  - routing mode switch: full / smart_ru / split_ru
  - custom routing rules: force VPN / direct for IP, CIDR and domains

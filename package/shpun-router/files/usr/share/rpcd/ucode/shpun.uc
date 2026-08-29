@@ -37,6 +37,8 @@ const ROUTING_SETTER  = DIR + "/set-routing-mode.sh";
 const CUSTOM_FILE     = ROUTES_DIR + "/custom.json";
 const CUSTOM_SCRIPT   = DIR + "/apply-custom-routes.sh";
 const SERVER_SETTER   = DIR + "/switch-server.sh";
+const SERVER_AUTO     = DIR + "/auto-failover.sh";
+const SERVER_AUTO_STATUS = DIR + "/auto_select_status";
 
 function readfile(path) {
 	try {
@@ -940,6 +942,57 @@ return {
 						return { ok: 0, error: out || "server profile validation failed", output: out };
 
 					return { ok: 1, selected: idx };
+				} catch(e) {
+					return { ok: 0, error: ("" + e) };
+				}
+			}
+		},
+
+		server_auto_start: {
+			args: { candidates: [] },
+			call: function(req) {
+				try {
+					if (!exists(SERVER_AUTO))
+						return { ok: 0, error: "auto-failover.sh not found" };
+					if (trim(readcmd("test -d /tmp/shpun-auto-failover.lock && echo busy")) == "busy")
+						return { ok: 0, error: "automatic selection is already running", busy: true };
+
+					let input = (req && req.args && type(req.args.candidates) == "array") ? req.args.candidates : [];
+					let values = [];
+					let list = "";
+					for (let i = 0; i < length(input); i++) {
+						let idx = int(input[i]);
+						if (idx < 0 || idx > 9999)
+							continue;
+						let token = "" + idx;
+						if (index(values, token) >= 0)
+							continue;
+						push(values, token);
+						list += (list ? " " : "") + token;
+					}
+					if (!list)
+						return { ok: 0, error: "no server candidates" };
+
+					let f = open(SERVER_AUTO_STATUS, "w");
+					if (f) { f.write("starting\n"); f.close(); }
+					let p = popen("AUTO_FAILOVER_CANDIDATES='" + list + "' AUTO_FAILOVER_IGNORE_COOLDOWN=1 " + SERVER_AUTO + " >/dev/null 2>&1 &");
+					if (!p)
+						return { ok: 0, error: "failed to start automatic selection" };
+					p.close();
+					return { ok: 1, started: true, count: length(values) };
+				} catch(e) {
+					return { ok: 0, error: ("" + e) };
+				}
+			}
+		},
+
+		server_auto_status: {
+			call: function(req) {
+				try {
+					let status = trim(readfile(SERVER_AUTO_STATUS));
+					let selected = int(trim(readfile(SELECTED_LINK) || "0"));
+					let running = status == "starting" || status == "running";
+					return { ok: 1, status: status || "idle", running: running, selected: selected };
 				} catch(e) {
 					return { ok: 0, error: ("" + e) };
 				}

@@ -120,6 +120,12 @@ var callShpunServersGet = rpc.declare({
 var callShpunServerSet = rpc.declare({
 	object: 'shpun', method: 'server_set', params: ['index'], expect: { '': {} }
 });
+var callShpunServerAutoStart = rpc.declare({
+	object: 'shpun', method: 'server_auto_start', params: ['candidates'], expect: { '': {} }
+});
+var callShpunServerAutoStatus = rpc.declare({
+	object: 'shpun', method: 'server_auto_status', expect: { '': {} }
+});
 
 function waitForRoutingMode(targetMode, timeoutMs) {
 	var started = Date.now();
@@ -238,10 +244,11 @@ function injectStyles() {
 		+ '.shpun-modal-input:focus{border-color:rgba(140,130,255,.45);background:rgba(12,22,44,.80);}'
 		+ '.shpun-modal-input::placeholder{color:#4a5568;}'
 		+ '.shpun-server-note{margin:10px 0 12px;padding:10px 12px;border-radius:10px;background:rgba(250,204,21,.10);border:1px solid rgba(250,204,21,.22);color:#fde68a;font-size:12px;line-height:1.45;}'
-		+ '.shpun-server-switch{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:10px;padding:4px;border:1px solid rgba(120,140,180,.16);border-radius:11px;background:rgba(8,16,32,.48);}'
+		+ '.shpun-server-switch{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin-top:10px;padding:4px;border:1px solid rgba(120,140,180,.16);border-radius:11px;background:rgba(8,16,32,.48);}'
 		+ '.shpun-server-switch-btn{padding:7px 10px;border:1px solid transparent;border-radius:8px;background:transparent;color:#94a3b8;font-size:12px;font-weight:850;cursor:pointer;transition:all .14s ease;}'
 		+ '.shpun-server-switch-btn:hover{color:#e2e8f0;background:rgba(30,41,59,.56);}'
 		+ '.shpun-server-switch-btn.is-active{color:#eef2ff;background:rgba(79,70,229,.30);border-color:rgba(129,140,248,.36);box-shadow:inset 0 1px 0 rgba(255,255,255,.04);}'
+		+ '.shpun-server-switch-btn.is-auto{color:#d1fae5;background:rgba(5,150,105,.18);border-color:rgba(52,211,153,.28);}'
 		+ '.shpun-server-switch-btn:disabled{opacity:.38;cursor:default;}'
 		+ '.shpun-server-list{max-height:310px;overflow-y:auto;margin-top:10px;border:1px solid rgba(120,140,180,.18);border-radius:12px;padding:6px;background:rgba(8,16,32,.50);display:flex;flex-direction:column;gap:5px;}'
 		+ '.shpun-server-row{width:100%;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:10px;padding:9px 11px;border:1px solid rgba(120,140,180,.14);border-radius:9px;background:rgba(14,23,38,.72);color:#e6edf8;text-align:left;cursor:pointer;transition:all .14s ease;}'
@@ -658,6 +665,7 @@ function openServersModal() {
 		var activeGroup = 'gateway';
 		var gatewayButton;
 		var directButton;
+		var autoButton;
 
 		function markSelected() {
 			rows.forEach(function(row) {
@@ -676,6 +684,7 @@ function openServersModal() {
 			});
 			gatewayButton.className = 'shpun-server-switch-btn' + (activeGroup === 'gateway' ? ' is-active' : '');
 			directButton.className = 'shpun-server-switch-btn' + (activeGroup === 'direct' ? ' is-active' : '');
+			autoButton.textContent = activeGroup === 'gateway' ? '⚡ Авто через РФ' : '⚡ Авто напрямую';
 			list.scrollTop = 0;
 		}
 
@@ -714,7 +723,7 @@ function openServersModal() {
 				E('span', { 'class': 'shpun-server-location', 'title': location }, location),
 				meta
 			]);
-			rows.push({ index: s.index, node: row, badge: badge, group: group });
+			rows.push({ index: s.index, node: row, badge: badge, group: group, latency: hasLatency ? latency : null });
 		});
 
 		gatewayButton = E('button', {
@@ -729,7 +738,64 @@ function openServersModal() {
 			'disabled': groupCounts.direct === 0 ? true : null,
 			'click': function(ev) { ev.preventDefault(); activeGroup = 'direct'; renderGroup(); }
 		}, 'Напрямую · ' + groupCounts.direct);
-		var serverSwitch = E('div', { 'class': 'shpun-server-switch' }, [ gatewayButton, directButton ]);
+		autoButton = E('button', {
+			'type': 'button',
+			'class': 'shpun-server-switch-btn is-auto',
+			'click': function(ev) {
+				ev.preventDefault();
+				var candidates = rows.filter(function(row) { return row.group === activeGroup; });
+				candidates.sort(function(a, b) {
+					if (a.latency == null && b.latency == null) return a.index - b.index;
+					if (a.latency == null) return 1;
+					if (b.latency == null) return -1;
+					return a.latency - b.latency || a.index - b.index;
+				});
+				var indexes = candidates.map(function(row) { return row.index; });
+				if (!indexes.length) return;
+
+				autoButton.disabled = true;
+				callShpunServerAutoStart(indexes).then(function(result) {
+					result = result || {};
+					if (!result.ok) {
+						autoButton.disabled = false;
+						ui.addNotification(null, E('p', {}, 'Не удалось запустить автовыбор: ' + (result.error || 'ошибка')), 'error');
+						return;
+					}
+
+					ui.hideModal();
+					ui.addNotification(null, E('p', {}, 'Автовыбор запущен. Роутер проверяет серверы по отклику и качеству туннеля.'), 'info');
+					var startedAt = Date.now();
+					var poll = function() {
+						callShpunServerAutoStatus().then(function(statusResult) {
+							statusResult = statusResult || {};
+							var status = String(statusResult.status || '');
+							if (statusResult.running || status === 'starting') {
+								if (Date.now() - startedAt < 360000)
+									window.setTimeout(poll, 2500);
+								else
+									ui.addNotification(null, E('p', {}, 'Проверка серверов занимает слишком много времени. Роутер продолжит её в фоне.'), 'warning');
+								return;
+							}
+							if (status.indexOf('ok:') === 0) {
+								ui.addNotification(null, E('p', {}, 'Рабочий сервер выбран автоматически.'), 'info');
+								window.setTimeout(function() { window.location.reload(); }, 1200);
+							} else if (status.indexOf('failed:') === 0) {
+								ui.addNotification(null, E('p', {}, 'Рабочий сервер в этом разделе не найден. Исходный сервер восстановлен.'), 'error');
+							} else if (status.indexOf('error:') === 0) {
+								ui.addNotification(null, E('p', {}, 'Автовыбор не запустился. Повторите попытку через несколько секунд.'), 'error');
+							} else {
+								window.setTimeout(poll, 1000);
+							}
+						}).catch(function() { window.setTimeout(poll, 2500); });
+					};
+					window.setTimeout(poll, 1500);
+				}).catch(function(err) {
+					autoButton.disabled = false;
+					ui.addNotification(null, E('p', {}, 'Ошибка автовыбора: ' + String(err)), 'error');
+				});
+			}
+		}, '⚡ Авто');
+		var serverSwitch = E('div', { 'class': 'shpun-server-switch' }, [ gatewayButton, directButton, autoButton ]);
 		renderGroup();
 
 		ui.showModal('Серверы VPN', [

@@ -9,6 +9,7 @@ VPN_READY_FILE="${VPN_READY_FILE:-$STATE_DIR/vpn_ready}"
 LAST_ATTEMPT_FILE="$STATE_DIR/auto_failover_last_attempt"
 LAST_SUCCESS_FILE="$STATE_DIR/auto_failover_last_success"
 FROM_FILE="$STATE_DIR/auto_failover_from"
+AUTO_SELECT_STATUS_FILE="$STATE_DIR/auto_select_status"
 LOCKDIR="/tmp/shpun-auto-failover.lock"
 LOGTAG="shpun-failover"
 
@@ -143,16 +144,30 @@ case "$AUTO_FAILOVER_MAX_CANDIDATES" in ''|*[!0-9]*) AUTO_FAILOVER_MAX_CANDIDATE
 case "$AUTO_FAILOVER_READY_TIMEOUT" in ''|*[!0-9]*) AUTO_FAILOVER_READY_TIMEOUT="$AUTO_FAILOVER_READY_TIMEOUT_DEFAULT" ;; esac
 case "$TUNNEL_QUALITY_PROBE_MIN_BYTES" in ''|*[!0-9]*) TUNNEL_QUALITY_PROBE_MIN_BYTES="$TUNNEL_QUALITY_PROBE_MIN_BYTES_DEFAULT" ;; esac
 
-lock_acquire || exit 0
+MANUAL_SELECT=0
+if [ -n "${AUTO_FAILOVER_CANDIDATES:-}" ]; then
+	MANUAL_SELECT=1
+fi
+
+if ! lock_acquire; then
+	[ "$MANUAL_SELECT" -eq 1 ] && printf '%s\n' "error:busy" > "$AUTO_SELECT_STATUS_FILE"
+	exit 0
+fi
+
+if [ "$MANUAL_SELECT" -eq 1 ]; then
+	printf '%s\n' "running" > "$AUTO_SELECT_STATUS_FILE"
+fi
 
 [ -s "$SUB_FILE" ] && [ -x "$SWITCH_SCRIPT" ] || {
 	log "automatic failover is not ready: subscription or switch script is missing"
+	[ "$MANUAL_SELECT" -eq 1 ] && printf '%s\n' "error:not_ready" > "$AUTO_SELECT_STATUS_FILE"
 	exit 1
 }
 
 detect_http_client
 [ -n "$HTTP_BIN" ] || {
 	log "automatic failover is not ready: no HTTP client"
+	[ "$MANUAL_SELECT" -eq 1 ] && printf '%s\n' "error:no_http_client" > "$AUTO_SELECT_STATUS_FILE"
 	exit 1
 }
 
@@ -161,7 +176,8 @@ last="$(cat "$LAST_ATTEMPT_FILE" 2>/dev/null | tr -d '\r\n ' || echo 0)"
 case "$now" in ''|*[!0-9]*) now=0 ;; esac
 case "$last" in ''|*[!0-9]*) last=0 ;; esac
 age=$((now - last))
-if [ "$last" -gt 0 ] && [ "$age" -ge 0 ] && [ "$age" -lt "$AUTO_FAILOVER_COOLDOWN" ]; then
+if [ "${AUTO_FAILOVER_IGNORE_COOLDOWN:-0}" != "1" ] &&
+	[ "$last" -gt 0 ] && [ "$age" -ge 0 ] && [ "$age" -lt "$AUTO_FAILOVER_COOLDOWN" ]; then
 	log "automatic failover cooldown is active (${age}s/${AUTO_FAILOVER_COOLDOWN}s)"
 	exit 0
 fi
@@ -171,28 +187,59 @@ current="$(cat "$SELECTED_LINK_FILE" 2>/dev/null | tr -d '\r\n ' || echo 0)"
 case "$current" in ''|*[!0-9]*) current=0 ;; esac
 count="$(jsonfilter -i "$SUB_FILE" -e '@.subscription.links[*]' 2>/dev/null | wc -l | tr -d ' ')"
 case "$count" in ''|*[!0-9]*) count=0 ;; esac
-[ "$count" -gt 1 ] || {
+[ "$count" -gt 0 ] || {
 	log "automatic failover cannot run: subscription has $count server(s)"
+	[ "$MANUAL_SELECT" -eq 1 ] && printf '%s\n' "error:no_servers" > "$AUTO_SELECT_STATUS_FILE"
+	exit 1
+}
+[ "$MANUAL_SELECT" -eq 1 ] || [ "$count" -gt 1 ] || {
+	log "automatic failover cannot run: subscription has no alternative servers"
 	exit 1
 }
 [ "$current" -lt "$count" ] || current=0
 
 limit="$AUTO_FAILOVER_MAX_CANDIDATES"
 [ "$limit" -gt 0 ] 2>/dev/null || limit="$AUTO_FAILOVER_MAX_CANDIDATES_DEFAULT"
-[ "$limit" -lt "$count" ] || limit=$((count - 1))
+if [ "$MANUAL_SELECT" -eq 1 ]; then
+	[ "$limit" -le "$count" ] || limit="$count"
+else
+	[ "$limit" -lt "$count" ] || limit=$((count - 1))
+fi
 
-log "tunnel failure confirmed; trying up to $limit alternative servers from current index $current"
-offset=1
+if [ "$MANUAL_SELECT" -eq 1 ]; then
+	log "manual automatic selection started; testing up to $limit servers from current index $current"
+else
+	log "tunnel failure confirmed; trying up to $limit alternative servers from current index $current"
+fi
 tried=0
-while [ "$offset" -lt "$count" ] && [ "$tried" -lt "$limit" ]; do
-	candidate=$(((current + offset) % count))
-	offset=$((offset + 1))
+
+if [ "$MANUAL_SELECT" -eq 1 ]; then
+	candidate_list="$AUTO_FAILOVER_CANDIDATES"
+else
+	offset=1
+	candidate_list=""
+	while [ "$offset" -lt "$count" ]; do
+		candidate_list="$candidate_list $(((current + offset) % count))"
+		offset=$((offset + 1))
+	done
+fi
+
+for candidate in $candidate_list; do
+	case "$candidate" in ''|*[!0-9]*) continue ;; esac
+	[ "$candidate" -lt "$count" ] || continue
+	[ "$tried" -lt "$limit" ] || break
 	tried=$((tried + 1))
 
 	log "trying server index $candidate ($tried/$limit)"
+	if [ "$candidate" -eq "$current" ] && probe_tunnel; then
+		[ "$MANUAL_SELECT" -eq 1 ] && printf 'ok:%s\n' "$candidate" > "$AUTO_SELECT_STATUS_FILE"
+		log "automatic selection kept working server index $candidate"
+		exit 0
+	fi
 	if switch_to "$candidate" && wait_for_candidate; then
 		printf '%s\n' "$current" > "$FROM_FILE"
 		date +%s > "$LAST_SUCCESS_FILE" 2>/dev/null || true
+		[ "$MANUAL_SELECT" -eq 1 ] && printf 'ok:%s\n' "$candidate" > "$AUTO_SELECT_STATUS_FILE"
 		log "automatic failover succeeded: server index $current -> $candidate"
 		exit 0
 	fi
@@ -201,4 +248,5 @@ done
 
 log "no tested server restored the tunnel; returning to original index $current"
 switch_to "$current" || true
+[ "$MANUAL_SELECT" -eq 1 ] && printf 'failed:%s\n' "$current" > "$AUTO_SELECT_STATUS_FILE"
 exit 1

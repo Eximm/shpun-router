@@ -9,7 +9,8 @@
           "routing_get",
           "ota_check",
           "custom_routes_get",
-          "servers_get"
+          "servers_get",
+          "server_auto_status"
         ]
       }
     },
@@ -21,7 +22,8 @@
           "refresh_connection",
           "reset_vpn",
           "custom_routes_set",
-          "server_set"
+          "server_set",
+          "server_auto_start"
         ]
       }
     }
