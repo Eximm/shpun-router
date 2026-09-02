@@ -12,10 +12,42 @@ CONFIG_ACTIVE_FILE="/etc/shpun/xray_config_active"
 CONFIG_PENDING_FILE="/etc/shpun/xray_config_pending"
 VPN_READY_FILE="/etc/shpun/vpn_ready"
 VERROR_FILE="/etc/shpun/vpn_error"
-CONFIG_LOCKDIR="/tmp/shpun-config.lock"
+CONFIG_LOCKDIR="${CONFIG_LOCKDIR:-/tmp/shpun-config.lock}"
+SELECTION_LOCKDIR="${AUTO_FAILOVER_LOCKDIR:-/tmp/shpun-auto-failover.lock}"
+SELECTION_LOCK_HELD=0
+CONFIG_LOCK_HELD=0
 
 log() {
 	logger -t "$LOGTAG" "$*"
+}
+
+cleanup_locks() {
+	if [ "$CONFIG_LOCK_HELD" -eq 1 ]; then
+		rm -f "$CONFIG_LOCKDIR/pid" 2>/dev/null
+		rmdir "$CONFIG_LOCKDIR" 2>/dev/null || true
+	fi
+	if [ "$SELECTION_LOCK_HELD" -eq 1 ]; then
+		rm -f "$SELECTION_LOCKDIR/pid" 2>/dev/null
+		rmdir "$SELECTION_LOCKDIR" 2>/dev/null || true
+	fi
+}
+
+lock_manual_selection() {
+	[ "${SHPUN_AUTO_FAILOVER:-0}" = "1" ] && return 0
+
+	if ! mkdir "$SELECTION_LOCKDIR" 2>/dev/null; then
+		lock_pid="$(cat "$SELECTION_LOCKDIR/pid" 2>/dev/null || true)"
+		case "$lock_pid" in
+			''|*[!0-9]*) return 1 ;;
+			*) kill -0 "$lock_pid" 2>/dev/null && return 1 ;;
+		esac
+		rm -f "$SELECTION_LOCKDIR/pid" 2>/dev/null
+		rmdir "$SELECTION_LOCKDIR" 2>/dev/null || return 1
+		mkdir "$SELECTION_LOCKDIR" 2>/dev/null || return 1
+	fi
+	echo "$$" > "$SELECTION_LOCKDIR/pid"
+	SELECTION_LOCK_HELD=1
+	return 0
 }
 
 lock_config() {
@@ -47,7 +79,7 @@ lock_config() {
 	done
 
 	echo "$$" > "$CONFIG_LOCKDIR/pid"
-	trap 'rm -f "$CONFIG_LOCKDIR/pid" 2>/dev/null; rmdir "$CONFIG_LOCKDIR" 2>/dev/null' EXIT INT TERM
+	CONFIG_LOCK_HELD=1
 	return 0
 }
 
@@ -100,6 +132,14 @@ case "$NEW_INDEX" in
 		exit 1
 		;;
 esac
+
+trap cleanup_locks EXIT
+trap 'cleanup_locks; exit 1' INT TERM
+if ! lock_manual_selection; then
+	log "cannot switch server manually: automatic selection is running"
+	echo "automatic_selection_busy"
+	exit 1
+fi
 
 [ -f "$CONF" ] && . "$CONF"
 [ -z "$ENGINE_BIN" ] && ENGINE_BIN="$ENGINE_BIN_DEFAULT"

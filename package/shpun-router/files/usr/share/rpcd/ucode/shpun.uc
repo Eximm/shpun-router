@@ -899,6 +899,9 @@ return {
 			args: { index: 0 },
 			call: function(req) {
 				try {
+					if (trim(readcmd("test -d /tmp/shpun-auto-failover.lock && echo busy")) == "busy")
+						return { ok: 0, error: "automatic selection is running", busy: true };
+
 					let idx = 0;
 					if (req && req.args && req.args.index != null)
 						idx = int(req.args.index);

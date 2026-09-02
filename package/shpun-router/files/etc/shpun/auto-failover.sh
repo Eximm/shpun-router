@@ -10,7 +10,7 @@ LAST_ATTEMPT_FILE="$STATE_DIR/auto_failover_last_attempt"
 LAST_SUCCESS_FILE="$STATE_DIR/auto_failover_last_success"
 FROM_FILE="$STATE_DIR/auto_failover_from"
 AUTO_SELECT_STATUS_FILE="$STATE_DIR/auto_select_status"
-LOCKDIR="/tmp/shpun-auto-failover.lock"
+LOCKDIR="${AUTO_FAILOVER_LOCKDIR:-/tmp/shpun-auto-failover.lock}"
 LOGTAG="shpun-failover"
 
 AUTO_FAILOVER_COOLDOWN_DEFAULT=600
@@ -22,6 +22,8 @@ TUNNEL_PROBE_FALLBACK_URL_DEFAULT="http://cp.cloudflare.com/generate_204"
 TUNNEL_PROBE_SECONDARY_URL_DEFAULT="http://connectivitycheck.gstatic.com/generate_204"
 TUNNEL_QUALITY_PROBE_URL_DEFAULT="https://speed.cloudflare.com/__down?bytes=8192"
 TUNNEL_QUALITY_PROBE_MIN_BYTES_DEFAULT=8192
+TUNNEL_QUALITY_CONFIRM_URLS_DEFAULT="https://telegram.org/ https://connectivitycheck.gstatic.com/generate_204 https://www.cloudflare.com/cdn-cgi/trace"
+TUNNEL_QUALITY_CONFIRM_MIN_SUCCESS_DEFAULT=2
 
 log() {
 	logger -t "$LOGTAG" "$*"
@@ -78,7 +80,7 @@ probe_url_through_tunnel() {
 	esac
 }
 
-probe_tunnel_quality() {
+probe_tunnel_quality_transfer() {
 	proxy="http://127.0.0.1:${HTTP_PROXY_PORT}"
 	tmp="/tmp/shpun-failover-quality.$$"
 	[ "$HTTP_BIN" = "curl" ] || return 0
@@ -93,6 +95,24 @@ probe_tunnel_quality() {
 	rm -f "$tmp"
 	case "$bytes" in ''|*[!0-9]*) return 1 ;; esac
 	[ "$bytes" -ge "$TUNNEL_QUALITY_PROBE_MIN_BYTES" ]
+}
+
+probe_tunnel_quality() {
+	probe_tunnel_quality_transfer && return 0
+
+	success=0
+	total=0
+	for quality_url in $TUNNEL_QUALITY_CONFIRM_URLS; do
+		[ -n "$quality_url" ] || continue
+		total=$((total + 1))
+		if probe_url_through_tunnel "$quality_url"; then
+			success=$((success + 1))
+			[ "$success" -ge "$TUNNEL_QUALITY_CONFIRM_MIN_SUCCESS" ] && return 0
+		fi
+	done
+
+	log "candidate quality confirmation failed (${success}/${total} HTTPS probes succeeded)"
+	return 1
 }
 
 probe_tunnel() {
@@ -138,11 +158,15 @@ switch_to() {
 [ -z "$TUNNEL_PROBE_SECONDARY_URL" ] && TUNNEL_PROBE_SECONDARY_URL="$TUNNEL_PROBE_SECONDARY_URL_DEFAULT"
 [ -z "$TUNNEL_QUALITY_PROBE_URL" ] && TUNNEL_QUALITY_PROBE_URL="$TUNNEL_QUALITY_PROBE_URL_DEFAULT"
 [ -z "$TUNNEL_QUALITY_PROBE_MIN_BYTES" ] && TUNNEL_QUALITY_PROBE_MIN_BYTES="$TUNNEL_QUALITY_PROBE_MIN_BYTES_DEFAULT"
+[ -z "$TUNNEL_QUALITY_CONFIRM_URLS" ] && TUNNEL_QUALITY_CONFIRM_URLS="$TUNNEL_QUALITY_CONFIRM_URLS_DEFAULT"
+[ -z "$TUNNEL_QUALITY_CONFIRM_MIN_SUCCESS" ] && TUNNEL_QUALITY_CONFIRM_MIN_SUCCESS="$TUNNEL_QUALITY_CONFIRM_MIN_SUCCESS_DEFAULT"
 
 case "$AUTO_FAILOVER_COOLDOWN" in ''|*[!0-9]*) AUTO_FAILOVER_COOLDOWN="$AUTO_FAILOVER_COOLDOWN_DEFAULT" ;; esac
 case "$AUTO_FAILOVER_MAX_CANDIDATES" in ''|*[!0-9]*) AUTO_FAILOVER_MAX_CANDIDATES="$AUTO_FAILOVER_MAX_CANDIDATES_DEFAULT" ;; esac
 case "$AUTO_FAILOVER_READY_TIMEOUT" in ''|*[!0-9]*) AUTO_FAILOVER_READY_TIMEOUT="$AUTO_FAILOVER_READY_TIMEOUT_DEFAULT" ;; esac
 case "$TUNNEL_QUALITY_PROBE_MIN_BYTES" in ''|*[!0-9]*) TUNNEL_QUALITY_PROBE_MIN_BYTES="$TUNNEL_QUALITY_PROBE_MIN_BYTES_DEFAULT" ;; esac
+case "$TUNNEL_QUALITY_CONFIRM_MIN_SUCCESS" in ''|*[!0-9]*) TUNNEL_QUALITY_CONFIRM_MIN_SUCCESS="$TUNNEL_QUALITY_CONFIRM_MIN_SUCCESS_DEFAULT" ;; esac
+[ "$TUNNEL_QUALITY_CONFIRM_MIN_SUCCESS" -gt 0 ] 2>/dev/null || TUNNEL_QUALITY_CONFIRM_MIN_SUCCESS="$TUNNEL_QUALITY_CONFIRM_MIN_SUCCESS_DEFAULT"
 
 MANUAL_SELECT=0
 if [ -n "${AUTO_FAILOVER_CANDIDATES:-}" ]; then

@@ -66,6 +66,9 @@ TUNNEL_PROBE_FALLBACK_URL_DEFAULT="http://cp.cloudflare.com/generate_204"
 TUNNEL_PROBE_SECONDARY_URL_DEFAULT="http://connectivitycheck.gstatic.com/generate_204"
 TUNNEL_QUALITY_PROBE_URL_DEFAULT="https://speed.cloudflare.com/__down?bytes=8192"
 TUNNEL_QUALITY_PROBE_MIN_BYTES_DEFAULT=8192
+TUNNEL_QUALITY_CONFIRM_URLS_DEFAULT="https://telegram.org/ https://connectivitycheck.gstatic.com/generate_204 https://www.cloudflare.com/cdn-cgi/trace"
+TUNNEL_QUALITY_CONFIRM_MIN_SUCCESS_DEFAULT=2
+TUNNEL_QUALITY_FAIL_TIMEOUT_DEFAULT=300
 DNS_BOOTSTRAP_ENABLE_DEFAULT=1
 DNS_BOOTSTRAP_SERVERS_DEFAULT="77.88.8.8 77.88.8.1 1.1.1.1 1.0.0.1 8.8.8.8 8.8.4.4 9.9.9.9"
 DNS_BOOTSTRAP_TEST_DOMAINS_DEFAULT="router.shpun.net spb.shpyn.online"
@@ -759,9 +762,22 @@ load_conf() {
 	[ -z "$TUNNEL_PROBE_SECONDARY_URL" ] && TUNNEL_PROBE_SECONDARY_URL="$TUNNEL_PROBE_SECONDARY_URL_DEFAULT"
 	[ -z "$TUNNEL_QUALITY_PROBE_URL" ] && TUNNEL_QUALITY_PROBE_URL="$TUNNEL_QUALITY_PROBE_URL_DEFAULT"
 	[ -z "$TUNNEL_QUALITY_PROBE_MIN_BYTES" ] && TUNNEL_QUALITY_PROBE_MIN_BYTES="$TUNNEL_QUALITY_PROBE_MIN_BYTES_DEFAULT"
+	[ -z "$TUNNEL_QUALITY_CONFIRM_URLS" ] && TUNNEL_QUALITY_CONFIRM_URLS="$TUNNEL_QUALITY_CONFIRM_URLS_DEFAULT"
+	[ -z "$TUNNEL_QUALITY_CONFIRM_MIN_SUCCESS" ] && TUNNEL_QUALITY_CONFIRM_MIN_SUCCESS="$TUNNEL_QUALITY_CONFIRM_MIN_SUCCESS_DEFAULT"
+	[ -z "$TUNNEL_QUALITY_FAIL_TIMEOUT" ] && TUNNEL_QUALITY_FAIL_TIMEOUT="$TUNNEL_QUALITY_FAIL_TIMEOUT_DEFAULT"
 	case "$TUNNEL_QUALITY_PROBE_MIN_BYTES" in
 		''|*[!0-9]*) TUNNEL_QUALITY_PROBE_MIN_BYTES="$TUNNEL_QUALITY_PROBE_MIN_BYTES_DEFAULT" ;;
 	esac
+	case "$TUNNEL_QUALITY_CONFIRM_MIN_SUCCESS" in
+		''|*[!0-9]*) TUNNEL_QUALITY_CONFIRM_MIN_SUCCESS="$TUNNEL_QUALITY_CONFIRM_MIN_SUCCESS_DEFAULT" ;;
+	esac
+	[ "$TUNNEL_QUALITY_CONFIRM_MIN_SUCCESS" -gt 0 ] 2>/dev/null || \
+		TUNNEL_QUALITY_CONFIRM_MIN_SUCCESS="$TUNNEL_QUALITY_CONFIRM_MIN_SUCCESS_DEFAULT"
+	case "$TUNNEL_QUALITY_FAIL_TIMEOUT" in
+		''|*[!0-9]*) TUNNEL_QUALITY_FAIL_TIMEOUT="$TUNNEL_QUALITY_FAIL_TIMEOUT_DEFAULT" ;;
+	esac
+	[ "$TUNNEL_QUALITY_FAIL_TIMEOUT" -ge "$TUNNEL_PROBE_INTERVAL" ] 2>/dev/null || \
+		TUNNEL_QUALITY_FAIL_TIMEOUT="$TUNNEL_PROBE_INTERVAL"
 	[ -z "$DNS_BOOTSTRAP_ENABLE" ] && DNS_BOOTSTRAP_ENABLE="$DNS_BOOTSTRAP_ENABLE_DEFAULT"
 	[ -z "$DNS_BOOTSTRAP_SERVERS" ] && DNS_BOOTSTRAP_SERVERS="$DNS_BOOTSTRAP_SERVERS_DEFAULT"
 	[ -z "$DNS_BOOTSTRAP_TEST_DOMAINS" ] && DNS_BOOTSTRAP_TEST_DOMAINS="$DNS_BOOTSTRAP_TEST_DOMAINS_DEFAULT"
@@ -2143,7 +2159,7 @@ probe_url_through_tunnel() {
 	esac
 }
 
-probe_tunnel_quality() {
+probe_tunnel_quality_transfer() {
 	local proxy="http://127.0.0.1:${HTTP_PROXY_PORT}"
 	local tmp="/tmp/shpun-quality-probe.$$" bytes
 
@@ -2160,6 +2176,24 @@ probe_tunnel_quality() {
 	rm -f "$tmp"
 	case "$bytes" in ''|*[!0-9]*) return 1 ;; esac
 	[ "$bytes" -ge "$TUNNEL_QUALITY_PROBE_MIN_BYTES" ]
+}
+
+probe_tunnel_quality() {
+	local url success=0 total=0
+
+	probe_tunnel_quality_transfer && return 0
+
+	for url in $TUNNEL_QUALITY_CONFIRM_URLS; do
+		[ -n "$url" ] || continue
+		total=$((total + 1))
+		if probe_url_through_tunnel "$url"; then
+			success=$((success + 1))
+			[ "$success" -ge "$TUNNEL_QUALITY_CONFIRM_MIN_SUCCESS" ] && return 0
+		fi
+	done
+
+	log "tunnel quality confirmation failed (${success}/${total} HTTPS probes succeeded)"
+	return 1
 }
 
 seconds_to_ms() {
@@ -2317,8 +2351,9 @@ check_tunnel_connectivity() {
 	check_tunnel_connectivity_basic || return 1
 	probe_tunnel_quality || {
 		log "tunnel quality probe failed"
-		return 1
+		return 2
 	}
+	return 0
 }
 
 ensure_transparent_rules() {
@@ -3105,8 +3140,10 @@ main_loop() {
 	log "shpun-agent started (API_URL=$API_URL, ENGINE_BIN=$ENGINE_BIN, ENGINE_URL=$ENGINE_URL, ROUTES_URL_BASE=$ROUTES_URL_BASE, MIN_UPTIME=$MIN_UPTIME, NET_FAIL_TIMEOUT=$NET_FAIL_TIMEOUT, PING_HOST=$PING_HOST)"
 
 	NET_FAIL_SECONDS=0
-	TUNNEL_FAIL_SECONDS=0
-	TUNNEL_PROBE_WARNED=0
+	TUNNEL_BASIC_FAIL_SECONDS=0
+	TUNNEL_QUALITY_FAIL_SECONDS=0
+	TUNNEL_BASIC_WARNED=0
+	TUNNEL_QUALITY_WARNED=0
 	LAST_TUNNEL_PROBE=0
 
 	while :; do
@@ -3162,27 +3199,48 @@ main_loop() {
 					LAST_TUNNEL_PROBE="$NOW_TS"
 
 					if check_tunnel_connectivity; then
-						[ "$TUNNEL_FAIL_SECONDS" -gt 0 ] && log "tunnel probe recovered after ${TUNNEL_FAIL_SECONDS}s"
-						TUNNEL_FAIL_SECONDS=0
-						TUNNEL_PROBE_WARNED=0
+						[ "$TUNNEL_BASIC_FAIL_SECONDS" -gt 0 ] && log "basic tunnel probe recovered after ${TUNNEL_BASIC_FAIL_SECONDS}s"
+						[ "$TUNNEL_QUALITY_FAIL_SECONDS" -gt 0 ] && log "tunnel quality recovered after ${TUNNEL_QUALITY_FAIL_SECONDS}s"
+						TUNNEL_BASIC_FAIL_SECONDS=0
+						TUNNEL_QUALITY_FAIL_SECONDS=0
+						TUNNEL_BASIC_WARNED=0
+						TUNNEL_QUALITY_WARNED=0
 					else
-						TUNNEL_FAIL_SECONDS=$((TUNNEL_FAIL_SECONDS + TUNNEL_PROBE_INTERVAL))
-
-						if [ "$TUNNEL_FAIL_SECONDS" -ge "$TUNNEL_FAIL_TIMEOUT" ]; then
-							if [ "$TUNNEL_PROBE_WARNED" -eq 0 ]; then
-								log "tunnel proxy probe unavailable for ${TUNNEL_FAIL_SECONDS}s while WAN is reachable"
-								recover_failed_tunnel || true
-								TUNNEL_PROBE_WARNED=1
+						probe_rc="$?"
+						if [ "$probe_rc" -eq 2 ]; then
+							TUNNEL_BASIC_FAIL_SECONDS=0
+							TUNNEL_BASIC_WARNED=0
+							TUNNEL_QUALITY_FAIL_SECONDS=$((TUNNEL_QUALITY_FAIL_SECONDS + TUNNEL_PROBE_INTERVAL))
+							if [ "$TUNNEL_QUALITY_FAIL_SECONDS" -ge "$TUNNEL_QUALITY_FAIL_TIMEOUT" ]; then
+								if [ "$TUNNEL_QUALITY_WARNED" -eq 0 ]; then
+									log "tunnel quality degraded for ${TUNNEL_QUALITY_FAIL_SECONDS}s while basic tunnel access and WAN are reachable"
+									recover_failed_tunnel || true
+									TUNNEL_QUALITY_WARNED=1
+								fi
+								TUNNEL_QUALITY_FAIL_SECONDS="$TUNNEL_QUALITY_FAIL_TIMEOUT"
 							fi
-							TUNNEL_FAIL_SECONDS="$TUNNEL_FAIL_TIMEOUT"
+						else
+							TUNNEL_QUALITY_FAIL_SECONDS=0
+							TUNNEL_QUALITY_WARNED=0
+							TUNNEL_BASIC_FAIL_SECONDS=$((TUNNEL_BASIC_FAIL_SECONDS + TUNNEL_PROBE_INTERVAL))
+							if [ "$TUNNEL_BASIC_FAIL_SECONDS" -ge "$TUNNEL_FAIL_TIMEOUT" ]; then
+								if [ "$TUNNEL_BASIC_WARNED" -eq 0 ]; then
+									log "tunnel proxy probe unavailable for ${TUNNEL_BASIC_FAIL_SECONDS}s while WAN is reachable"
+									recover_failed_tunnel || true
+									TUNNEL_BASIC_WARNED=1
+								fi
+								TUNNEL_BASIC_FAIL_SECONDS="$TUNNEL_FAIL_TIMEOUT"
+							fi
 						fi
 					fi
 				fi
 			else
 				NET_FAIL_SECONDS=$((NET_FAIL_SECONDS + MAIN_LOOP_SLEEP))
 				log "no internet detected for ${NET_FAIL_SECONDS}s while VPN is active"
-				TUNNEL_FAIL_SECONDS=0
-				TUNNEL_PROBE_WARNED=0
+				TUNNEL_BASIC_FAIL_SECONDS=0
+				TUNNEL_QUALITY_FAIL_SECONDS=0
+				TUNNEL_BASIC_WARNED=0
+				TUNNEL_QUALITY_WARNED=0
 
 				if [ "$NET_FAIL_SECONDS" -ge "$NET_FAIL_TIMEOUT" ]; then
 					log "internet probe failed for ${NET_FAIL_SECONDS}s, keeping tunnel running"
@@ -3191,7 +3249,8 @@ main_loop() {
 			fi
 		else
 			NET_FAIL_SECONDS=0
-			TUNNEL_FAIL_SECONDS=0
+			TUNNEL_BASIC_FAIL_SECONDS=0
+			TUNNEL_QUALITY_FAIL_SECONDS=0
 		fi
 
 		if [ ! -s "$SUB_FILE" ]; then
