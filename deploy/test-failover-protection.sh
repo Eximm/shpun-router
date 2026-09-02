@@ -93,4 +93,3 @@ grep -q 'return 2' "$AGENT_SCRIPT"
 grep -q 'automatic selection is running' "$RPC_SCRIPT"
 
 printf '%s\n' "ok: quality quorum, separate degradation result, and selection lock"
-
