@@ -34,6 +34,16 @@ TUNNEL_EXIT_LAST_OK_FILE="$STATE_DIR/tunnel_exit_last_ok"
 CONFIG_LOCKDIR="/tmp/shpun-config.lock"
 AUTO_FAILOVER_SCRIPT="$STATE_DIR/auto-failover.sh"
 
+# Persistent user toggles for automatic server selection.
+# Created at runtime (ensure_state_dir / uci-defaults), never shipped in files/
+# so package upgrades preserve existing user values.
+SERVER_AUTO_SELECT_FILE="$STATE_DIR/server_auto_select"
+SERVER_AUTO_EXCLUDE_RU_FILE="$STATE_DIR/server_auto_exclude_ru"
+# Transient sentinels/counters for quality degradation and current-server backoff.
+TUNNEL_QUALITY_DEGRADED_FILE="$STATE_DIR/tunnel_quality_degraded"
+AUTO_RECOVERY_LAST_ATTEMPT_FILE="$STATE_DIR/auto_recovery_last_attempt"
+AUTO_RECOVERY_FAIL_COUNT_FILE="$STATE_DIR/auto_recovery_fail_count"
+
 LOG_TAG="shpun-agent"
 
 API_URL_DEFAULT="https://router.shpun.net/connect"
@@ -69,6 +79,10 @@ TUNNEL_QUALITY_PROBE_MIN_BYTES_DEFAULT=8192
 TUNNEL_QUALITY_CONFIRM_URLS_DEFAULT="https://telegram.org/ https://connectivitycheck.gstatic.com/generate_204 https://www.cloudflare.com/cdn-cgi/trace"
 TUNNEL_QUALITY_CONFIRM_MIN_SUCCESS_DEFAULT=2
 TUNNEL_QUALITY_FAIL_TIMEOUT_DEFAULT=300
+# Exponential backoff for recovering the CURRENT server when automatic
+# server change is disabled (server_auto_select=0 or AUTO_FAILOVER_ENABLE=0).
+AUTO_RECOVERY_BASE_INTERVAL_DEFAULT=60
+AUTO_RECOVERY_MAX_INTERVAL_DEFAULT=1800
 DNS_BOOTSTRAP_ENABLE_DEFAULT=1
 DNS_BOOTSTRAP_SERVERS_DEFAULT="77.88.8.8 77.88.8.1 1.1.1.1 1.0.0.1 8.8.8.8 8.8.4.4 9.9.9.9"
 DNS_BOOTSTRAP_TEST_DOMAINS_DEFAULT="router.shpun.net spb.shpyn.online"
@@ -151,6 +165,20 @@ get_routing_mode() {
 
 ensure_state_dir() {
 	[ -d "$STATE_DIR" ] || mkdir -p "$STATE_DIR" 2>/dev/null || true
+
+	# Persistent user toggles. Idempotent: never overwrite an existing value.
+	# The user toggle defaults to enabled. AUTO_FAILOVER_ENABLE remains a separate
+	# administrative override and can still make the effective state disabled.
+	[ -f "$SERVER_AUTO_SELECT_FILE" ] || printf '%s\n' "$AUTO_FAILOVER_ENABLE_DEFAULT" > "$SERVER_AUTO_SELECT_FILE" 2>/dev/null || true
+	[ -f "$SERVER_AUTO_EXCLUDE_RU_FILE" ] || echo "1" > "$SERVER_AUTO_EXCLUDE_RU_FILE" 2>/dev/null || true
+}
+
+auto_select_current() {
+	val="$(cat "$SERVER_AUTO_SELECT_FILE" 2>/dev/null | tr -d '\r\n ' || true)"
+	case "$val" in
+		0|no|false|off) echo 0 ;;
+		*) echo 1 ;;
+	esac
 }
 
 ensure_routes_dir() {
@@ -300,7 +328,9 @@ reset_subscription_state() {
 	rm -f "$SUB_FILE" "$SUB_URL_FILE" "$SUB_MIRROR_URL_FILE" "$CONFIG_URL_FILE" \
 		"$LAST_CHECK_FILE" "$CONFIG_ACTIVE_FILE" "$CONFIG_PENDING_FILE" \
 		"$TUNNEL_EXIT_IP_FILE" "$TUNNEL_EXIT_CHECK_MS_FILE" "$TUNNEL_EXIT_PING_MS_FILE" \
-		"$TUNNEL_EXIT_LAST_OK_FILE" "$STATE_DIR/selected_link_index"
+		"$TUNNEL_EXIT_LAST_OK_FILE" "$TUNNEL_QUALITY_DEGRADED_FILE" \
+		"$AUTO_RECOVERY_LAST_ATTEMPT_FILE" "$AUTO_RECOVERY_FAIL_COUNT_FILE" \
+		"$STATE_DIR/selected_link_index"
 	reset_subscription_unavailable_count
 	printf '%s\n' "$reason" > "$VERROR_FILE"
 }
@@ -831,6 +861,12 @@ load_conf() {
 		1|yes|true|on) AUTO_FAILOVER_ENABLE=1 ;;
 		*) AUTO_FAILOVER_ENABLE=0 ;;
 	esac
+	[ -z "$AUTO_RECOVERY_BASE_INTERVAL" ] && AUTO_RECOVERY_BASE_INTERVAL="$AUTO_RECOVERY_BASE_INTERVAL_DEFAULT"
+	[ -z "$AUTO_RECOVERY_MAX_INTERVAL" ] && AUTO_RECOVERY_MAX_INTERVAL="$AUTO_RECOVERY_MAX_INTERVAL_DEFAULT"
+	case "$AUTO_RECOVERY_BASE_INTERVAL" in ''|*[!0-9]*) AUTO_RECOVERY_BASE_INTERVAL="$AUTO_RECOVERY_BASE_INTERVAL_DEFAULT" ;; esac
+	case "$AUTO_RECOVERY_MAX_INTERVAL" in ''|*[!0-9]*) AUTO_RECOVERY_MAX_INTERVAL="$AUTO_RECOVERY_MAX_INTERVAL_DEFAULT" ;; esac
+	[ "$AUTO_RECOVERY_BASE_INTERVAL" -gt 0 ] 2>/dev/null || AUTO_RECOVERY_BASE_INTERVAL="$AUTO_RECOVERY_BASE_INTERVAL_DEFAULT"
+	[ "$AUTO_RECOVERY_MAX_INTERVAL" -ge "$AUTO_RECOVERY_BASE_INTERVAL" ] 2>/dev/null || AUTO_RECOVERY_MAX_INTERVAL="$AUTO_RECOVERY_BASE_INTERVAL"
 	case "$ENGINE_DOWNLOAD_RETRY_INTERVAL" in
 		''|*[!0-9]*) ENGINE_DOWNLOAD_RETRY_INTERVAL="$ENGINE_DOWNLOAD_RETRY_INTERVAL_DEFAULT" ;;
 	esac
@@ -2391,10 +2427,57 @@ ensure_transparent_rules() {
 	return 1
 }
 
+recover_current_server() {
+	ensure_transparent_rules || true
+	apply_protected_dns_forwarding
+	[ -s "$VERROR_FILE" ] || echo "tunnel_probe_failed" > "$VERROR_FILE"
+
+	now="$(date +%s 2>/dev/null || echo 0)"
+	last="$(cat "$AUTO_RECOVERY_LAST_ATTEMPT_FILE" 2>/dev/null | tr -d '\r\n ' || echo 0)"
+	fail="$(cat "$AUTO_RECOVERY_FAIL_COUNT_FILE" 2>/dev/null | tr -d '\r\n ' || echo 0)"
+	case "$now"  in ''|*[!0-9]*) now=0  ;; esac
+	case "$last" in ''|*[!0-9]*) last=0 ;; esac
+	case "$fail" in ''|*[!0-9]*) fail=0 ;; esac
+
+	shift_n="$fail"
+	[ "$shift_n" -gt 20 ] && shift_n=20
+	multiplier=$((1 << shift_n))
+	[ "$multiplier" -le 0 ] && multiplier=1
+	backoff="$((AUTO_RECOVERY_BASE_INTERVAL * multiplier))"
+	[ "$backoff" -gt "$AUTO_RECOVERY_MAX_INTERVAL" ] && backoff="$AUTO_RECOVERY_MAX_INTERVAL"
+	[ "$backoff" -le 0 ] && backoff="$AUTO_RECOVERY_BASE_INTERVAL"
+
+	age="$((now - last))"
+	if [ "$last" -gt 0 ] && [ "$age" -ge 0 ] && [ "$age" -lt "$backoff" ]; then
+		log "current server recovery on backoff (fail=$fail, ${age}s/${backoff}s); transparent rules restored, restart deferred"
+		return 1
+	fi
+
+	log "recovering current server without changing selected_link_index (auto_select=$(auto_select_current), admin_enabled=$AUTO_FAILOVER_ENABLE, fail=$fail)"
+	printf '%s\n' "$now" > "$AUTO_RECOVERY_LAST_ATTEMPT_FILE" 2>/dev/null || true
+	printf '%s\n' "$((fail + 1))" > "$AUTO_RECOVERY_FAIL_COUNT_FILE" 2>/dev/null || true
+	rm -f "$VPN_READY_FILE" "$TUNNEL_QUALITY_DEGRADED_FILE"
+	/etc/init.d/shpun-vpn stop >/dev/null 2>&1 || true
+	if ensure_vpn_from_subscription; then
+		log "current server restart completed; waiting for the next tunnel probe before clearing recovery backoff"
+	else
+		log "current server restart failed; next attempt will follow recovery backoff"
+	fi
+	return 1
+}
+
+recover_tunnel_quality() {
+	log "tunnel quality degraded for ${TUNNEL_QUALITY_FAIL_SECONDS}s; restoring transparent rules without server change or xray restart"
+	ensure_transparent_rules || true
+	apply_protected_dns_forwarding
+	printf '1\n' > "$TUNNEL_QUALITY_DEGRADED_FILE" 2>/dev/null || true
+	return 0
+}
+
 recover_failed_tunnel() {
 	if [ -s "$CONFIG_PENDING_FILE" ]; then
 		log "tunnel probe failure confirmed and pending xray config exists, restarting shpun-vpn to apply it"
-		rm -f "$VPN_READY_FILE"
+		rm -f "$VPN_READY_FILE" "$TUNNEL_QUALITY_DEGRADED_FILE"
 
 		if ensure_vpn_from_subscription; then
 			log "tunnel recovery completed"
@@ -2405,21 +2488,18 @@ recover_failed_tunnel() {
 		return 1
 	fi
 
-	if [ "$AUTO_FAILOVER_ENABLE" -eq 1 ] && [ -x "$AUTO_FAILOVER_SCRIPT" ]; then
-		log "tunnel probe failure confirmed; starting automatic server failover"
+	if [ "$AUTO_FAILOVER_ENABLE" -eq 1 ] && [ "$(auto_select_current)" -eq 1 ] && [ -x "$AUTO_FAILOVER_SCRIPT" ]; then
+		log "tunnel probe failure confirmed; starting automatic server failover (auto_select=$(auto_select_current), admin_enabled=$AUTO_FAILOVER_ENABLE)"
 		ensure_transparent_rules || true
 		apply_protected_dns_forwarding
-		rm -f "$VPN_READY_FILE"
+		rm -f "$VPN_READY_FILE" "$TUNNEL_QUALITY_DEGRADED_FILE"
 		echo "tunnel_probe_failed" > "$VERROR_FILE"
 		"$AUTO_FAILOVER_SCRIPT" >/dev/null 2>&1 &
 		return 1
 	fi
 
-	log "tunnel probe failure confirmed, keeping current xray session and refreshing transparent rules"
-	ensure_transparent_rules || true
-	apply_protected_dns_forwarding
-	rm -f "$VPN_READY_FILE"
-	echo "tunnel_probe_failed" > "$VERROR_FILE"
+	log "tunnel probe failure confirmed; automatic server change is disabled (auto_select=$(auto_select_current), admin_enabled=$AUTO_FAILOVER_ENABLE), recovering current server without changing selected_link_index"
+	recover_current_server
 	return 1
 
 }
@@ -3205,6 +3285,7 @@ main_loop() {
 						TUNNEL_QUALITY_FAIL_SECONDS=0
 						TUNNEL_BASIC_WARNED=0
 						TUNNEL_QUALITY_WARNED=0
+						rm -f "$TUNNEL_QUALITY_DEGRADED_FILE" "$AUTO_RECOVERY_LAST_ATTEMPT_FILE" "$AUTO_RECOVERY_FAIL_COUNT_FILE"
 					else
 						probe_rc="$?"
 						if [ "$probe_rc" -eq 2 ]; then
@@ -3214,7 +3295,7 @@ main_loop() {
 							if [ "$TUNNEL_QUALITY_FAIL_SECONDS" -ge "$TUNNEL_QUALITY_FAIL_TIMEOUT" ]; then
 								if [ "$TUNNEL_QUALITY_WARNED" -eq 0 ]; then
 									log "tunnel quality degraded for ${TUNNEL_QUALITY_FAIL_SECONDS}s while basic tunnel access and WAN are reachable"
-									recover_failed_tunnel || true
+									recover_tunnel_quality || true
 									TUNNEL_QUALITY_WARNED=1
 								fi
 								TUNNEL_QUALITY_FAIL_SECONDS="$TUNNEL_QUALITY_FAIL_TIMEOUT"
@@ -3222,12 +3303,21 @@ main_loop() {
 						else
 							TUNNEL_QUALITY_FAIL_SECONDS=0
 							TUNNEL_QUALITY_WARNED=0
+							rm -f "$TUNNEL_QUALITY_DEGRADED_FILE"
 							TUNNEL_BASIC_FAIL_SECONDS=$((TUNNEL_BASIC_FAIL_SECONDS + TUNNEL_PROBE_INTERVAL))
 							if [ "$TUNNEL_BASIC_FAIL_SECONDS" -ge "$TUNNEL_FAIL_TIMEOUT" ]; then
-								if [ "$TUNNEL_BASIC_WARNED" -eq 0 ]; then
-									log "tunnel proxy probe unavailable for ${TUNNEL_BASIC_FAIL_SECONDS}s while WAN is reachable"
+								if [ "$AUTO_FAILOVER_ENABLE" -eq 1 ] && [ "$(auto_select_current)" -eq 1 ]; then
+									if [ "$TUNNEL_BASIC_WARNED" -eq 0 ]; then
+										log "tunnel proxy probe unavailable for ${TUNNEL_BASIC_FAIL_SECONDS}s while WAN is reachable"
+										recover_failed_tunnel || true
+										TUNNEL_BASIC_WARNED=1
+									fi
+								else
+									if [ "$TUNNEL_BASIC_WARNED" -eq 0 ]; then
+										log "tunnel proxy probe unavailable for ${TUNNEL_BASIC_FAIL_SECONDS}s while WAN is reachable"
+										TUNNEL_BASIC_WARNED=1
+									fi
 									recover_failed_tunnel || true
-									TUNNEL_BASIC_WARNED=1
 								fi
 								TUNNEL_BASIC_FAIL_SECONDS="$TUNNEL_FAIL_TIMEOUT"
 							fi
@@ -3237,6 +3327,7 @@ main_loop() {
 			else
 				NET_FAIL_SECONDS=$((NET_FAIL_SECONDS + MAIN_LOOP_SLEEP))
 				log "no internet detected for ${NET_FAIL_SECONDS}s while VPN is active"
+				rm -f "$TUNNEL_QUALITY_DEGRADED_FILE"
 				TUNNEL_BASIC_FAIL_SECONDS=0
 				TUNNEL_QUALITY_FAIL_SECONDS=0
 				TUNNEL_BASIC_WARNED=0
@@ -3251,6 +3342,7 @@ main_loop() {
 			NET_FAIL_SECONDS=0
 			TUNNEL_BASIC_FAIL_SECONDS=0
 			TUNNEL_QUALITY_FAIL_SECONDS=0
+			rm -f "$TUNNEL_QUALITY_DEGRADED_FILE"
 		fi
 
 		if [ ! -s "$SUB_FILE" ]; then

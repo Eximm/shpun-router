@@ -3,6 +3,7 @@
 NEW_INDEX="$1"
 CONF="/etc/shpun/agent.conf"
 SELECTED_LINK_FILE="/etc/shpun/selected_link_index"
+SERVER_AUTO_SELECT_FILE="/etc/shpun/server_auto_select"
 BUILD_SCRIPT="/etc/shpun/build-config.sh"
 LOGTAG="shpun-server"
 
@@ -162,19 +163,30 @@ if ! lock_config; then
 fi
 
 SELECTED_CANDIDATE="${SELECTED_LINK_FILE}.candidate.$$"
+AUTO_SELECT_CANDIDATE="${SERVER_AUTO_SELECT_FILE}.candidate.$$"
 CONFIG_CANDIDATE="${ENGINE_CONFIG}.candidate.$$"
 CONFIG_VALIDATE="${ENGINE_CONFIG}.validate.$$"
 CONFIG_BACKUP="${ENGINE_CONFIG}.server-backup.$$"
-rm -f "$SELECTED_CANDIDATE" "$CONFIG_CANDIDATE" "$CONFIG_VALIDATE" "$CONFIG_BACKUP"
+rm -f "$SELECTED_CANDIDATE" "$AUTO_SELECT_CANDIDATE" "$CONFIG_CANDIDATE" "$CONFIG_VALIDATE" "$CONFIG_BACKUP"
+
+DISABLE_AUTO_AFTER_SUCCESS=0
+if [ "${SHPUN_AUTO_FAILOVER:-0}" != "1" ] || [ "${SHPUN_AUTO_ONE_SHOT:-0}" = "1" ]; then
+	DISABLE_AUTO_AFTER_SUCCESS=1
+	printf '0\n' > "$AUTO_SELECT_CANDIDATE" || {
+		rm -f "$SELECTED_CANDIDATE" "$AUTO_SELECT_CANDIDATE" "$CONFIG_CANDIDATE" "$CONFIG_VALIDATE" "$CONFIG_BACKUP"
+		echo "auto_state_write_failed"
+		exit 1
+	}
+fi
 
 printf '%s\n' "$NEW_INDEX" > "$SELECTED_CANDIDATE" || {
-	rm -f "$SELECTED_CANDIDATE" "$CONFIG_CANDIDATE" "$CONFIG_VALIDATE" "$CONFIG_BACKUP"
+	rm -f "$SELECTED_CANDIDATE" "$AUTO_SELECT_CANDIDATE" "$CONFIG_CANDIDATE" "$CONFIG_VALIDATE" "$CONFIG_BACKUP"
 	echo "selection_write_failed"
 	exit 1
 }
 
 if ! OUT_CFG="$CONFIG_CANDIDATE" SELECTED_LINK_FILE="$SELECTED_CANDIDATE" "$BUILD_SCRIPT"; then
-	rm -f "$SELECTED_CANDIDATE" "$CONFIG_CANDIDATE" "$CONFIG_VALIDATE" "$CONFIG_BACKUP"
+	rm -f "$SELECTED_CANDIDATE" "$AUTO_SELECT_CANDIDATE" "$CONFIG_CANDIDATE" "$CONFIG_VALIDATE" "$CONFIG_BACKUP"
 	log "server index $NEW_INDEX rejected: candidate config build failed, keeping current tunnel"
 	echo "config_build_failed"
 	exit 1
@@ -183,7 +195,7 @@ fi
 if [ "${SWITCH_SERVER_VALIDATE:-0}" = "1" ]; then
 	if ! make_validation_config "$CONFIG_CANDIDATE" "$CONFIG_VALIDATE" ||
 		! "$ENGINE_BIN" run -test -config "$CONFIG_VALIDATE" >/dev/null 2>&1; then
-		rm -f "$SELECTED_CANDIDATE" "$CONFIG_CANDIDATE" "$CONFIG_VALIDATE" "$CONFIG_BACKUP"
+		rm -f "$SELECTED_CANDIDATE" "$AUTO_SELECT_CANDIDATE" "$CONFIG_CANDIDATE" "$CONFIG_VALIDATE" "$CONFIG_BACKUP"
 		log "server index $NEW_INDEX rejected: candidate xray validation failed, keeping current tunnel"
 		echo "config_invalid"
 		exit 1
@@ -192,7 +204,7 @@ fi
 rm -f "$CONFIG_VALIDATE"
 
 if [ -s "$ENGINE_CONFIG" ] && ! cp "$ENGINE_CONFIG" "$CONFIG_BACKUP" 2>/dev/null; then
-	rm -f "$SELECTED_CANDIDATE" "$CONFIG_CANDIDATE" "$CONFIG_VALIDATE" "$CONFIG_BACKUP"
+	rm -f "$SELECTED_CANDIDATE" "$AUTO_SELECT_CANDIDATE" "$CONFIG_CANDIDATE" "$CONFIG_VALIDATE" "$CONFIG_BACKUP"
 	log "cannot switch server: failed to back up current xray config"
 	echo "config_backup_failed"
 	exit 1
@@ -200,22 +212,39 @@ fi
 
 if ! mv "$CONFIG_CANDIDATE" "$ENGINE_CONFIG"; then
 	[ -s "$CONFIG_BACKUP" ] && mv "$CONFIG_BACKUP" "$ENGINE_CONFIG" 2>/dev/null || true
-	rm -f "$SELECTED_CANDIDATE" "$CONFIG_CANDIDATE" "$CONFIG_VALIDATE" "$CONFIG_BACKUP"
+	rm -f "$SELECTED_CANDIDATE" "$AUTO_SELECT_CANDIDATE" "$CONFIG_CANDIDATE" "$CONFIG_VALIDATE" "$CONFIG_BACKUP"
 	log "cannot switch server: failed to install candidate xray config"
 	echo "config_install_failed"
 	exit 1
 fi
 
 if ! mv "$SELECTED_CANDIDATE" "$SELECTED_LINK_FILE"; then
-	[ -s "$CONFIG_BACKUP" ] && mv "$CONFIG_BACKUP" "$ENGINE_CONFIG" 2>/dev/null || true
-	rm -f "$SELECTED_CANDIDATE" "$CONFIG_CANDIDATE" "$CONFIG_VALIDATE" "$CONFIG_BACKUP"
+	if [ -s "$CONFIG_BACKUP" ]; then
+		mv "$CONFIG_BACKUP" "$ENGINE_CONFIG" 2>/dev/null || true
+	else
+		rm -f "$ENGINE_CONFIG"
+	fi
+	rm -f "$SELECTED_CANDIDATE" "$AUTO_SELECT_CANDIDATE" "$CONFIG_CANDIDATE" "$CONFIG_VALIDATE" "$CONFIG_BACKUP"
 	log "cannot switch server: failed to persist selected server index"
 	echo "selection_write_failed"
 	exit 1
 fi
 
-rm -f "$CONFIG_BACKUP" "$CONFIG_PENDING_FILE" "$CONFIG_ACTIVE_FILE" "$VERROR_FILE" "$VPN_READY_FILE"
-if [ "${SHPUN_AUTO_FAILOVER:-0}" != "1" ]; then
+if [ "$DISABLE_AUTO_AFTER_SUCCESS" -eq 1 ] && ! mv "$AUTO_SELECT_CANDIDATE" "$SERVER_AUTO_SELECT_FILE"; then
+	if [ -s "$CONFIG_BACKUP" ]; then
+		mv "$CONFIG_BACKUP" "$ENGINE_CONFIG" 2>/dev/null || true
+	else
+		rm -f "$ENGINE_CONFIG"
+	fi
+	printf '%s\n' "$OLD_INDEX" > "$SELECTED_CANDIDATE" 2>/dev/null && mv "$SELECTED_CANDIDATE" "$SELECTED_LINK_FILE" 2>/dev/null || true
+	rm -f "$SELECTED_CANDIDATE" "$AUTO_SELECT_CANDIDATE" "$CONFIG_CANDIDATE" "$CONFIG_VALIDATE" "$CONFIG_BACKUP"
+	log "cannot switch server: failed to disable automatic server selection"
+	echo "auto_state_write_failed"
+	exit 1
+fi
+
+rm -f "$AUTO_SELECT_CANDIDATE" "$CONFIG_BACKUP" "$CONFIG_PENDING_FILE" "$CONFIG_ACTIVE_FILE" "$VERROR_FILE" "$VPN_READY_FILE"
+if [ "$DISABLE_AUTO_AFTER_SUCCESS" -eq 1 ]; then
 	rm -f /etc/shpun/auto_failover_last_attempt /etc/shpun/auto_failover_last_success /etc/shpun/auto_failover_from
 fi
 log "server index $NEW_INDEX validated, restarting VPN once to apply it"

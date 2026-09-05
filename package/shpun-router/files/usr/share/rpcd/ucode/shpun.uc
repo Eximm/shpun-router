@@ -1,4 +1,4 @@
-import { open, popen } from "fs";
+import { open, popen, rename, unlink } from "fs";
 
 const DIR       = "/etc/shpun";
 const CODE      = DIR + "/router_code";
@@ -16,6 +16,11 @@ const TUNNEL_EXIT_IP = DIR + "/tunnel_exit_ip";
 const TUNNEL_EXIT_CHECK_MS = DIR + "/tunnel_exit_check_ms";
 const TUNNEL_EXIT_PING_MS = DIR + "/tunnel_exit_ping_ms";
 const TUNNEL_EXIT_LAST_OK = DIR + "/tunnel_exit_last_ok";
+
+const SERVER_AUTO_SELECT = DIR + "/server_auto_select";
+const SERVER_AUTO_EXCLUDE_RU = DIR + "/server_auto_exclude_ru";
+const TUNNEL_QUALITY_DEGRADED = DIR + "/tunnel_quality_degraded";
+const AGENT_CONF = DIR + "/agent.conf";
 
 const FW_CUR_NEW   = DIR + "/fw_current";
 const FW_LAST_NEW  = DIR + "/fw_latest";
@@ -72,6 +77,91 @@ function exists(path) {
 		f.close();
 		return true;
 	} catch(e) { return false; }
+}
+
+function parse_enabled(req) {
+	if (!req || !req.args || req.args.enabled == null)
+		return null;
+	let value = req.args.enabled;
+	let value_type = type(value);
+	if (value_type == "bool") return value ? 1 : 0;
+	if ((value_type == "int" || value_type == "double") && (value == 0 || value == 1)) return int(value);
+	if (value_type == "string") {
+		value = lc(trim(value));
+		if (value == "0" || value == "false") return 0;
+		if (value == "1" || value == "true") return 1;
+	}
+	return null;
+}
+
+function write_toggle_atomic(path, enabled) {
+	let stamp = clock(true);
+	let tmp = path + ".tmp." + stamp[0] + "." + stamp[1];
+	let data = "" + enabled + "\n";
+	let f = open(tmp, "wx", 0o600);
+	if (!f) return false;
+	let written = f.write(data);
+	f.close();
+	if (written != length(data) || !rename(tmp, path)) {
+		unlink(tmp);
+		return false;
+	}
+	return true;
+}
+
+function conf_value(key) {
+	let raw = readfile(AGENT_CONF);
+	if (!raw) return "";
+	let lines = split(raw, "\n");
+	for (let i = 0; i < length(lines); i++) {
+		let line = trim(lines[i]);
+		if (!line || substr(line, 0, 1) == "#") continue;
+		let eq = index(line, "=");
+		if (eq < 0 || trim(substr(line, 0, eq)) != key) continue;
+		let v = trim(substr(line, eq + 1));
+		if (length(v) >= 2 && substr(v, 0, 1) == "\"" && substr(v, length(v) - 1) == "\"")
+			v = substr(v, 1, length(v) - 2);
+		return v;
+	}
+	return "";
+}
+
+function auto_admin_disabled() {
+	let v = lc(conf_value("AUTO_FAILOVER_ENABLE"));
+	return v == "0" || v == "no" || v == "false" || v == "off";
+}
+
+function read_toggle(path, default_on) {
+	let v = lc(trim(readfile(path)));
+	if (v == "0" || v == "no" || v == "false" || v == "off") return 0;
+	if (v == "") return default_on ? 1 : 0;
+	return 1;
+}
+
+function host_is_rush_gateway(host) {
+	host = lc(trim(norm(host || "")));
+	if (substr(host, 0, 4) != "rush") return false;
+	let rest = substr(host, 4);
+	let suffix = ".lenivo.site";
+	if (length(rest) < length(suffix)) return false;
+	if (substr(rest, length(rest) - length(suffix)) != suffix) return false;
+	let mid = substr(rest, 0, length(rest) - length(suffix));
+	for (let i = 0; i < length(mid); i++) {
+		let ch = substr(mid, i, 1);
+		if (ch < "0" || ch > "9") return false;
+	}
+	return true;
+}
+
+function server_group(info) {
+	if (!info) return "direct";
+	let name = lc(trim(norm(info.name || "")));
+	if (index(name, "%d0%bd%d0%b0%d0%bf%d1%80%d1%8f%d0%bc%d1%83%d1%8e") >= 0) return "direct";
+	if (index(name, "напрямую") >= 0) return "direct";
+	if ((index(name, "%d1%87%d0%b5%d1%80%d0%b5%d0%b7") >= 0 && index(name, "%d1%80%d1%84") >= 0) ||
+		(index(name, "%d0%a7%d0%b5%d1%80%d0%b5%d0%b7") >= 0 && index(name, "%d0%a0%d0%a4") >= 0)) return "gateway";
+	if (index(name, "через рф") >= 0) return "gateway";
+	return host_is_rush_gateway(info.host) ? "gateway" : "direct";
 }
 
 function parse_json_safe(raw) {
@@ -629,6 +719,14 @@ return {
 					if (fw_cur  != "") res.fw_current = fw_cur;
 					if (fw_last != "") res.fw_latest  = fw_last;
 
+					let auto_admin = auto_admin_disabled();
+					let auto_sel = read_toggle(SERVER_AUTO_SELECT, 1);
+					res.server_auto_select = auto_sel;
+					res.server_auto_exclude_ru = read_toggle(SERVER_AUTO_EXCLUDE_RU, 1);
+					res.auto_admin_disabled = auto_admin ? 1 : 0;
+					res.auto_effective_enabled = (auto_sel == 1 && !auto_admin) ? 1 : 0;
+					res.tunnel_quality_degraded = exists(TUNNEL_QUALITY_DEGRADED) ? 1 : 0;
+
 					return res;
 				} catch(e) {
 					return { ok: 0, error: ("" + e) };
@@ -880,14 +978,25 @@ return {
 					for (let i = 0; i < length(parsed_servers); i++) {
 						let server = public_server_info(parsed_servers[i]);
 						server.latency_ms = latencies[i];
+						server.group = server_group(parsed_servers[i]);
 						push(servers, server);
 					}
+
+					let auto_admin = auto_admin_disabled();
+					let auto_sel = read_toggle(SERVER_AUTO_SELECT, 1);
+					let status_txt = trim(readfile(SERVER_AUTO_STATUS));
+					let auto_running = (status_txt == "starting" || status_txt == "running");
 
 					return {
 						ok: 1,
 						selected: selected,
 						count: length(servers),
-						servers: servers
+						servers: servers,
+						auto_select: auto_sel,
+						auto_exclude_ru: read_toggle(SERVER_AUTO_EXCLUDE_RU, 1),
+						auto_admin_disabled: auto_admin ? 1 : 0,
+						auto_effective_enabled: (auto_sel == 1 && !auto_admin) ? 1 : 0,
+						auto_running: auto_running
 					};
 				} catch(e) {
 					return { ok: 0, error: ("" + e) };
@@ -930,8 +1039,11 @@ return {
 					if (current < 0 || current >= length(links))
 						current = 0;
 
-					if (idx == current)
-						return { ok: 1, selected: idx, unchanged: true };
+					if (idx == current) {
+						if (!write_toggle_atomic(SERVER_AUTO_SELECT, 0))
+							return { ok: 0, error: "cannot disable automatic server selection" };
+						return { ok: 1, selected: idx, unchanged: true, auto_select: 0 };
+					}
 
 					if (!exists(SERVER_SETTER))
 						return { ok: 0, error: "switch-server.sh not found" };
@@ -945,6 +1057,51 @@ return {
 						return { ok: 0, error: out || "server profile validation failed", output: out };
 
 					return { ok: 1, selected: idx };
+				} catch(e) {
+					return { ok: 0, error: ("" + e) };
+				}
+			}
+		},
+
+		server_auto_set: {
+			args: { enabled: 0 },
+			call: function(req) {
+				try {
+					let enabled = parse_enabled(req);
+					if (enabled == null)
+						return { ok: 0, error: "enabled must be boolean or 0/1" };
+					if (!write_toggle_atomic(SERVER_AUTO_SELECT, enabled))
+						return { ok: 0, error: "cannot write " + SERVER_AUTO_SELECT };
+					if (enabled == 1 && exists(DIR + "/auto_failover_last_attempt"))
+						unlink(DIR + "/auto_failover_last_attempt");
+
+					let admin_disabled = auto_admin_disabled();
+					let effective = (enabled == 1 && !admin_disabled) ? 1 : 0;
+					let status_txt = trim(readfile(SERVER_AUTO_STATUS));
+					let running = (status_txt == "starting" || status_txt == "running");
+					return {
+						ok: 1,
+						enabled: enabled,
+						effective_enabled: effective,
+						admin_disabled: admin_disabled ? 1 : 0,
+						running: running
+					};
+				} catch(e) {
+					return { ok: 0, error: ("" + e) };
+				}
+			}
+		},
+
+		server_auto_exclude_ru_set: {
+			args: { enabled: 0 },
+			call: function(req) {
+				try {
+					let enabled = parse_enabled(req);
+					if (enabled == null)
+						return { ok: 0, error: "enabled must be boolean or 0/1" };
+					if (!write_toggle_atomic(SERVER_AUTO_EXCLUDE_RU, enabled))
+						return { ok: 0, error: "cannot write " + SERVER_AUTO_EXCLUDE_RU };
+					return { ok: 1, enabled: enabled };
 				} catch(e) {
 					return { ok: 0, error: ("" + e) };
 				}
@@ -975,6 +1132,9 @@ return {
 					}
 					if (!list)
 						return { ok: 0, error: "no server candidates" };
+
+					if (!write_toggle_atomic(SERVER_AUTO_SELECT, 0))
+						return { ok: 0, error: "cannot disable automatic server selection" };
 
 					let f = open(SERVER_AUTO_STATUS, "w");
 					if (f) { f.write("starting\n"); f.close(); }

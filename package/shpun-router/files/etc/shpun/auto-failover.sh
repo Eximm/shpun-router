@@ -10,6 +10,9 @@ LAST_ATTEMPT_FILE="$STATE_DIR/auto_failover_last_attempt"
 LAST_SUCCESS_FILE="$STATE_DIR/auto_failover_last_success"
 FROM_FILE="$STATE_DIR/auto_failover_from"
 AUTO_SELECT_STATUS_FILE="$STATE_DIR/auto_select_status"
+SERVER_AUTO_SELECT_FILE="$STATE_DIR/server_auto_select"
+SERVER_AUTO_EXCLUDE_RU_FILE="$STATE_DIR/server_auto_exclude_ru"
+VERROR_FILE="$STATE_DIR/vpn_error"
 LOCKDIR="${AUTO_FAILOVER_LOCKDIR:-/tmp/shpun-auto-failover.lock}"
 LOGTAG="shpun-failover"
 
@@ -58,6 +61,55 @@ detect_http_client() {
 	else
 		HTTP_BIN=""
 	fi
+}
+
+# Classify a VLESS subscription link into the same "Через РФ" / "Напрямую"
+# groups the LuCI widget uses (see getServerConnectionGroup in 01_shpunvpn.js).
+# Keep this classification aligned with server_group() in shpun.uc and
+# getServerConnectionGroup() in LuCI. Returns gateway|direct.
+link_group() {
+	link="$1"
+	rest="${link#*://}"
+	rest="${rest#*@}"
+	host="${rest%%:*}"
+	host="${host%%\?*}"
+	host="${host%%#*}"
+	host="$(printf '%s' "$host" | tr 'A-Z' 'a-z' 2>/dev/null || printf '%s' "$host")"
+	frag="${link#*#}"
+	frag="${frag%%\?*}"
+	name="$(printf '%s' "$frag" | sed 's/%20/ /g; s/+/ /g' 2>/dev/null || printf '%s' "$frag")"
+	name_l="$(printf '%s' "$name" | tr 'A-Z' 'a-z' 2>/dev/null || printf '%s' "$name")"
+	case "$name_l" in
+		*"напрямую"*|*"Напрямую"*|*"НАПРЯМУЮ"*|*"%d0%bd%d0%b0%d0%bf%d1%80%d1%8f%d0%bc%d1%83%d1%8e"*) echo direct; return ;;
+	esac
+	case "$name_l" in
+		*"через рф"*|*"Через РФ"*|*"ЧЕРЕЗ РФ"*|*"%d1%87%d0%b5%d1%80%d0%b5%d0%b7"*"%d1%80%d1%84"*|*"%d0%a7%d0%b5%d1%80%d0%b5%d0%b7"*"%d0%a0%d0%a4"*) echo gateway; return ;;
+	esac
+	case "$host" in
+		rush*.lenivo.site)
+			mid="${host#rush}"
+			mid="${mid%.lenivo.site}"
+			case "$mid" in
+				*[!0-9]*) ;;
+				*) echo gateway; return ;;
+			esac
+			;;
+	esac
+	echo direct
+}
+
+# Watchdog cancellation: re-read the persistent toggle before each candidate.
+# Only applies to the background watchdog (MANUAL_SELECT=0). The explicit
+# "Найти лучший сервер" operation (MANUAL_SELECT=1) is never cancelled by the
+# toggle because it was started manually by the user. Returns 0 = still
+# enabled, 1 = disabled (abort watchdog).
+auto_select_still_enabled() {
+	[ "$MANUAL_SELECT" -eq 1 ] && return 0
+	val="$(cat "$SERVER_AUTO_SELECT_FILE" 2>/dev/null | tr -d '\r\n ' || true)"
+	case "$val" in
+		0|no|false|off) return 1 ;;
+		*) return 0 ;;
+	esac
 }
 
 probe_url_through_tunnel() {
@@ -137,7 +189,13 @@ wait_for_candidate() {
 
 switch_to() {
 	index="$1"
-	result="$(SHPUN_AUTO_FAILOVER=1 "$SWITCH_SCRIPT" "$index" 2>/dev/null)" || {
+	if [ "$MANUAL_SELECT" -eq 1 ]; then
+		result="$(SHPUN_AUTO_FAILOVER=1 SHPUN_AUTO_ONE_SHOT=1 "$SWITCH_SCRIPT" "$index" 2>/dev/null)"
+	else
+		result="$(SHPUN_AUTO_FAILOVER=1 "$SWITCH_SCRIPT" "$index" 2>/dev/null)"
+	fi
+	switch_rc="$?"
+	[ "$switch_rc" -eq 0 ] || {
 		log "server index $index rejected during automatic failover: ${result:-switch_failed}"
 		return 1
 	}
@@ -168,9 +226,19 @@ case "$TUNNEL_QUALITY_PROBE_MIN_BYTES" in ''|*[!0-9]*) TUNNEL_QUALITY_PROBE_MIN_
 case "$TUNNEL_QUALITY_CONFIRM_MIN_SUCCESS" in ''|*[!0-9]*) TUNNEL_QUALITY_CONFIRM_MIN_SUCCESS="$TUNNEL_QUALITY_CONFIRM_MIN_SUCCESS_DEFAULT" ;; esac
 [ "$TUNNEL_QUALITY_CONFIRM_MIN_SUCCESS" -gt 0 ] 2>/dev/null || TUNNEL_QUALITY_CONFIRM_MIN_SUCCESS="$TUNNEL_QUALITY_CONFIRM_MIN_SUCCESS_DEFAULT"
 
+# Persistent user toggles (default to enabled when missing/empty).
+SERVER_AUTO_EXCLUDE_RU="$(cat "$SERVER_AUTO_EXCLUDE_RU_FILE" 2>/dev/null | tr -d '\r\n ' || true)"
+case "$SERVER_AUTO_EXCLUDE_RU" in 0|no|false|off) SERVER_AUTO_EXCLUDE_RU=0 ;; *) SERVER_AUTO_EXCLUDE_RU=1 ;; esac
+
 MANUAL_SELECT=0
 if [ -n "${AUTO_FAILOVER_CANDIDATES:-}" ]; then
 	MANUAL_SELECT=1
+fi
+
+if [ "$MANUAL_SELECT" -eq 0 ] && ! auto_select_still_enabled; then
+	log "automatic failover skipped: server_auto_select is disabled"
+	printf '%s\n' "cancelled:user_disabled" > "$AUTO_SELECT_STATUS_FILE" 2>/dev/null || true
+	exit 0
 fi
 
 if ! lock_acquire; then
@@ -243,15 +311,53 @@ else
 	offset=1
 	candidate_list=""
 	while [ "$offset" -lt "$count" ]; do
-		candidate_list="$candidate_list $(((current + offset) % count))"
+		idx=$(( (current + offset) % count ))
+		if [ "$SERVER_AUTO_EXCLUDE_RU" = "1" ]; then
+			link="$(jsonfilter -i "$SUB_FILE" -e "@.subscription.links[$idx]" 2>/dev/null || true)"
+			if [ "$(link_group "$link")" = "gateway" ]; then
+				offset=$((offset + 1))
+				continue
+			fi
+		fi
+		candidate_list="$candidate_list $idx"
 		offset=$((offset + 1))
 	done
+fi
+
+# Strict RU exclusion for the background watchdog: if every alternative is a
+# RU/gateway server and exclude_ru is on, do NOT relax the policy and do NOT
+# pick a RU server automatically. Keep the current server and surface a clear
+# error. The user may still select a RU server manually from the server list.
+if [ "$MANUAL_SELECT" -eq 0 ] && [ -z "$candidate_list" ] && [ "$SERVER_AUTO_EXCLUDE_RU" = "1" ]; then
+	log "automatic failover aborted: no non-RU alternative servers available (server_auto_exclude_ru=1, strict); keeping current server index $current"
+	printf '%s\n' "auto_failover_no_candidates" > "$VERROR_FILE" 2>/dev/null || true
+	exit 1
 fi
 
 for candidate in $candidate_list; do
 	case "$candidate" in ''|*[!0-9]*) continue ;; esac
 	[ "$candidate" -lt "$count" ] || continue
 	[ "$tried" -lt "$limit" ] || break
+	if [ "$SERVER_AUTO_EXCLUDE_RU" = "1" ]; then
+		link="$(jsonfilter -i "$SUB_FILE" -e "@.subscription.links[$candidate]" 2>/dev/null || true)"
+		if [ "$(link_group "$link")" = "gateway" ]; then
+			log "skipping RU/gateway server index $candidate (server_auto_exclude_ru=1)"
+			continue
+		fi
+	fi
+
+	# Watchdog cancellation: if the user turned AUTO OFF while this background
+	# failover was running, finish safely without starting a new switch_to and
+	# without rolling back. The currently in-flight candidate check (if any)
+	# already completed above this guard on the previous iteration. Do not kill
+	# the process; just stop iterating and leave a clear status. The explicit
+	# "Найти лучший сервер" operation (MANUAL_SELECT=1) is never cancelled here.
+	if ! auto_select_still_enabled; then
+		log "server_auto_select disabled during watchdog failover; aborting remaining candidates (tried=$tried, current index=$current)"
+		printf '%s\n' "cancelled:user_disabled" > "$AUTO_SELECT_STATUS_FILE" 2>/dev/null || true
+		exit 0
+	fi
+
 	tried=$((tried + 1))
 
 	log "trying server index $candidate ($tried/$limit)"

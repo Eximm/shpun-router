@@ -126,6 +126,12 @@ var callShpunServerAutoStart = rpc.declare({
 var callShpunServerAutoStatus = rpc.declare({
 	object: 'shpun', method: 'server_auto_status', expect: { '': {} }
 });
+var callShpunServerAutoSet = rpc.declare({
+	object: 'shpun', method: 'server_auto_set', params: ['enabled'], expect: { '': {} }
+});
+var callShpunServerAutoExcludeRuSet = rpc.declare({
+	object: 'shpun', method: 'server_auto_exclude_ru_set', params: ['enabled'], expect: { '': {} }
+});
 
 function waitForRoutingMode(targetMode, timeoutMs) {
 	var started = Date.now();
@@ -633,6 +639,10 @@ function openServersModal() {
 		res = res || {};
 		var servers = res.servers || [];
 		var selected = res.selected || 0;
+		var autoEffective = (res.auto_effective_enabled === 1);
+		var autoAdminDisabled = (res.auto_admin_disabled === 1);
+		var excludeRuVal = (res.auto_exclude_ru == null ? 1 : res.auto_exclude_ru);
+		var autoState = { effective: autoEffective, adminDisabled: autoAdminDisabled, excludeRu: !!excludeRuVal };
 
 		if (!res.ok) {
 			ui.showModal('Серверы VPN', [
@@ -684,7 +694,8 @@ function openServersModal() {
 			});
 			gatewayButton.className = 'shpun-server-switch-btn' + (activeGroup === 'gateway' ? ' is-active' : '');
 			directButton.className = 'shpun-server-switch-btn' + (activeGroup === 'direct' ? ' is-active' : '');
-			autoButton.textContent = activeGroup === 'gateway' ? '⚡ Авто через РФ' : '⚡ Авто напрямую';
+			autoButton.textContent = 'Найти лучший сервер';
+			autoButton.disabled = (activeGroup === 'gateway' && autoState.excludeRu) ? true : null;
 			list.scrollTop = 0;
 		}
 
@@ -794,13 +805,78 @@ function openServersModal() {
 					ui.addNotification(null, E('p', {}, 'Ошибка автовыбора: ' + String(err)), 'error');
 				});
 			}
-		}, '⚡ Авто');
+		}, 'Найти лучший сервер');
+		var autoToggleBtn = E('button', { 'type': 'button', 'class': 'shpun-server-switch-btn' }, 'Авто');
+
+		function renderAutoToggle() {
+			if (autoState.adminDisabled) {
+				autoToggleBtn.className = 'shpun-server-switch-btn';
+				autoToggleBtn.textContent = 'Авто ВЫКЛ (админ.)';
+				autoToggleBtn.title = 'Автоматический failover административно отключён (AUTO_FAILOVER_ENABLE=0 в /etc/shpun/agent.conf).';
+				return;
+			}
+			var on = autoState.effective;
+			autoToggleBtn.className = 'shpun-server-switch-btn' + (on ? ' is-auto' : '');
+			autoToggleBtn.textContent = on ? 'Авто ВКЛ' : 'Авто ВЫКЛ';
+			autoToggleBtn.title = on
+				? 'Автоматическая смена сервера при подтверждённой потере VPN включена. Ручной выбор сервера выключает авто.'
+				: 'Автоматическая смена сервера выключена. Включить — этой кнопкой.';
+		}
+
+		autoToggleBtn.addEventListener('click', function(ev) {
+			ev.preventDefault();
+			var next = autoState.effective ? 0 : 1;
+			autoToggleBtn.disabled = true;
+			callShpunServerAutoSet(next).then(function(r) {
+				r = r || {};
+				autoToggleBtn.disabled = false;
+				if (!r.ok) {
+					ui.addNotification(null, E('p', {}, 'Не удалось переключить авто: ' + (r.error || 'ошибка')), 'error');
+					return;
+				}
+				autoState.effective = !!r.effective_enabled;
+				autoState.adminDisabled = !!r.admin_disabled;
+				if (r.admin_disabled && next === 1)
+					ui.addNotification(null, E('p', {}, 'Автоматический failover административно отключён.'), 'warning');
+				renderAutoToggle();
+			}).catch(function(err) {
+				autoToggleBtn.disabled = false;
+				ui.addNotification(null, E('p', {}, 'Ошибка: ' + String(err)), 'error');
+			});
+		});
+
+		var excludeCheckbox = E('input', { 'type': 'checkbox', 'id': 'shpun-exclude-ru-cb' });
+		excludeCheckbox.checked = autoState.excludeRu;
+		excludeCheckbox.addEventListener('change', function() {
+			var val = excludeCheckbox.checked ? 1 : 0;
+			callShpunServerAutoExcludeRuSet(val).then(function(r) {
+				r = r || {};
+				if (!r.ok) {
+					ui.addNotification(null, E('p', {}, 'Не удалось изменить исключение РФ: ' + (r.error || 'ошибка')), 'error');
+					excludeCheckbox.checked = autoState.excludeRu;
+					return;
+				}
+				autoState.excludeRu = !!r.enabled;
+				excludeCheckbox.checked = autoState.excludeRu;
+				if (activeGroup === 'gateway')
+					autoButton.disabled = autoState.excludeRu ? true : null;
+				ui.addNotification(null, E('p', {}, autoState.excludeRu ? 'Серверы РФ исключены из автовыбора.' : 'Серверы РФ включены в автовыбор.'), 'info');
+			}).catch(function(err) {
+				excludeCheckbox.checked = autoState.excludeRu;
+				ui.addNotification(null, E('p', {}, 'Ошибка: ' + String(err)), 'error');
+			});
+		});
+		var excludeLabel = E('label', { 'for': 'shpun-exclude-ru-cb', 'style': 'display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;font-weight:800;color:#c7d2fe;' }, [excludeCheckbox, ' Исключать серверы РФ']);
+		var autoRow = E('div', { 'class': 'shpun-server-switch', 'style': 'grid-template-columns: minmax(0,1fr) auto; align-items:center; margin-bottom:6px;' }, [autoToggleBtn, excludeLabel]);
+		renderAutoToggle();
+
 		var serverSwitch = E('div', { 'class': 'shpun-server-switch' }, [ gatewayButton, directButton, autoButton ]);
 		renderGroup();
 
 		ui.showModal('Серверы VPN', [
 			E('div', { 'class': 'shpun-modal-wrap' }, [
 				E('div', { 'class': 'shpun-modal-desc' }, 'Выберите VPN-сервер. Время отклика измерено при открытии списка; после применения роутер переподключит туннель.'),
+				autoRow,
 				serverSwitch,
 				list,
 				E('div', { 'class': 'shpun-modal-footer' }, [
@@ -813,9 +889,11 @@ function openServersModal() {
 							ui.addNotification(null, E('p', {}, 'Переключаем сервер...'), 'info');
 							callShpunServerSet(chosen).then(function(r) {
 								r = r || {};
-								if (r.ok)
-									ui.addNotification(null, E('p', {}, 'Сервер выбран. VPN перезапускается.'), 'info');
-								else
+								if (r.ok) {
+									autoState.effective = false;
+									renderAutoToggle();
+									ui.addNotification(null, E('p', {}, 'Сервер выбран. VPN перезапускается. Авто-выбор выключен.'), 'info');
+								} else
 									ui.addNotification(null, E('p', {}, 'Не удалось выбрать сервер: ' + (r.error || 'ошибка')), 'error');
 							}).catch(function(err) {
 								ui.addNotification(null, E('p', {}, 'Ошибка: ' + String(err)), 'error');
@@ -912,6 +990,12 @@ return view.extend({
 				state.udp_ready ? 'shpun-badge--ok' : 'shpun-badge--warn',
 				state.udp_ready ? 'UDP через VPN: включен' : 'UDP через VPN: недоступен',
 				state.udp_ready ? 'UDP-трафик направляется через VPN.' : 'Роутер работает без UDP-туннеля; звонки и игры могут работать нестабильно.'
+			));
+		if (state.tunnel_quality_degraded === 1)
+			statusMetricBadges.push(makeBadge(
+				'shpun-badge--warn',
+				'Качество туннеля снижено',
+				'Базовая связь через VPN работает, но качество ухудшилось. Смена сервера не производится; роутер восстанавливает правила без перезапуска.'
 			));
 		var statusRows = [
 			E('div', { 'class': 'shpun-status-row shpun-status-row--top' }, statusTopBadges)
