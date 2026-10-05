@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=shpun-router
-PKG_VERSION:=1.1.11
+PKG_VERSION:=1.1.12
 PKG_RELEASE:=1
 SHPUN_LUCI_TAG:=$(subst .,_,$(PKG_VERSION))_r$(PKG_RELEASE)
 
@@ -128,6 +128,18 @@ define Package/$(PKG_NAME)/postinst
 		/etc/shpun/routes/presets/always_vpn.cidrs-opkg \
 		/etc/shpun/routes/presets/always_vpn.domains-opkg-new \
 		/etc/shpun/routes/presets/always_vpn.cidrs-opkg-new 2>/dev/null || true
+
+	# opkg preserves locally edited files under /etc and writes the packaged copy
+	# as .opkg-new. Keep those edits, but migrate the retired download host in the
+	# active runtime files so a later routing-mode change cannot use the old host.
+	for runtime_file in \
+		/etc/shpun/agent.sh \
+		/etc/shpun/set-routing-mode.sh \
+		/etc/shpun/agent.conf; do
+		[ -f "$$runtime_file" ] || continue
+		grep -q 'https://spb\.shpyn\.online/' "$$runtime_file" 2>/dev/null || continue
+		sed -i 's#https://spb\.shpyn\.online/#https://router.shpun.net/#g' "$$runtime_file" 2>/dev/null || true
+	done
 
 	chmod +x /etc/shpun/*.sh 2>/dev/null || true
 	/etc/shpun/disable-flow-offload.sh apply 2>/dev/null || true
