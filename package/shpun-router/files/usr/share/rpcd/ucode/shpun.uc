@@ -41,6 +41,7 @@ const ROUTING_SETTER  = DIR + "/set-routing-mode.sh";
 
 const CUSTOM_FILE     = ROUTES_DIR + "/custom.json";
 const CUSTOM_SCRIPT   = DIR + "/apply-custom-routes.sh";
+const CUSTOM_DOMAIN_APPLY = DIR + "/apply-custom-domain-routes.sh";
 const SERVER_SETTER   = DIR + "/switch-server.sh";
 const SERVER_AUTO     = DIR + "/auto-failover.sh";
 const SERVER_AUTO_STATUS = DIR + "/auto_select_status";
@@ -98,6 +99,20 @@ function write_toggle_atomic(path, enabled) {
 	let stamp = clock(true);
 	let tmp = path + ".tmp." + stamp[0] + "." + stamp[1];
 	let data = "" + enabled + "\n";
+	let f = open(tmp, "wx", 0o600);
+	if (!f) return false;
+	let written = f.write(data);
+	f.close();
+	if (written != length(data) || !rename(tmp, path)) {
+		unlink(tmp);
+		return false;
+	}
+	return true;
+}
+
+function write_file_atomic(path, data) {
+	let stamp = clock(true);
+	let tmp = path + ".tmp." + stamp[0] + "." + stamp[1];
 	let f = open(tmp, "wx", 0o600);
 	if (!f) return false;
 	let written = f.write(data);
@@ -836,7 +851,7 @@ return {
 		},
 
 		custom_routes_set: {
-			args: { vpn: [], direct: [] },
+			args: { vpn: [], direct: [], apply_now: false },
 			call: function(req) {
 				try {
 					let vpn_in    = (req && req.args && req.args.vpn)    ? req.args.vpn    : [];
@@ -844,6 +859,14 @@ return {
 
 					if (type(vpn_in)    != "array") vpn_in    = [];
 					if (type(direct_in) != "array") direct_in = [];
+					let apply_now = false;
+					if (req && req.args && req.args.apply_now != null) {
+						let av = req.args.apply_now;
+						let at = type(av);
+						if (at == "bool") apply_now = av;
+						else if ((at == "int" || at == "double") && (av == 0 || av == 1)) apply_now = av == 1;
+						else return { ok: 0, error: "apply_now must be boolean or 0/1" };
+					}
 
 					let vpn_ok    = [];
 					let direct_ok = [];
@@ -883,7 +906,7 @@ return {
 					let old_raw = readfile(CUSTOM_FILE) || "";
 					let old_data = parse_json_safe(old_raw);
 
-					if (old_raw == json_str)
+					if (old_raw == json_str && !apply_now)
 						return {
 							ok:           1,
 							vpn_count:    length(vpn_ok),
@@ -892,12 +915,8 @@ return {
 							unchanged:    true
 						};
 
-					let f = open(CUSTOM_FILE, "w");
-					if (!f)
+					if (old_raw != json_str && !write_file_atomic(CUSTOM_FILE, json_str))
 						return { ok: 0, error: "cannot write " + CUSTOM_FILE };
-
-					f.write(json_str);
-					f.close();
 
 					let applied = false;
 					let apply_output = "";
@@ -921,7 +940,28 @@ return {
 						routes_have_domains(vpn_ok) ||
 						routes_have_domains(direct_ok);
 
-					if (needs_rebuild) {
+					let restarted = false;
+					if (needs_rebuild && apply_now) {
+						if (!exists(CUSTOM_DOMAIN_APPLY)) {
+							if (old_raw) write_file_atomic(CUSTOM_FILE, old_raw); else unlink(CUSTOM_FILE);
+							return { ok: 0, error: "domain route apply helper not found" };
+						}
+
+						let rp = popen(CUSTOM_DOMAIN_APPLY + " 2>&1");
+						let route_output = "";
+						if (rp) { route_output = rp.read("all") || ""; rp.close(); }
+						if (trim(norm(route_output)) != "ok") {
+							if (old_raw) write_file_atomic(CUSTOM_FILE, old_raw); else unlink(CUSTOM_FILE);
+							if (exists(CUSTOM_SCRIPT)) {
+								let rollback_routes = popen(CUSTOM_SCRIPT + " apply >/dev/null 2>&1");
+								if (rollback_routes) rollback_routes.close();
+							}
+							return { ok: 0, error: "domain routes were not activated", output: trim(norm(route_output)) };
+						}
+						applied = true;
+						restarted = true;
+						warning = null;
+					} else if (needs_rebuild) {
 						let rp = popen(
 							"/etc/shpun/rebuild-config-deferred.sh >/dev/null 2>&1 &"
 						);
@@ -936,8 +976,8 @@ return {
 						vpn_count:    length(vpn_ok),
 						direct_count: length(direct_ok),
 						applied:      applied,
-						restarted:    false,
-						pending_rebuild: needs_rebuild,
+						restarted:    restarted,
+						pending_rebuild: needs_rebuild && !restarted,
 						apply_output: apply_output,
 						warning:      warning
 					};

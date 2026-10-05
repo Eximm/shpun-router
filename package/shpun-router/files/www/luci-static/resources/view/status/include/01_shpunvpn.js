@@ -112,7 +112,7 @@ var callShpunCustomRoutesGet = rpc.declare({
 	object: 'shpun', method: 'custom_routes_get', expect: { '': {} }
 });
 var callShpunCustomRoutesSet = rpc.declare({
-	object: 'shpun', method: 'custom_routes_set', params: ['vpn', 'direct'], expect: { '': {} }
+	object: 'shpun', method: 'custom_routes_set', params: ['vpn', 'direct', 'apply_now'], expect: { '': {} }
 });
 var callShpunServersGet = rpc.declare({
 	object: 'shpun', method: 'servers_get', expect: { '': {} }
@@ -580,7 +580,7 @@ function openCustomRoutesModal() {
 					E('code', {}, '1.2.3.4'),
 					' IP, ',
 					E('code', {}, '10.0.0.0/8'),
-					' сеть. Для UDP-звонков и игр надежнее указывать IP или CIDR.'
+					' сеть. Для UDP-звонков и игр надежнее указывать IP или CIDR. Доменные изменения применяются сразу с коротким контролируемым переподключением VPN.'
 				]),
 				E('div', { 'class': 'shpun-modal-cols' }, [
 					buildCol('vpn',    'Принудительно через VPN', vpnList),
@@ -596,13 +596,15 @@ function openCustomRoutesModal() {
 						'type': 'button',
 						'class': 'shpun-modal-btn shpun-modal-btn--primary',
 						'click': function() {
-							callShpunCustomRoutesSet(vpnList.slice(), directList.slice()).then(function(res) {
+							callShpunCustomRoutesSet(vpnList.slice(), directList.slice(), true).then(function(res) {
 								res = res || {};
 								ui.hideModal();
 								if (res.ok) {
 									ui.addNotification(null, E('p', {}, 'Маршруты сохранены: ' + res.vpn_count + ' через VPN, ' + res.direct_count + ' напрямую.'), 'info');
 									if (!res.applied && !res.unchanged)
 										ui.addNotification(null, E('p', {}, 'Правила будут применены автоматически, когда VPN-туннель и его маршрутизация будут активны.'), 'warning');
+									if (res.restarted)
+										ui.addNotification(null, E('p', {}, 'Доменные маршруты проверены и уже применены.'), 'info');
 									if (res.pending_rebuild)
 										ui.addNotification(null, E('p', {}, 'Доменные маршруты сохранены без разрыва соединения и будут полностью применены при следующем безопасном переподключении VPN.'), 'warning');
 								} else
@@ -612,7 +614,7 @@ function openCustomRoutesModal() {
 								ui.addNotification(null, E('p', {}, 'Ошибка сохранения: ' + String(err)), 'error');
 							});
 						}
-					}, 'Сохранить')
+					}, 'Сохранить и применить')
 				])
 			])
 		]);
@@ -1176,7 +1178,7 @@ return view.extend({
 				ui.showModal('Переключение режима маршрутизации', [
 					E('div', { 'class': 'shpun-modal-wrap' }, [
 						E('div', { 'class': 'shpun-modal-desc' }, 'Список российских адресов ещё не загружен. Роутер скачает и применит его автоматически. На слабом устройстве это может занять несколько минут.'),
-						E('div', { 'class': 'shpun-modal-help' }, 'Пока маршруты применяются, интернет продолжит работать через VPN.'),
+						E('div', { 'class': 'shpun-modal-help' }, 'Большой список подготовится без обрыва трафика; при финальном переключении VPN может кратко переподключиться.'),
 						E('div', { 'class': 'shpun-modal-footer' }, [
 							E('button', {
 								'type': 'button',

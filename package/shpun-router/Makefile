@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=shpun-router
-PKG_VERSION:=1.1.10
+PKG_VERSION:=1.1.11
 PKG_RELEASE:=1
 SHPUN_LUCI_TAG:=$(subst .,_,$(PKG_VERSION))_r$(PKG_RELEASE)
 
@@ -70,6 +70,7 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_BIN) ./files/etc/shpun/disable-flow-offload.sh  $(1)/etc/shpun/disable-flow-offload.sh
 	$(INSTALL_BIN) ./files/etc/shpun/set-routing-mode.sh      $(1)/etc/shpun/set-routing-mode.sh
 	$(INSTALL_BIN) ./files/etc/shpun/apply-custom-routes.sh   $(1)/etc/shpun/apply-custom-routes.sh
+	$(INSTALL_BIN) ./files/etc/shpun/apply-custom-domain-routes.sh $(1)/etc/shpun/apply-custom-domain-routes.sh
 	$(INSTALL_BIN) ./files/etc/shpun/xray-wrapper.sh          $(1)/etc/shpun/xray-wrapper.sh
 
 	# default config

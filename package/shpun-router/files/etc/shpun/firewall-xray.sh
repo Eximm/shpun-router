@@ -8,6 +8,8 @@ MODE_FILE="$ROUTES_DIR/mode"
 CIDRS_FILE="$ROUTES_DIR/ru.cidrs"
 ALWAYS_VPN_CIDRS_FILE="$ROUTES_DIR/presets/always_vpn.cidrs"
 CUSTOM_SCRIPT="/etc/shpun/apply-custom-routes.sh"
+RU_LIVE_SHA_FILE="/tmp/shpun-ru-live.sha256"
+DOMAIN_DIRECT_RELOAD_FILE="/tmp/shpun-domain-direct-needs-reload"
 UDP_READY_FILE="/etc/shpun/udp_ready"
 
 LOCKDIR="/tmp/shpun-firewall.lock"
@@ -145,13 +147,18 @@ nft_create_base() {
 
     nft add table inet shpun || return 1
 
-    if [ "$MODE" = "split_ru" ]; then
-        nft add set inet shpun ru_dst '{ type ipv4_addr; flags interval; auto-merge; }' || return 1
-    fi
+    # Keep ru_dst available in every mode.  This lets split_ru be prepared
+    # while the current rules keep carrying traffic, then enabled with only a
+    # short ruleset swap instead of deleting the live table first.
+    nft add set inet shpun ru_dst '{ type ipv4_addr; flags interval; auto-merge; }' || return 1
 
     nft add set inet shpun always_vpn '{ type ipv4_addr; flags interval; auto-merge; }' || return 1
     nft add set inet shpun custom_direct '{ type ipv4_addr; flags interval; auto-merge; }' || return 1
     nft add set inet shpun custom_vpn '{ type ipv4_addr; flags interval; auto-merge; }' || return 1
+    # dnsmasq populates this set for smart_ru and custom direct domains.  It is
+    # intentionally used only for UDP: TCP remains routed by Xray using SNI.
+    nft add set inet shpun domain_direct '{ type ipv4_addr; }' || return 1
+    : > "$DOMAIN_DIRECT_RELOAD_FILE"
 
     nft add chain inet shpun prerouting '{ type nat hook prerouting priority dstnat; policy accept; }' || return 1
 
@@ -252,6 +259,7 @@ nft_fill_cidr_set() {
     [ -s "$file" ] || return 0
 
     tmp="/tmp/shpun_${set_name}_$$.nft"
+    clean_tmp="${tmp}.clean"
     start_ts="$(date +%s 2>/dev/null || echo 0)"
 
     log "$label: loading started chunk=$CHUNK_SIZE batch=$tmp"
@@ -261,13 +269,22 @@ nft_fill_cidr_set() {
     total=0
     skipped=0
 
-    rm -f "$tmp"
+    rm -f "$tmp" "$clean_tmp"
+    if ! tr -d ' \t\r' < "$file" > "$clean_tmp" 2>/dev/null; then
+        rm -f "$tmp" "$clean_tmp"
+        log "$label: failed to prepare normalized CIDR input"
+        return 1
+    fi
+
     if [ "$replace_existing" = "1" ]; then
-        printf 'flush set inet shpun %s\n' "$set_name" > "$tmp"
+        if ! printf 'flush set inet shpun %s\n' "$set_name" > "$tmp"; then
+            rm -f "$tmp" "$clean_tmp"
+            log "$label: failed to initialize nft batch"
+            return 1
+        fi
     fi
 
     while IFS= read -r cidr; do
-        cidr="$(printf '%s' "$cidr" | tr -d ' \t\r')"
         [ -z "$cidr" ] && continue
 
         case "$cidr" in
@@ -326,30 +343,38 @@ nft_fill_cidr_set() {
         total=$((total + 1))
 
         if [ "$count" -ge "$CHUNK_SIZE" ]; then
-            printf 'add element inet shpun %s { %s }\n' "$set_name" "$chunk" >> "$tmp"
+            if ! printf 'add element inet shpun %s { %s }\n' "$set_name" "$chunk" >> "$tmp"; then
+                rm -f "$tmp" "$clean_tmp"
+                log "$label: failed to write nft batch"
+                return 1
+            fi
             chunk=""
             count=0
         fi
-    done < "$file"
+    done < "$clean_tmp"
 
     if [ -n "$chunk" ]; then
-        printf 'add element inet shpun %s { %s }\n' "$set_name" "$chunk" >> "$tmp"
+        if ! printf 'add element inet shpun %s { %s }\n' "$set_name" "$chunk" >> "$tmp"; then
+            rm -f "$tmp" "$clean_tmp"
+            log "$label: failed to write nft batch"
+            return 1
+        fi
     fi
 
     if [ "$total" -eq 0 ]; then
-        rm -f "$tmp"
+        rm -f "$tmp" "$clean_tmp"
         log "$label: no valid CIDR entries found (skipped=$skipped)"
         return 1
     fi
 
     if ! nft -f "$tmp" >/dev/null 2>&1; then
-        rm -f "$tmp"
+        rm -f "$tmp" "$clean_tmp"
         log "$label: batch load failed total=$total skipped=$skipped, trying fallback"
         nft_fill_cidr_set_slow "$set_name" "$file" "$label" "$replace_existing" "$total" "$skipped"
         return $?
     fi
 
-    rm -f "$tmp"
+    rm -f "$tmp" "$clean_tmp"
     end_ts="$(date +%s 2>/dev/null || echo 0)"
     duration=$((end_ts - start_ts))
     log "$label: loaded $total CIDR entries (skipped=$skipped, duration=${duration}s)"
@@ -357,7 +382,8 @@ nft_fill_cidr_set() {
 }
 
 nft_fill_ru_dst() {
-    nft_fill_cidr_set ru_dst "$CIDRS_FILE" ru_dst
+    nft_fill_cidr_set ru_dst "$CIDRS_FILE" ru_dst || return 1
+    mark_ru_live
 }
 
 nft_fill_always_vpn() {
@@ -390,6 +416,33 @@ nft_replace_cidr_set() {
 
     log "$label: live nft set updated in one transaction without VPN restart"
     return 0
+}
+
+calc_file_sha256() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" 2>/dev/null | awk '{print $1}'
+    elif command -v openssl >/dev/null 2>&1; then
+        openssl dgst -sha256 "$1" 2>/dev/null | awk '{print $NF}'
+    fi
+}
+
+mark_ru_live() {
+    ru_sha="$(calc_file_sha256 "$CIDRS_FILE")"
+    [ -n "$ru_sha" ] && printf '%s\n' "$ru_sha" > "$RU_LIVE_SHA_FILE"
+    return 0
+}
+
+ru_live_matches_file() {
+    nft_set_has_elements ru_dst || return 1
+    [ -s "$RU_LIVE_SHA_FILE" ] || return 1
+    live_sha="$(tr -d '\r\n ' < "$RU_LIVE_SHA_FILE" 2>/dev/null)"
+    file_sha="$(calc_file_sha256 "$CIDRS_FILE")"
+    [ -n "$file_sha" ] && [ "$live_sha" = "$file_sha" ]
+}
+
+nft_replace_ru_dst() {
+    nft_replace_cidr_set ru_dst "$CIDRS_FILE" ru_dst || return 1
+    mark_ru_live
 }
 
 nft_apply_tcp_redirect_rules() {
@@ -442,6 +495,7 @@ nft_apply_udp_rules() {
     nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" meta l4proto udp ip daddr @always_vpn counter tproxy ip to :"$TPROXY_PORT" meta mark set "0x${TPROXY_MARK}" || return 1
     nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" meta l4proto udp ip daddr @custom_vpn counter tproxy ip to :"$TPROXY_PORT" meta mark set "0x${TPROXY_MARK}" || return 1
     nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" ip daddr @custom_direct counter return || return 1
+    nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" meta l4proto udp ip daddr @domain_direct counter return || return 1
 
     if [ "$MODE" = "split_ru" ]; then
         nft add rule inet shpun prerouting_mangle iifname "$LAN_IF" ip daddr @ru_dst return || return 1
@@ -467,6 +521,82 @@ nft_apply_custom() {
         return 1
     }
 
+    return 0
+}
+
+nft_ensure_live_sets() {
+    nft list table inet shpun >/dev/null 2>&1 || return 1
+
+    for set_name in ru_dst always_vpn custom_direct custom_vpn; do
+        if ! nft list set inet shpun "$set_name" >/dev/null 2>&1; then
+            nft add set inet shpun "$set_name" '{ type ipv4_addr; flags interval; auto-merge; }' || return 1
+        fi
+    done
+
+    if ! nft list set inet shpun domain_direct >/dev/null 2>&1; then
+        nft add set inet shpun domain_direct '{ type ipv4_addr; }' || return 1
+        : > "$DOMAIN_DIRECT_RELOAD_FILE"
+    fi
+
+    return 0
+}
+
+nft_prepare_mode() {
+    MODE="$(get_mode)"
+
+    nft_ensure_live_sets || {
+        log "prepare mode=$MODE: live nft table is not ready"
+        return 1
+    }
+
+    if [ "$MODE" = "split_ru" ]; then
+        [ -s "$CIDRS_FILE" ] || {
+            log "prepare mode=split_ru: $CIDRS_FILE missing"
+            return 1
+        }
+        if ru_live_matches_file; then
+            log "prepare mode=split_ru: reusing verified live ru_dst set"
+        else
+            nft_replace_ru_dst || return 1
+        fi
+    fi
+
+    log "prepare mode=$MODE: live sets ready; active traffic rules unchanged"
+    return 0
+}
+
+nft_apply_mode_live() {
+    LAN_IF="$(get_lan_if)"
+    LAN_IP="$(get_lan_ip)"
+    MODE="$(get_mode)"
+
+    if [ "${SHPUN_MODE_PREPARED:-0}" != "1" ]; then
+        nft_prepare_mode || return 1
+    else
+        nft_ensure_live_sets || return 1
+        log "live mode=$MODE: using preloaded route sets"
+    fi
+
+    if ! nft_apply_tcp_redirect_rules "$LAN_IF" "$LAN_IP" "$MODE"; then
+        log "live mode=$MODE: failed to replace TCP rules"
+        return 1
+    fi
+
+    if check_tproxy; then
+        tproxy_routes_add
+        if ! nft_apply_udp_rules "$LAN_IF" "$LAN_IP" "$MODE"; then
+            log "live mode=$MODE: failed to replace UDP rules"
+            return 1
+        fi
+        echo "ok" > "$UDP_READY_FILE"
+    else
+        rm -f "$UDP_READY_FILE"
+        nft delete chain inet shpun prerouting_mangle 2>/dev/null || true
+        tproxy_routes_del
+    fi
+
+    nft_apply_custom || return 1
+    log "live mode=$MODE: firewall rules activated without rebuilding the nft table"
     return 0
 }
 
@@ -548,6 +678,8 @@ nft_init() {
 nft_stop() {
     log "removing table inet shpun"
     rm -f "$UDP_READY_FILE"
+    rm -f "$RU_LIVE_SHA_FILE"
+    rm -f "$DOMAIN_DIRECT_RELOAD_FILE"
     nft delete table inet shpun 2>/dev/null
     tproxy_routes_del
 }
@@ -569,7 +701,13 @@ case "$1" in
     apply-mode)
         load_conf
         lock_acquire || exit 1
-        command -v nft >/dev/null 2>&1 && { nft_init && exit 0; }
+        command -v nft >/dev/null 2>&1 && { nft_apply_mode_live && exit 0; }
+        exit 1
+        ;;
+    prepare-mode)
+        load_conf
+        lock_acquire || exit 1
+        command -v nft >/dev/null 2>&1 && { nft_prepare_mode && exit 0; }
         exit 1
         ;;
     reload-always-vpn)
@@ -581,7 +719,7 @@ case "$1" in
     reload-ru)
         load_conf
         lock_acquire || exit 1
-        command -v nft >/dev/null 2>&1 && { nft_replace_cidr_set ru_dst "$CIDRS_FILE" ru_dst && exit 0; }
+        command -v nft >/dev/null 2>&1 && { nft_replace_ru_dst && exit 0; }
         exit 1
         ;;
     stop)
@@ -595,7 +733,7 @@ case "$1" in
         exit $?
         ;;
     *)
-        echo "Usage: $0 [start|init|apply-mode|reload-always-vpn|reload-ru|stop|restart]" >&2
+        echo "Usage: $0 [start|init|prepare-mode|apply-mode|reload-always-vpn|reload-ru|stop|restart]" >&2
         exit 1
         ;;
 esac

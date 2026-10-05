@@ -25,7 +25,7 @@ load_conf() {
 }
 
 start_service() {
-    # The managed updater starts the agent once opkg is complete. Starting
+    # The managed updater starts the agent once apk is complete. Starting
     # Xray from default_postinst would load the large route set twice.
     [ "${SHPUN_MANAGED_UPDATE:-0}" = "1" ] && {
         logger -t "$LOG_TAG" "managed package update: VPN start deferred to router_updater"
@@ -50,13 +50,23 @@ start_service() {
     fi
 
     if [ -x /etc/shpun/firewall-xray.sh ]; then
-        /etc/shpun/firewall-xray.sh init || {
+        firewall_action="init"
+        if [ "${SHPUN_PRESERVE_FIREWALL:-0}" = "1" ] && nft list table inet shpun >/dev/null 2>&1; then
+            firewall_action="apply-mode"
+        fi
+        /etc/shpun/firewall-xray.sh "$firewall_action" || {
             logger -t "$LOG_TAG" "firewall-xray.sh init failed"
             return 1
         }
     else
         logger -t "$LOG_TAG" "firewall-xray.sh not found"
         return 1
+    fi
+
+    # Keep dnsmasq's domain-to-nftset mapping in sync on ordinary starts too;
+    # controlled callers also re-apply it after Xray has become ready.
+    if [ -x "$DNS_SCRIPT" ]; then
+        "$DNS_SCRIPT" apply || logger -t "$LOG_TAG" "dns-xray.sh apply failed"
     fi
 
     logger -t "$LOG_TAG" "starting xray: $ENGINE_BIN run -config $ENGINE_CONFIG"
@@ -76,11 +86,15 @@ stop_service() {
     logger -t "$LOG_TAG" "stopping xray"
     rm -f "$DNS_PROXY_READY_FILE"
 
-    if [ -x "$DNS_SCRIPT" ]; then
+    if [ "${SHPUN_PRESERVE_FIREWALL:-0}" = "1" ]; then
+        logger -t "$LOG_TAG" "preserving DNS routes during controlled xray restart"
+    elif [ -x "$DNS_SCRIPT" ]; then
         "$DNS_SCRIPT" clear || logger -t "$LOG_TAG" "dns-xray.sh clear failed"
     fi
 
-    if [ -x /etc/shpun/firewall-xray.sh ]; then
+    if [ "${SHPUN_PRESERVE_FIREWALL:-0}" = "1" ]; then
+        logger -t "$LOG_TAG" "preserving live firewall during controlled xray restart"
+    elif [ -x /etc/shpun/firewall-xray.sh ]; then
         /etc/shpun/firewall-xray.sh stop
     fi
 }

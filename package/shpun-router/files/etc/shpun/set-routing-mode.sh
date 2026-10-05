@@ -24,7 +24,7 @@ ROUTER_PROFILE_FILE="$ROUTES_DIR/router_profile"
 SMART_RU_DOMAINS_FILE="$ROUTES_DIR/presets/smart_ru.domains"
 SMART_RU_DOMAINS_VER_FILE="$ROUTES_DIR/presets/smart_ru.domains.version"
 SMART_RU_DOMAINS_SHA_FILE="$ROUTES_DIR/presets/smart_ru.domains.sha256"
-ROUTES_URL_BASE_DEFAULT="https://spb.shpyn.online/files/routes"
+ROUTES_URL_BASE_DEFAULT="https://router.shpun.net/files/routes"
 SPLIT_RU_MIN_MEM_KB_DEFAULT=131072
 SPLIT_RU_WARN_MEM_KB_DEFAULT=196608
 HTTP_USER_AGENT_DEFAULT="ShpunRouter"
@@ -70,6 +70,7 @@ lock_config() {
 
 load_conf() {
     [ -f "$CONF" ] && . "$CONF"
+    ROUTES_URL_BASE="$(printf '%s\n' "$ROUTES_URL_BASE" | sed 's#https://spb\.shpyn\.online/#https://router.shpun.net/#g')"
     [ -z "$ROUTES_URL_BASE" ] && ROUTES_URL_BASE="$ROUTES_URL_BASE_DEFAULT"
     [ -z "$SPLIT_RU_MIN_MEM_KB" ] && SPLIT_RU_MIN_MEM_KB="$SPLIT_RU_MIN_MEM_KB_DEFAULT"
     [ -z "$SPLIT_RU_WARN_MEM_KB" ] && SPLIT_RU_WARN_MEM_KB="$SPLIT_RU_WARN_MEM_KB_DEFAULT"
@@ -463,6 +464,7 @@ fi
 if [ -s "$VPN_READY_FILE" ] && is_vpn_process_running &&
     [ -n "$OLD_CONFIG_SHA" ] && [ "$OLD_CONFIG_SHA" = "$NEW_CONFIG_SHA" ]; then
     if [ -x "$FIREWALL_SCRIPT" ] && "$FIREWALL_SCRIPT" apply-mode; then
+        [ -x "$DNS_SCRIPT" ] && "$DNS_SCRIPT" apply >/dev/null 2>&1 || true
         rm -f "$CONFIG_BACKUP"
         log "mode set to $MODE, live firewall rules applied without restarting shpun-vpn"
         echo "ok"
@@ -477,13 +479,26 @@ if [ -s "$VPN_READY_FILE" ] && is_vpn_process_running &&
         rm -f "$ENGINE_CONFIG" "$CONFIG_BACKUP"
     fi
     [ -x "$FIREWALL_SCRIPT" ] && "$FIREWALL_SCRIPT" apply-mode >/dev/null 2>&1 || true
+    [ -x "$DNS_SCRIPT" ] && "$DNS_SCRIPT" apply >/dev/null 2>&1 || true
     echo "firewall_apply_failed"
     exit 1
 fi
 
-log "mode set to $MODE, restarting shpun-vpn with rebuilt config"
+if [ -x "$FIREWALL_SCRIPT" ] && ! "$FIREWALL_SCRIPT" prepare-mode; then
+    log "failed to prepare live firewall for mode=$MODE, rolling back to $OLD_MODE"
+    printf '%s\n' "$OLD_MODE" > "$MODE_FILE"
+    if [ -s "$CONFIG_BACKUP" ]; then
+        mv "$CONFIG_BACKUP" "$ENGINE_CONFIG"
+    else
+        rm -f "$ENGINE_CONFIG" "$CONFIG_BACKUP"
+    fi
+    echo "firewall_prepare_failed"
+    exit 1
+fi
 
-/etc/init.d/shpun-vpn restart || {
+log "mode set to $MODE, restarting xray while preserving prepared firewall"
+
+SHPUN_PRESERVE_FIREWALL=1 SHPUN_MODE_PREPARED=1 /etc/init.d/shpun-vpn restart || {
     log "failed to restart shpun-vpn after mode=$MODE, rolling back to $OLD_MODE"
     printf '%s\n' "$OLD_MODE" > "$MODE_FILE"
     if [ -s "$CONFIG_BACKUP" ]; then
@@ -491,7 +506,8 @@ log "mode set to $MODE, restarting shpun-vpn with rebuilt config"
     else
         rm -f "$ENGINE_CONFIG" "$CONFIG_BACKUP"
     fi
-    /etc/init.d/shpun-vpn restart >/dev/null 2>&1 || true
+    [ -x "$FIREWALL_SCRIPT" ] && "$FIREWALL_SCRIPT" prepare-mode >/dev/null 2>&1 || true
+    SHPUN_PRESERVE_FIREWALL=1 SHPUN_MODE_PREPARED=1 /etc/init.d/shpun-vpn restart >/dev/null 2>&1 || true
     exit 1
 }
 
@@ -503,7 +519,8 @@ if ! wait_vpn_started; then
     else
         rm -f "$ENGINE_CONFIG" "$CONFIG_BACKUP"
     fi
-    /etc/init.d/shpun-vpn restart >/dev/null 2>&1 || true
+    [ -x "$FIREWALL_SCRIPT" ] && "$FIREWALL_SCRIPT" prepare-mode >/dev/null 2>&1 || true
+    SHPUN_PRESERVE_FIREWALL=1 SHPUN_MODE_PREPARED=1 /etc/init.d/shpun-vpn restart >/dev/null 2>&1 || true
     echo "vpn_start_failed"
     exit 1
 fi
@@ -515,7 +532,7 @@ echo "ok" > "$VPN_READY_FILE"
 rm -f "$VERROR_FILE"
 if grep -q '"tag": "dns-in"' "$ENGINE_CONFIG" 2>/dev/null; then
     echo "ok" > "$DNS_PROXY_READY_FILE"
-    [ -x "$DNS_SCRIPT" ] && "$DNS_SCRIPT" apply >/dev/null 2>&1 || true
 fi
+[ -x "$DNS_SCRIPT" ] && "$DNS_SCRIPT" apply >/dev/null 2>&1 || true
 echo "ok"
 exit 0

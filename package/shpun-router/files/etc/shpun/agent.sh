@@ -26,6 +26,7 @@ VERROR_FILE="$STATE_DIR/vpn_error"
 CONFIG_ACTIVE_FILE="$STATE_DIR/xray_config_active"
 CONFIG_PENDING_FILE="$STATE_DIR/xray_config_pending"
 DNS_PROXY_READY_FILE="$STATE_DIR/dns_proxy_ready"
+VPN_RESTART_PRESERVE_FILE="$STATE_DIR/vpn_restart_preserve"
 UDP_READY_FILE="$STATE_DIR/udp_ready"
 TUNNEL_EXIT_IP_FILE="$STATE_DIR/tunnel_exit_ip"
 TUNNEL_EXIT_CHECK_MS_FILE="$STATE_DIR/tunnel_exit_check_ms"
@@ -85,7 +86,7 @@ AUTO_RECOVERY_BASE_INTERVAL_DEFAULT=60
 AUTO_RECOVERY_MAX_INTERVAL_DEFAULT=1800
 DNS_BOOTSTRAP_ENABLE_DEFAULT=1
 DNS_BOOTSTRAP_SERVERS_DEFAULT="77.88.8.8 77.88.8.1 1.1.1.1 1.0.0.1 8.8.8.8 8.8.4.4 9.9.9.9"
-DNS_BOOTSTRAP_TEST_DOMAINS_DEFAULT="router.shpun.net spb.shpyn.online"
+DNS_BOOTSTRAP_TEST_DOMAINS_DEFAULT="router.shpun.net"
 
 ROUTES_DIR="$STATE_DIR/routes"
 ROUTES_CIDRS_FILE="$ROUTES_DIR/ru.cidrs"
@@ -104,7 +105,7 @@ ALWAYS_VPN_DOMAINS_SHA_FILE="$PRESETS_DIR/always_vpn.domains.sha256"
 ALWAYS_VPN_CIDRS_VER_FILE="$PRESETS_DIR/always_vpn.cidrs.version"
 ALWAYS_VPN_CIDRS_SHA_FILE="$PRESETS_DIR/always_vpn.cidrs.sha256"
 
-ROUTES_URL_BASE_DEFAULT="https://spb.shpyn.online/files/routes"
+ROUTES_URL_BASE_DEFAULT="https://router.shpun.net/files/routes"
 ROUTES_CHECK_INTERVAL_DEFAULT=43200
 
 HTTP_BIN=""
@@ -297,11 +298,31 @@ enable_protected_dns_forwarding() {
 
 	echo "ok" > "$DNS_PROXY_READY_FILE"
 	apply_protected_dns_forwarding
+	rm -f "$VPN_RESTART_PRESERVE_FILE"
 }
 
 disable_protected_dns_forwarding() {
-	rm -f "$DNS_PROXY_READY_FILE"
+	rm -f "$DNS_PROXY_READY_FILE" "$VPN_RESTART_PRESERVE_FILE"
 	[ -x /etc/shpun/dns-xray.sh ] && /etc/shpun/dns-xray.sh clear || true
+}
+
+planned_vpn_restart_active() {
+	local now started age
+
+	[ -s "$VPN_RESTART_PRESERVE_FILE" ] || return 1
+	now="$(date +%s 2>/dev/null || echo 0)"
+	started="$(cat "$VPN_RESTART_PRESERVE_FILE" 2>/dev/null | tr -d '\r\n ' || echo 0)"
+	case "$now" in ''|*[!0-9]*) now=0 ;; esac
+	case "$started" in ''|*[!0-9]*) started=0 ;; esac
+	age=$((now - started))
+
+	if [ "$started" -gt 0 ] && [ "$age" -ge 0 ] && [ "$age" -le 120 ]; then
+		return 0
+	fi
+
+	log "removing stale planned VPN restart marker (age=${age}s)"
+	rm -f "$VPN_RESTART_PRESERVE_FILE"
+	return 1
 }
 
 disable_dead_vpn_path() {
@@ -754,6 +775,25 @@ engine_url_from_base() {
 
 load_conf() {
 	[ -f "$CONF" ] && . "$CONF"
+
+	# Existing installations preserve agent.conf across package upgrades. Replace
+	# only the retired public hostname in legacy saved values so upgraded routers
+	# immediately use the canonical endpoint without overwriting other admin
+	# customizations.
+	ENGINE_URL="$(printf '%s\n' "$ENGINE_URL" | sed 's#https://spb\.shpyn\.online/#https://router.shpun.net/#g')"
+	ENGINE_BASE_URL="$(printf '%s\n' "$ENGINE_BASE_URL" | sed 's#https://spb\.shpyn\.online/#https://router.shpun.net/#g')"
+	ENGINE_BASE_URLS="$(printf '%s\n' "$ENGINE_BASE_URLS" | sed 's#https://spb\.shpyn\.online/#https://router.shpun.net/#g')"
+	[ "$ENGINE_BASE_URLS" = "https://router.shpun.net/files/xray https://router.shpun.net/files/xray" ] && \
+		ENGINE_BASE_URLS="https://router.shpun.net/files/xray"
+	ROUTES_URL_BASE="$(printf '%s\n' "$ROUTES_URL_BASE" | sed 's#https://spb\.shpyn\.online/#https://router.shpun.net/#g')"
+	case "$DNS_BOOTSTRAP_TEST_DOMAINS" in
+		"router.shpun.net spb.shpyn.online"|"spb.shpyn.online router.shpun.net"|"spb.shpyn.online")
+			DNS_BOOTSTRAP_TEST_DOMAINS="router.shpun.net"
+			;;
+		*spb.shpyn.online*)
+			DNS_BOOTSTRAP_TEST_DOMAINS="$(printf '%s\n' "$DNS_BOOTSTRAP_TEST_DOMAINS" | sed 's/spb\.shpyn\.online/router.shpun.net/g')"
+			;;
+	esac
 
 	[ -z "$API_URL" ]               && API_URL="$API_URL_DEFAULT"
 	if [ "$API_URL" = "$API_URL_LEGACY_DEFAULT" ]; then
@@ -1643,7 +1683,11 @@ restart_vpn() {
 
 	log "restarting shpun-vpn"
 
-	if ! /etc/init.d/shpun-vpn restart 2>/dev/null; then
+	# A managed restart only replaces the Xray process/config. Keep the live
+	# firewall and dnsmasq domain forwarding in place so recovery does not cause
+	# several unrelated dnsmasq restarts and a longer LAN DNS interruption.
+	if ! SHPUN_PRESERVE_FIREWALL=1 SHPUN_MODE_PREPARED=1 \
+		/etc/init.d/shpun-vpn restart 2>/dev/null; then
 		log "failed to restart shpun-vpn"
 		return 1
 	fi
@@ -2457,7 +2501,10 @@ recover_current_server() {
 	printf '%s\n' "$now" > "$AUTO_RECOVERY_LAST_ATTEMPT_FILE" 2>/dev/null || true
 	printf '%s\n' "$((fail + 1))" > "$AUTO_RECOVERY_FAIL_COUNT_FILE" 2>/dev/null || true
 	rm -f "$VPN_READY_FILE" "$TUNNEL_QUALITY_DEGRADED_FILE"
-	/etc/init.d/shpun-vpn stop >/dev/null 2>&1 || true
+	# Keep the already prepared routes while the same server is restarted.
+	# ensure_vpn_from_subscription() will validate/start Xray and clear the
+	# preserved DNS forwarding if the process cannot be restored.
+	SHPUN_PRESERVE_FIREWALL=1 /etc/init.d/shpun-vpn stop >/dev/null 2>&1 || true
 	if ensure_vpn_from_subscription; then
 		log "current server restart completed; waiting for the next tunnel probe before clearing recovery backoff"
 	else
@@ -3231,7 +3278,7 @@ main_loop() {
 		[ -x /etc/shpun/disable-flow-offload.sh ] && /etc/shpun/disable-flow-offload.sh apply || true
 		ensure_lan_ipv6_disabled
 
-		if ! is_vpn_process_running; then
+		if ! is_vpn_process_running && ! planned_vpn_restart_active; then
 			disable_protected_dns_forwarding
 		fi
 		ensure_bootstrap_dns

@@ -12,6 +12,7 @@ ENGINE_CONFIG_DEFAULT="/etc/shpun/xray.json"
 CONFIG_ACTIVE_FILE="/etc/shpun/xray_config_active"
 CONFIG_PENDING_FILE="/etc/shpun/xray_config_pending"
 VPN_READY_FILE="/etc/shpun/vpn_ready"
+VPN_RESTART_PRESERVE_FILE="/etc/shpun/vpn_restart_preserve"
 VERROR_FILE="/etc/shpun/vpn_error"
 CONFIG_LOCKDIR="${CONFIG_LOCKDIR:-/tmp/shpun-config.lock}"
 SELECTION_LOCKDIR="${AUTO_FAILOVER_LOCKDIR:-/tmp/shpun-auto-failover.lock}"
@@ -248,7 +249,17 @@ if [ "$DISABLE_AUTO_AFTER_SUCCESS" -eq 1 ]; then
 	rm -f /etc/shpun/auto_failover_last_attempt /etc/shpun/auto_failover_last_success /etc/shpun/auto_failover_from
 fi
 log "server index $NEW_INDEX validated, restarting VPN once to apply it"
-/etc/init.d/shpun-vpn stop >/dev/null 2>&1 || true
+# The selected endpoint changes, but the transparent routing and per-domain
+# DNS rules do not. Preserve them while the agent starts the validated config;
+# this avoids several dnsmasq restarts during every manual/automatic switch.
+restart_marker="${VPN_RESTART_PRESERVE_FILE}.candidate.$$"
+if date +%s > "$restart_marker" 2>/dev/null && mv "$restart_marker" "$VPN_RESTART_PRESERVE_FILE" 2>/dev/null; then
+	SHPUN_PRESERVE_FIREWALL=1 /etc/init.d/shpun-vpn stop >/dev/null 2>&1 || true
+else
+	rm -f "$restart_marker" "$VPN_RESTART_PRESERVE_FILE"
+	log "cannot create planned restart marker; using full VPN stop"
+	/etc/init.d/shpun-vpn stop >/dev/null 2>&1 || true
+fi
 /etc/init.d/shpun-agent restart >/dev/null 2>&1 &
 
 echo "ok"
