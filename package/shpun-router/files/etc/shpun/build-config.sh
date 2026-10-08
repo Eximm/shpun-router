@@ -23,7 +23,7 @@ command -v jsonfilter >/dev/null 2>&1 || {
 }
 
 # ==========================
-# 1. Select the VLESS subscription link
+# 1. Select a supported subscription link
 # ==========================
 
 SELECTED_LINK_INDEX="$(cat "$SELECTED_LINK_FILE" 2>/dev/null | tr -d '\r\n ' || echo 0)"
@@ -35,10 +35,10 @@ get_subscription_link() {
     idx="$1"
 
     for base in "@.subscription.links[$idx]" "@.links[$idx]"; do
-        for suffix in "" ".url" ".link" ".uri" ".vless"; do
+        for suffix in "" ".url" ".link" ".uri" ".vless" ".hysteria2" ".hy2"; do
             val="$(jsonfilter -i "$SUB_FILE" -e "${base}${suffix}" 2>/dev/null | head -n 1 | tr -d '\r\n')"
             case "$val" in
-                vless://*)
+                vless://*|hysteria2://*|hy2://*)
                     printf '%s\n' "$val"
                     return 0
                     ;;
@@ -67,14 +67,15 @@ LINK="${LINK%\"}"
 LINK="${LINK#\"}"
 
 case "$LINK" in
-    vless://*) ;;
+    vless://*|hysteria2://*|hy2://*) ;;
     *)
-        logger -t shpun-build "Unsupported subscription link scheme; VLESS is required"
+        logger -t shpun-build "Unsupported subscription link scheme"
         exit 1
         ;;
 esac
 
-logger -t shpun-build "router profile proto=vless selected_link=$SELECTED_LINK_INDEX"
+PROTO="${LINK%%://*}"
+logger -t shpun-build "router profile proto=$PROTO selected_link=$SELECTED_LINK_INDEX"
 
 REDIR_PORT="${REDIR_PORT:-12345}"
 TPROXY_PORT="${TPROXY_PORT:-12346}"
@@ -330,6 +331,7 @@ CUSTOM_VPN_RULE="$(build_custom_domain_rule vpn proxy)"
 # 2. VLESS / Reality
 # ==========================
 
+if [ "$PROTO" = "vless" ]; then
         LINK_NO_PROTO="${LINK#vless://}"
         LINK_NO_FRAGMENT="${LINK_NO_PROTO%%#*}"
         USER_HOST="${LINK_NO_FRAGMENT%%\?*}"
@@ -606,6 +608,36 @@ EOF
             exit 1
         fi
 
+        PROXY_OUTBOUND=$(cat <<EOF
+    {
+      "tag": "proxy",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [{
+          "address": "$SERVER", "port": $PORT,
+          "users": [{
+            "id": "$UUID", "encryption": "$ENCRYPTION"$USER_FLOW_LINE$USER_PACKET_ENCODING_LINE
+          }]
+        }]
+      },
+$MUX_BLOCK
+$STREAM_SETTINGS
+    }
+EOF
+)
+else
+        HY2_BUILDER="${HY2_BUILDER:-/etc/shpun/hysteria2-outbound.uc}"
+        PROXY_OUTBOUND="$(printf '%s' "$LINK" | ucode "$HY2_BUILDER" 2>/dev/null)" || {
+            logger -t shpun-build "Invalid or unsupported Hysteria 2 link"
+            exit 1
+        }
+        SERVER="$(printf '%s' "$PROXY_OUTBOUND" | jsonfilter -e '@.settings.address')"
+        SERVER="$(json_escape "$SERVER")"
+        PORT="$(printf '%s' "$PROXY_OUTBOUND" | jsonfilter -e '@.settings.port')"
+        SECURITY=tls
+        FRAGMENT_OUTBOUND_BLOCK=""
+fi
+
         cat >"$OUT_CFG" <<EOF
 {
   "log": {
@@ -682,26 +714,7 @@ EOF
   ],
 
   "outbounds": [
-    {
-      "tag": "proxy",
-      "protocol": "vless",
-      "settings": {
-        "vnext": [
-          {
-            "address": "$SERVER",
-            "port": $PORT,
-            "users": [
-              {
-                "id": "$UUID",
-                "encryption": "$ENCRYPTION"$USER_FLOW_LINE$USER_PACKET_ENCODING_LINE
-              }
-            ]
-          }
-        ]
-      },
-$MUX_BLOCK
-$STREAM_SETTINGS
-    },
+$PROXY_OUTBOUND,
 $FRAGMENT_OUTBOUND_BLOCK
     {
       "tag": "direct",
@@ -750,5 +763,5 @@ $SMART_RU_RULE
 }
 EOF
 
-        logger -t shpun-build "xray config built (VLESS, TCP+UDP, server=$(mask_host "$SERVER"):$PORT, security=${SECURITY:-none}, flow=${FLOW:-none}, redir=$REDIR_PORT, tproxy=$TPROXY_PORT)"
+        logger -t shpun-build "xray config built ($PROTO, TCP+UDP, server=$(mask_host "$SERVER"):$PORT, security=${SECURITY:-none}, flow=${FLOW:-none}, redir=$REDIR_PORT, tproxy=$TPROXY_PORT)"
         exit 0

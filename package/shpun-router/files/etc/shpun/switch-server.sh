@@ -166,7 +166,7 @@ fi
 SELECTED_CANDIDATE="${SELECTED_LINK_FILE}.candidate.$$"
 AUTO_SELECT_CANDIDATE="${SERVER_AUTO_SELECT_FILE}.candidate.$$"
 CONFIG_CANDIDATE="${ENGINE_CONFIG}.candidate.$$"
-CONFIG_VALIDATE="${ENGINE_CONFIG}.validate.$$"
+CONFIG_VALIDATE="${ENGINE_CONFIG}.validate.$$.json"
 CONFIG_BACKUP="${ENGINE_CONFIG}.server-backup.$$"
 rm -f "$SELECTED_CANDIDATE" "$AUTO_SELECT_CANDIDATE" "$CONFIG_CANDIDATE" "$CONFIG_VALIDATE" "$CONFIG_BACKUP"
 
@@ -193,7 +193,10 @@ if ! OUT_CFG="$CONFIG_CANDIDATE" SELECTED_LINK_FILE="$SELECTED_CANDIDATE" "$BUIL
 	exit 1
 fi
 
-if [ "${SWITCH_SERVER_VALIDATE:-0}" = "1" ]; then
+# A preserved engine may predate Hysteria support. Never replace a working
+# Reality tunnel with a Hysteria config that this engine cannot load.
+if [ "${SWITCH_SERVER_VALIDATE:-0}" = "1" ] ||
+	[ "$(jsonfilter -i "$CONFIG_CANDIDATE" -e '@.outbounds[0].protocol' 2>/dev/null)" = "hysteria" ]; then
 	if ! make_validation_config "$CONFIG_CANDIDATE" "$CONFIG_VALIDATE" ||
 		! "$ENGINE_BIN" run -test -config "$CONFIG_VALIDATE" >/dev/null 2>&1; then
 		rm -f "$SELECTED_CANDIDATE" "$AUTO_SELECT_CANDIDATE" "$CONFIG_CANDIDATE" "$CONFIG_VALIDATE" "$CONFIG_BACKUP"

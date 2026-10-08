@@ -19,6 +19,9 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
+      - name: Check LuCI server selection behavior
+        run: node deploy/test-server-modal.cjs
+
       - name: Install build dependencies
         run: |
           sudo apt-get update

@@ -357,12 +357,12 @@ function link_value(link) {
 		return trim(norm(link));
 
 	if (type(link) == "object") {
-		let keys = ["url", "link", "uri", "vless"];
+		let keys = ["url", "link", "uri", "vless", "hysteria2", "hy2"];
 		for (let i = 0; i < length(keys); i++) {
 			let value = link[keys[i]];
 			if (type(value) == "string") {
 				value = trim(norm(value));
-				if (substr(value, 0, 8) == "vless://")
+				if (match(value, /^(vless|hysteria2|hy2):\/\//))
 					return value;
 			}
 		}
@@ -395,6 +395,7 @@ function parse_link_info(link, idx, selected) {
 		no_query = substr(no_query, 0, q);
 
 	let hostport = no_query;
+	hostport = replace(hostport, /\/$/, "");
 	let at = index(hostport, "@");
 	if (at >= 0)
 		hostport = substr(hostport, at + 1);
@@ -414,6 +415,14 @@ function parse_link_info(link, idx, selected) {
 		host = substr(hostport, 0, colon);
 		port = substr(hostport, colon + 1);
 	}
+	if (match(hostport, /^\[[^\]]+\]$/)) {
+		host = hostport;
+		port = "";
+	}
+	if (substr(host, 0, 1) == "[" && substr(host, -1) == "]")
+		host = substr(host, 1, length(host) - 2);
+	if (!port && (proto == "hy2" || proto == "hysteria2"))
+		port = "443";
 
 	let name = cleanup_server_name(fragment || host || ("server " + idx), proto);
 

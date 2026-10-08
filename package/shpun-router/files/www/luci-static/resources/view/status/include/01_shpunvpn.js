@@ -256,6 +256,16 @@ function injectStyles() {
 		+ '.shpun-server-switch-btn.is-active{color:#eef2ff;background:rgba(79,70,229,.30);border-color:rgba(129,140,248,.36);box-shadow:inset 0 1px 0 rgba(255,255,255,.04);}'
 		+ '.shpun-server-switch-btn.is-auto{color:#d1fae5;background:rgba(5,150,105,.18);border-color:rgba(52,211,153,.28);}'
 		+ '.shpun-server-switch-btn:disabled{opacity:.38;cursor:default;}'
+		+ '.shpun-server-search{width:100%;box-sizing:border-box;min-height:40px;}'
+		+ '.shpun-auto-toggle{display:flex;align-items:center;gap:8px;padding:8px 10px;min-height:42px;border:1px solid #475569;border-radius:9px;background:#0f172a;color:#e2e8f0;cursor:pointer;font-size:12px;font-weight:800;text-align:left;}'
+		+ '.shpun-auto-state{margin-left:auto;color:#94a3b8;}'
+		+ '.shpun-auto-track{position:relative;flex:0 0 38px;height:22px;border-radius:12px;background:#475569;}'
+		+ '.shpun-auto-track:after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;transition:transform .14s ease;}'
+		+ '.shpun-auto-toggle.is-on .shpun-auto-track{background:#059669;}'
+		+ '.shpun-auto-toggle.is-on .shpun-auto-track:after{transform:translateX(16px);}'
+		+ '.shpun-auto-toggle.is-on .shpun-auto-state{color:#6ee7b7;}'
+		+ '.shpun-auto-toggle:disabled{opacity:.5;cursor:not-allowed;}'
+		+ '.shpun-auto-toggle:focus-visible{outline:2px solid #a5b4fc;outline-offset:2px;}'
 		+ '.shpun-server-list{max-height:310px;overflow-y:auto;margin-top:10px;border:1px solid rgba(120,140,180,.18);border-radius:12px;padding:6px;background:rgba(8,16,32,.50);display:flex;flex-direction:column;gap:5px;}'
 		+ '.shpun-server-row{width:100%;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:10px;padding:9px 11px;border:1px solid rgba(120,140,180,.14);border-radius:9px;background:rgba(14,23,38,.72);color:#e6edf8;text-align:left;cursor:pointer;transition:all .14s ease;}'
 		+ '.shpun-server-row:hover{background:rgba(25,35,54,.94);border-color:rgba(140,160,200,.30);}'
@@ -489,6 +499,12 @@ function getServerConnectionGroup(server, location) {
 	return /^rush[0-9]*\.lenivo\.site$/.test(host) ? 'gateway' : 'direct';
 }
 
+function getServerDisplayGroup(server, location) {
+	var proto = String((server || {}).proto || '').toLowerCase();
+	if (proto === 'hysteria2' || proto === 'hy2') return 'hysteria2';
+	return getServerConnectionGroup(server, location);
+}
+
 /* ============================================================
  *  Custom routes modal
  *  Живёт вне #view — LuCI его не трогает никогда
@@ -673,10 +689,11 @@ function openServersModal() {
 		var chosen = selected;
 		var list = E('div', { 'class': 'shpun-server-list' });
 		var rows = [];
-		var groupCounts = { gateway: 0, direct: 0 };
+		var groupCounts = { gateway: 0, direct: 0, hysteria2: 0 };
 		var activeGroup = 'gateway';
 		var gatewayButton;
 		var directButton;
+		var hysteriaButton;
 		var autoButton;
 
 		function markSelected() {
@@ -684,7 +701,7 @@ function openServersModal() {
 				var active = row.index === chosen;
 				row.node.className = 'shpun-server-row' + (active ? ' is-selected' : '');
 				row.badge.className = 'shpun-server-kind ' + (active ? 'shpun-server-kind--main' : 'shpun-server-kind--reserve');
-				row.badge.textContent = active ? 'Выбран' : 'Доступен';
+				row.badge.textContent = active ? 'Выбран' : 'В подписке';
 			});
 		}
 
@@ -696,28 +713,29 @@ function openServersModal() {
 			});
 			gatewayButton.className = 'shpun-server-switch-btn' + (activeGroup === 'gateway' ? ' is-active' : '');
 			directButton.className = 'shpun-server-switch-btn' + (activeGroup === 'direct' ? ' is-active' : '');
-			autoButton.textContent = 'Найти лучший сервер';
+			hysteriaButton.className = 'shpun-server-switch-btn' + (activeGroup === 'hysteria2' ? ' is-active' : '');
+			autoButton.textContent = 'Найти рабочий сервер в этой группе';
 			autoButton.disabled = (activeGroup === 'gateway' && autoState.excludeRu) ? true : null;
 			list.scrollTop = 0;
 		}
 
 		servers.forEach(function(s) {
 			var proto = String(s.proto || 'vpn').toLowerCase();
-			var protoLabel = proto === 'vless' ? 'VLESS' : (proto.toUpperCase() || 'VPN');
+			var protoLabel = proto === 'vless' ? 'Reality' : ((proto === 'hy2' || proto === 'hysteria2') ? 'Hysteria 2' : (proto.toUpperCase() || 'VPN'));
 			var isSelected = s.index === selected;
 			var location = formatServerLocation(s.name || ('Server ' + s.index), protoLabel);
-			var group = getServerConnectionGroup(s, location);
+			var group = getServerDisplayGroup(s, location);
 			groupCounts[group]++;
 			if (isSelected)
 				activeGroup = group;
 			var latency = Number(s.latency_ms);
 			var hasLatency = s.latency_ms != null && isFinite(latency) && latency >= 0;
 			var latencyClass = !hasLatency ? 'unknown' : (latency <= 80 ? 'good' : (latency <= 160 ? 'medium' : 'slow'));
-			var latencyText = hasLatency ? (Math.round(latency) + ' мс') : '—';
-			var badge = E('span', { 'class': 'shpun-server-kind ' + (isSelected ? 'shpun-server-kind--main' : 'shpun-server-kind--reserve') }, isSelected ? 'Текущий' : 'Доступен');
+			var latencyText = hasLatency ? (Math.round(latency) + ' мс') : 'Нет ping';
+			var badge = E('span', { 'class': 'shpun-server-kind ' + (isSelected ? 'shpun-server-kind--main' : 'shpun-server-kind--reserve') }, isSelected ? 'Текущий' : 'В подписке');
 			var latencyNode = E('span', {
 				'class': 'shpun-server-latency shpun-server-latency--' + latencyClass,
-				'title': hasLatency ? 'Время отклика сервера' : 'Сервер не ответил на ping'
+				'title': hasLatency ? (group === 'gateway' ? 'ICMP-пинг до РФ-шлюза, не до конечного VPN-сервера. Не проверка туннеля.' : 'ICMP-пинг до узла. Не проверка Reality или Hysteria 2.') : 'Нет ответа ICMP. Это не доказывает отказ VPN.'
 			}, latencyText);
 			var meta = E('span', { 'class': 'shpun-server-meta' }, [
 				latencyNode,
@@ -744,16 +762,28 @@ function openServersModal() {
 			'class': 'shpun-server-switch-btn',
 			'disabled': groupCounts.gateway === 0 ? true : null,
 			'click': function(ev) { ev.preventDefault(); activeGroup = 'gateway'; renderGroup(); }
-		}, 'Через РФ · ' + groupCounts.gateway);
+		}, 'Reality · РФ-шлюз · ' + groupCounts.gateway);
 		directButton = E('button', {
 			'type': 'button',
 			'class': 'shpun-server-switch-btn',
 			'disabled': groupCounts.direct === 0 ? true : null,
 			'click': function(ev) { ev.preventDefault(); activeGroup = 'direct'; renderGroup(); }
-		}, 'Напрямую · ' + groupCounts.direct);
+		}, 'Reality · напрямую · ' + groupCounts.direct);
+		hysteriaButton = E('button', {
+			'type': 'button',
+			'class': 'shpun-server-switch-btn',
+			'disabled': groupCounts.hysteria2 === 0 ? true : null,
+			'click': function(ev) { ev.preventDefault(); activeGroup = 'hysteria2'; renderGroup(); }
+		}, 'Hysteria 2 · ' + groupCounts.hysteria2);
+		rows.sort(function(a, b) {
+			if (a.latency == null && b.latency == null) return a.index - b.index;
+			if (a.latency == null) return 1;
+			if (b.latency == null) return -1;
+			return a.latency - b.latency || a.index - b.index;
+		});
 		autoButton = E('button', {
 			'type': 'button',
-			'class': 'shpun-server-switch-btn is-auto',
+			'class': 'shpun-server-switch-btn is-auto shpun-server-search',
 			'click': function(ev) {
 				ev.preventDefault();
 				var candidates = rows.filter(function(row) { return row.group === activeGroup; });
@@ -807,26 +837,27 @@ function openServersModal() {
 					ui.addNotification(null, E('p', {}, 'Ошибка автовыбора: ' + String(err)), 'error');
 				});
 			}
-		}, 'Найти лучший сервер');
-		var autoToggleBtn = E('button', { 'type': 'button', 'class': 'shpun-server-switch-btn' }, 'Авто');
+		}, 'Найти рабочий сервер в этой группе');
+		var autoToggleState = E('span', { 'class': 'shpun-auto-state' }, '');
+		var autoToggleBtn = E('button', { 'type': 'button', 'class': 'shpun-auto-toggle', 'role': 'switch', 'aria-label': 'Автосмена сервера' }, [
+			'Автосмена сервера', autoToggleState,
+			E('span', { 'class': 'shpun-auto-track', 'aria-hidden': 'true' })
+		]);
 
 		function renderAutoToggle() {
-			if (autoState.adminDisabled) {
-				autoToggleBtn.className = 'shpun-server-switch-btn';
-				autoToggleBtn.textContent = 'Авто ВЫКЛ (админ.)';
-				autoToggleBtn.title = 'Автоматический failover административно отключён (AUTO_FAILOVER_ENABLE=0 в /etc/shpun/agent.conf).';
-				return;
-			}
-			var on = autoState.effective;
-			autoToggleBtn.className = 'shpun-server-switch-btn' + (on ? ' is-auto' : '');
-			autoToggleBtn.textContent = on ? 'Авто ВКЛ' : 'Авто ВЫКЛ';
+			var on = autoState.effective && !autoState.adminDisabled;
+			autoToggleBtn.className = 'shpun-auto-toggle' + (on ? ' is-on' : '');
+			autoToggleBtn.setAttribute('aria-checked', on ? 'true' : 'false');
+			autoToggleBtn.disabled = !!autoState.adminDisabled;
+			autoToggleState.textContent = autoState.adminDisabled ? 'Недоступна' : (on ? 'Вкл' : 'Выкл');
 			autoToggleBtn.title = on
-				? 'Автоматическая смена сервера при подтверждённой потере VPN включена. Ручной выбор сервера выключает авто.'
-				: 'Автоматическая смена сервера выключена. Включить — этой кнопкой.';
+				? 'При сбое VPN роутер сменит сервер.'
+				: (autoState.adminDisabled ? 'Отключена администратором.' : 'Сервер выбираете вы. Нажмите, чтобы включить автосмену.');
 		}
 
 		autoToggleBtn.addEventListener('click', function(ev) {
 			ev.preventDefault();
+			if (autoToggleBtn.disabled) return;
 			var next = autoState.effective ? 0 : 1;
 			autoToggleBtn.disabled = true;
 			callShpunServerAutoSet(next).then(function(r) {
@@ -862,24 +893,27 @@ function openServersModal() {
 				excludeCheckbox.checked = autoState.excludeRu;
 				if (activeGroup === 'gateway')
 					autoButton.disabled = autoState.excludeRu ? true : null;
-				ui.addNotification(null, E('p', {}, autoState.excludeRu ? 'Серверы РФ исключены из автовыбора.' : 'Серверы РФ включены в автовыбор.'), 'info');
+				ui.addNotification(null, E('p', {}, autoState.excludeRu ? 'Направления через РФ-шлюз исключены из автовыбора.' : 'Направления через РФ-шлюз включены в автовыбор.'), 'info');
 			}).catch(function(err) {
 				excludeCheckbox.checked = autoState.excludeRu;
 				ui.addNotification(null, E('p', {}, 'Ошибка: ' + String(err)), 'error');
 			});
 		});
-		var excludeLabel = E('label', { 'for': 'shpun-exclude-ru-cb', 'style': 'display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;font-weight:800;color:#c7d2fe;' }, [excludeCheckbox, ' Исключать серверы РФ']);
-		var autoRow = E('div', { 'class': 'shpun-server-switch', 'style': 'grid-template-columns: minmax(0,1fr) auto; align-items:center; margin-bottom:6px;' }, [autoToggleBtn, excludeLabel]);
+		var excludeLabel = E('label', { 'for': 'shpun-exclude-ru-cb', 'style': 'display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;font-weight:800;color:#c7d2fe;' }, [excludeCheckbox, ' Исключать РФ-шлюз из Авто']);
+		var autoRow = E('div', { 'class': 'shpun-server-switch', 'style': 'display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:6px;' }, [autoToggleBtn, excludeLabel]);
+		autoToggleBtn.style = 'flex:1 1 220px;';
 		renderAutoToggle();
 
-		var serverSwitch = E('div', { 'class': 'shpun-server-switch' }, [ gatewayButton, directButton, autoButton ]);
+		var serverSwitch = E('div', { 'class': 'shpun-server-switch' }, [ gatewayButton, directButton, hysteriaButton ]);
 		renderGroup();
 
 		ui.showModal('Серверы VPN', [
 			E('div', { 'class': 'shpun-modal-wrap' }, [
-				E('div', { 'class': 'shpun-modal-desc' }, 'Выберите VPN-сервер. Время отклика измерено при открытии списка; после применения роутер переподключит туннель.'),
+				E('div', { 'class': 'shpun-modal-desc' }, 'Выберите группу и сервер. Пинг — до РФ-шлюза или прямого узла, не проверка VPN.'),
 				autoRow,
+				E('div', { 'class': 'shpun-modal-desc' }, 'Автосмена: замена при сбое VPN, Reality — резерв для Hysteria 2. Ручной выбор выключает её. Поиск ниже — разовая проверка с переключением.'),
 				serverSwitch,
+				E('div', { 'style': 'margin:8px 0;' }, [autoButton]),
 				list,
 				E('div', { 'class': 'shpun-modal-footer' }, [
 					E('button', { 'type': 'button', 'class': 'shpun-modal-btn', 'click': function() { ui.hideModal(); } }, 'Отмена'),

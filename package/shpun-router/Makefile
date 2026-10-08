@@ -1,8 +1,8 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=shpun-router
-PKG_VERSION:=1.1.12
-PKG_RELEASE:=1
+PKG_VERSION:=1.1.13
+PKG_RELEASE:=4
 SHPUN_LUCI_TAG:=$(subst .,_,$(PKG_VERSION))_r$(PKG_RELEASE)
 
 PKG_MAINTAINER:=Shpun VPN
@@ -27,6 +27,7 @@ Shpun Router Integration:
  - VPN status widget (LuCI Dashboard)
  - OTA firmware update (from widget)
  - subscription server selection from LuCI widget
+ - Hysteria 2 support with Reality fallback and separate protocol groups
  - live server latency in the LuCI server list
  - automatic server selection by latency and verified tunnel quality
  - route feed update for split routing and smart RU presets
@@ -59,6 +60,7 @@ define Package/$(PKG_NAME)/install
 	# --- core scripts ---
 	$(INSTALL_BIN) ./files/etc/shpun/agent.sh                 $(1)/etc/shpun/agent.sh
 	$(INSTALL_BIN) ./files/etc/shpun/build-config.sh          $(1)/etc/shpun/build-config.sh
+	$(INSTALL_DATA) ./files/etc/shpun/hysteria2-outbound.uc    $(1)/etc/shpun/hysteria2-outbound.uc
 	$(INSTALL_BIN) ./files/etc/shpun/rebuild-config-deferred.sh $(1)/etc/shpun/rebuild-config-deferred.sh
 	$(INSTALL_BIN) ./files/etc/shpun/switch-server.sh         $(1)/etc/shpun/switch-server.sh
 	$(INSTALL_BIN) ./files/etc/shpun/auto-failover.sh         $(1)/etc/shpun/auto-failover.sh

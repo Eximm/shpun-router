@@ -63,7 +63,21 @@ detect_http_client() {
 	fi
 }
 
-# Classify a VLESS subscription link into the same "Через РФ" / "Напрямую"
+# Read both string and object link forms accepted by the config builder.
+subscription_link() {
+	local idx="$1" base suffix value
+	for base in "@.subscription.links[$idx]" "@.links[$idx]"; do
+		for suffix in "" ".url" ".link" ".uri" ".vless" ".hysteria2" ".hy2"; do
+			value="$(jsonfilter -i "$SUB_FILE" -e "${base}${suffix}" 2>/dev/null | head -n 1 | tr -d '\r\n')"
+			case "$value" in
+				vless://*|hysteria2://*|hy2://*) printf '%s\n' "$value"; return 0 ;;
+			esac
+		done
+	done
+	return 1
+}
+
+# Classify a subscription link into the same "Через РФ" / "Напрямую"
 # groups the LuCI widget uses (see getServerConnectionGroup in 01_shpunvpn.js).
 # Keep this classification aligned with server_group() in shpun.uc and
 # getServerConnectionGroup() in LuCI. Returns gateway|direct.
@@ -310,18 +324,31 @@ if [ "$MANUAL_SELECT" -eq 1 ]; then
 else
 	offset=1
 	candidate_list=""
+	preferred_list=""
+	reserve_list=""
+	current_link="$(subscription_link "$current" || true)"
 	while [ "$offset" -lt "$count" ]; do
 		idx=$(( (current + offset) % count ))
+		link="$(subscription_link "$idx" || true)"
 		if [ "$SERVER_AUTO_EXCLUDE_RU" = "1" ]; then
-			link="$(jsonfilter -i "$SUB_FILE" -e "@.subscription.links[$idx]" 2>/dev/null || true)"
 			if [ "$(link_group "$link")" = "gateway" ]; then
 				offset=$((offset + 1))
 				continue
 			fi
 		fi
-		candidate_list="$candidate_list $idx"
+		# When Hysteria is active, try other Hysteria nodes before Reality.
+		# Leave a working Reality selection alone; this is failure recovery only.
+		case "$current_link" in
+			hysteria2://*|hy2://*)
+				case "$link" in
+					hysteria2://*|hy2://*) preferred_list="$preferred_list $idx" ;;
+					*) reserve_list="$reserve_list $idx" ;;
+				esac ;;
+			*) preferred_list="$preferred_list $idx" ;;
+		esac
 		offset=$((offset + 1))
 	done
+	candidate_list="$preferred_list$reserve_list"
 fi
 
 # Strict RU exclusion for the background watchdog: if every alternative is a
@@ -339,7 +366,7 @@ for candidate in $candidate_list; do
 	[ "$candidate" -lt "$count" ] || continue
 	[ "$tried" -lt "$limit" ] || break
 	if [ "$SERVER_AUTO_EXCLUDE_RU" = "1" ]; then
-		link="$(jsonfilter -i "$SUB_FILE" -e "@.subscription.links[$candidate]" 2>/dev/null || true)"
+		link="$(subscription_link "$candidate" || true)"
 		if [ "$(link_group "$link")" = "gateway" ]; then
 			log "skipping RU/gateway server index $candidate (server_auto_exclude_ru=1)"
 			continue
