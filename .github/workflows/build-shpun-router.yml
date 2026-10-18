@@ -22,6 +22,12 @@ jobs:
       - name: Check LuCI server selection behavior
         run: node deploy/test-server-modal.cjs
 
+      - name: Check subscription migration shell syntax
+        run: |
+          for file in deploy/test-subscription-migration.sh package/shpun-router/files/usr/share/shpun/subscription-sources.sh package/shpun-router/files/etc/shpun/agent.sh; do
+            sh -n "$file" || exit 1
+          done
+
       - name: Install build dependencies
         run: |
           sudo apt-get update

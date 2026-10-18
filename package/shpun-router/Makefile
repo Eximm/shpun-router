@@ -1,8 +1,8 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=shpun-router
-PKG_VERSION:=1.1.13
-PKG_RELEASE:=4
+PKG_VERSION:=1.1.14
+PKG_RELEASE:=3
 SHPUN_LUCI_TAG:=$(subst .,_,$(PKG_VERSION))_r$(PKG_RELEASE)
 
 PKG_MAINTAINER:=Shpun VPN
@@ -61,6 +61,7 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_BIN) ./files/etc/shpun/agent.sh                 $(1)/etc/shpun/agent.sh
 	$(INSTALL_BIN) ./files/etc/shpun/build-config.sh          $(1)/etc/shpun/build-config.sh
 	$(INSTALL_DATA) ./files/etc/shpun/hysteria2-outbound.uc    $(1)/etc/shpun/hysteria2-outbound.uc
+	$(INSTALL_DATA) ./files/usr/share/shpun/subscription-sources.sh $(1)/usr/share/shpun/subscription-sources.sh
 	$(INSTALL_BIN) ./files/etc/shpun/rebuild-config-deferred.sh $(1)/etc/shpun/rebuild-config-deferred.sh
 	$(INSTALL_BIN) ./files/etc/shpun/switch-server.sh         $(1)/etc/shpun/switch-server.sh
 	$(INSTALL_BIN) ./files/etc/shpun/auto-failover.sh         $(1)/etc/shpun/auto-failover.sh
@@ -124,6 +125,10 @@ define Package/$(PKG_NAME)/postinst
 
 	mkdir -p /etc/shpun
 	mkdir -p /etc/shpun/routes
+
+	# Migrate persisted subscription URLs without changing the active VPN config.
+	. /usr/share/shpun/subscription-sources.sh
+	sub_migrate_state /etc/shpun || exit 1
 
 	# Remove obsolete candidates left by 1.1.0-r1; live route state stays agent-owned.
 	rm -f /etc/shpun/routes/presets/always_vpn.domains-opkg \

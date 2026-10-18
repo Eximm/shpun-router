@@ -50,7 +50,7 @@ LOG_TAG="shpun-agent"
 API_URL_DEFAULT="https://router.shpun.net/connect"
 API_URL_LEGACY_DEFAULT="https://bill.shpyn.online/shm/v1/public/router_public"
 CONFIG_API_URL_DEFAULT="https://router.shpun.net/profile"
-SUBSCRIPTION_MIRROR_BASE_URL_DEFAULT="https://mirepo.space"
+SUBSCRIPTION_MIRROR_BASE_URL_DEFAULT="https://cdn.netget.online"
 SUB_UNAVAILABLE_RESET_LIMIT_DEFAULT=3
 SUB_CHECK_INTERVAL_DEFAULT=21600
 HTTP_USER_AGENT_DEFAULT="ShpunRouter"
@@ -347,6 +347,7 @@ reset_subscription_state() {
 	log "subscription reset: $reason"
 	disable_dead_vpn_path
 	rm -f "$SUB_FILE" "$SUB_URL_FILE" "$SUB_MIRROR_URL_FILE" "$CONFIG_URL_FILE" \
+		"${SUB_URL_FILE}.legacy" "${SUB_MIRROR_URL_FILE}.legacy" \
 		"$LAST_CHECK_FILE" "$CONFIG_ACTIVE_FILE" "$CONFIG_PENDING_FILE" \
 		"$TUNNEL_EXIT_IP_FILE" "$TUNNEL_EXIT_CHECK_MS_FILE" "$TUNNEL_EXIT_PING_MS_FILE" \
 		"$TUNNEL_EXIT_LAST_OK_FILE" "$TUNNEL_QUALITY_DEGRADED_FILE" \
@@ -774,6 +775,11 @@ engine_url_from_base() {
 }
 
 load_conf() {
+	# Also handles an old preserved agent.conf after package upgrade.
+	if [ -r /usr/share/shpun/subscription-sources.sh ]; then
+		. /usr/share/shpun/subscription-sources.sh
+		sub_migrate_state "$STATE_DIR" || log "subscription URL migration deferred"
+	fi
 	[ -f "$CONF" ] && . "$CONF"
 
 	# Existing installations preserve agent.conf across package upgrades. Replace
@@ -1055,17 +1061,25 @@ save_subscription_url() {
 	local url="$1"
 	local token_path token mirror_base
 
+	if command -v sub_canonical_url >/dev/null 2>&1; then
+		sub_remember_legacy "$url" "${SUB_URL_FILE}.legacy" || return 1
+		url="$(sub_canonical_url "$url")"
+	fi
+
 	case "$url" in
 		http://*|https://*) ;;
 		*) return 1 ;;
 	esac
 
-	printf '%s\n' "$url" > "$SUB_URL_FILE"
+	if command -v sub_atomic_write >/dev/null 2>&1; then
+		sub_atomic_write "$SUB_URL_FILE" "$url" || return 1
+	else
+		printf '%s\n' "$url" > "$SUB_URL_FILE"
+	fi
 	log "subscription url saved"
 
-	rm -f "$SUB_MIRROR_URL_FILE"
 	mirror_base="${SUBSCRIPTION_MIRROR_BASE_URL%/}"
-	[ -n "$mirror_base" ] || return 0
+	[ -n "$mirror_base" ] || { rm -f "$SUB_MIRROR_URL_FILE"; return 0; }
 
 	token_path="${url%%\?*}"
 	token_path="${token_path%%\#*}"
@@ -1075,7 +1089,11 @@ save_subscription_url() {
 		''|*/*|*' '*|*'	'*|*'?'*|*'#'*|*'&'*) return 0 ;;
 	esac
 
-	printf '%s/%s\n' "$mirror_base" "$token" > "$SUB_MIRROR_URL_FILE"
+	if command -v sub_atomic_write >/dev/null 2>&1; then
+		sub_atomic_write "$SUB_MIRROR_URL_FILE" "$mirror_base/$token" || return 1
+	else
+		printf '%s/%s\n' "$mirror_base" "$token" > "$SUB_MIRROR_URL_FILE"
+	fi
 	log "subscription mirror url prepared"
 	return 0
 }
@@ -1088,6 +1106,9 @@ download_subscription_from_url_file() {
 
 	[ -n "$out" ] || return 1
 	[ -s "$url_file" ] || return 1
+	case "$url_file" in
+		*.legacy) sub_legacy_eligible "$url_file" || return 1 ;;
+	esac
 
 	url="$(cat "$url_file" 2>/dev/null | tr -d '\r\n ' || true)"
 	case "$url" in
@@ -1621,7 +1642,7 @@ ensure_selected_link_valid() {
 install_updated_subscription_candidate() {
 	local candidate="$1"
 	local label="$2"
-	local backup selected_before
+	local backup selected_before selected_after
 
 	[ -s "$candidate" ] || return 1
 	[ -s "$SUB_FILE" ] || return 1
@@ -1638,6 +1659,10 @@ install_updated_subscription_candidate() {
 	case "$selected_before" in
 		''|*[!0-9]*) selected_before=0 ;;
 	esac
+	selected_after="$selected_before"
+	if command -v sub_find_selected_index >/dev/null 2>&1; then
+		selected_after="$(sub_find_selected_index "$SUB_FILE" "$candidate" "$selected_before" || printf '%s' "$selected_before")"
+	fi
 
 	rm -f "$backup"
 	if ! cp "$SUB_FILE" "$backup" 2>/dev/null; then
@@ -1656,6 +1681,14 @@ install_updated_subscription_candidate() {
 		return 1
 	fi
 
+	if [ "$selected_after" != "$selected_before" ]; then
+		if ! sub_atomic_write "$STATE_DIR/selected_link_index" "$selected_after"; then
+			mv "$backup" "$SUB_FILE"
+			config_lock_release
+			return 1
+		fi
+		log "$label: preserving selected server across subscription reordering"
+	fi
 	ensure_selected_link_valid
 
 	SHPUN_CONFIG_LOCK_HELD=1
@@ -2222,10 +2255,15 @@ probe_url_direct() {
 probe_url_through_tunnel() {
 	local url="$1"
 	local proxy="http://127.0.0.1:${HTTP_PROXY_PORT}"
+	local stats rc
 
 	case "$HTTP_BIN" in
 		curl)
-			curl -fsS -A "$HTTP_USER_AGENT" -m 8 -x "$proxy" "$url" >/dev/null 2>&1
+			stats="$(curl -fsS -A "$HTTP_USER_AGENT" -m 8 -x "$proxy" -o /dev/null \
+				-w 'http=%{http_code} connect=%{time_connect} start=%{time_starttransfer} total=%{time_total}' "$url" 2>/dev/null)"
+			rc=$?
+			[ "$rc" -eq 0 ] || log "proxy probe failed (rc=$rc $stats)"
+			return "$rc"
 			;;
 		wget)
 			env http_proxy="$proxy" HTTP_PROXY="$proxy" \
@@ -2656,6 +2694,10 @@ fetch_subscription_from_gateway() {
 			log "subscription downloaded from direct source"
 		elif download_subscription_from_url_file "$TMP_SUB" "$SUB_MIRROR_URL_FILE" "mirror"; then
 			log "subscription downloaded from mirror source"
+		elif download_subscription_from_url_file "$TMP_SUB" "${SUB_URL_FILE}.legacy" "legacy direct"; then
+			log "subscription downloaded from temporary legacy direct source"
+		elif download_subscription_from_url_file "$TMP_SUB" "${SUB_MIRROR_URL_FILE}.legacy" "legacy mirror"; then
+			log "subscription downloaded from temporary legacy mirror source"
 		elif [ -n "$CONFIG_URL" ]; then
 			log "direct and mirror subscription download failed, falling back to profile gateway"
 			if ! http_get_to_file "$(append_format_json "$CONFIG_URL")" "$TMP_SUB" 2>/dev/null; then
@@ -3005,7 +3047,9 @@ poll_subscription_loop() {
 				return 0
 			fi
 			log "saved mirror subscription restore failed, trying saved profile restore"
-			if restore_subscription_from_profile_url; then
+			if restore_subscription_from_url_file "${SUB_URL_FILE}.legacy" "legacy direct" ||
+				restore_subscription_from_url_file "${SUB_MIRROR_URL_FILE}.legacy" "legacy mirror" ||
+				restore_subscription_from_profile_url; then
 				ensure_routes_ready
 				ensure_vpn_from_subscription
 				return 0
@@ -3036,7 +3080,9 @@ poll_subscription_loop() {
 		return 0
 	fi
 
-	if restore_subscription_from_profile_url; then
+	if restore_subscription_from_url_file "${SUB_URL_FILE}.legacy" "legacy direct" ||
+		restore_subscription_from_url_file "${SUB_MIRROR_URL_FILE}.legacy" "legacy mirror" ||
+		restore_subscription_from_profile_url; then
 		ensure_routes_ready
 		ensure_vpn_from_subscription
 		return 0
@@ -3062,6 +3108,29 @@ poll_subscription_loop() {
 	done
 }
 
+refresh_subscription_source_metadata() {
+	local url body
+	[ -s "$CONFIG_URL_FILE" ] || return 0
+	url="$(cat "$CONFIG_URL_FILE" 2>/dev/null | tr -d '\r\n')"
+	case "$url" in https://*|http://*) ;; *) return 0 ;; esac
+	url="$(append_format_json "$url")"
+	detect_http_client
+	case "$HTTP_BIN" in
+		curl) body="$(curl -fsS -A "$HTTP_USER_AGENT" --connect-timeout 5 --max-time 15 "$url" 2>/dev/null)" || body="" ;;
+		wget) body="$(wget -q -U "$HTTP_USER_AGENT" -T 15 -O- "$url" 2>/dev/null)" || body="" ;;
+		uclient-fetch) body="$(uclient-fetch -q -U "$HTTP_USER_AGENT" -T 15 -O- "$url" 2>/dev/null)" || body="" ;;
+		*) return 0 ;;
+	esac
+	[ "$(printf '%s' "$body" | jsonfilter -e @.ok 2>/dev/null)" = 1 ] || {
+		log "subscription source metadata unavailable; keeping saved URLs"; return 0;
+	}
+	url="$(extract_subscription_url_from_json_text "$body" || true)"
+	[ -n "$url" ] || return 0
+	save_subscription_url "$url" || return 0
+	save_router_software_metadata_text "$body" >/dev/null 2>&1 || true
+	log "subscription source metadata refreshed"
+}
+
 check_subscription_alive() {
 	[ ! -s "$SUB_FILE" ] && return 0
 
@@ -3077,6 +3146,9 @@ check_subscription_alive() {
 		return 0
 	fi
 
+	# Refresh URL metadata even when the saved subscription endpoint still works.
+	# This updates addresses only, never applies profile links over the live tunnel.
+	refresh_subscription_source_metadata
 	if refresh_subscription_from_url "$SUB_URL_FILE" "direct"; then
 		reset_subscription_unavailable_count
 		return 0
@@ -3087,7 +3159,13 @@ check_subscription_alive() {
 		reset_subscription_unavailable_count
 		return 0
 	fi
-	log "direct and mirror subscription sources unavailable, checking profile gateway"
+	log "new subscription sources unavailable, trying temporary legacy sources"
+
+	if refresh_subscription_from_url "${SUB_URL_FILE}.legacy" "legacy direct" ||
+		refresh_subscription_from_url "${SUB_MIRROR_URL_FILE}.legacy" "legacy mirror"; then
+		reset_subscription_unavailable_count
+		return 0
+	fi
 
 	detect_http_client
 
@@ -3253,6 +3331,14 @@ vpn_sanity_check() {
 	rm -f "$fail_file"
 }
 
+reconcile_vpn_ready() {
+	[ -s "$VPN_READY_FILE" ] || return 0
+	is_vpn_process_running && return 0
+	planned_vpn_restart_active && return 0
+	rm -f "$VPN_READY_FILE"
+	log "stale vpn_ready without xray; scheduling immediate current-server recovery"
+}
+
 main_loop() {
 	load_conf
 	ensure_state_dir
@@ -3277,6 +3363,7 @@ main_loop() {
 
 	while :; do
 		load_conf
+		reconcile_vpn_ready
 		[ -x /etc/shpun/disable-flow-offload.sh ] && /etc/shpun/disable-flow-offload.sh apply || true
 		ensure_lan_ipv6_disabled
 
