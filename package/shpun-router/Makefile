@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=shpun-router
 PKG_VERSION:=1.2.0
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 SHPUN_LUCI_TAG:=$(subst .,_,$(PKG_VERSION))_r$(PKG_RELEASE)
 
 PKG_MAINTAINER:=Shpun VPN
