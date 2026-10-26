@@ -7,7 +7,7 @@ ROOT=/etc/shpun
 [ ! -L "$S" ] || exit 1
 mkdir -p "$S";[ "$(readlink -f "$S")" = "$S" ] || exit 1;chmod 700 "$S"
 binding(){ cat "$ROOT/router_code" "$ROOT/subscription_url" 2>/dev/null | sha256sum | cut -d' ' -f1; }
-random(){ od -An -N16 -tx1 /dev/urandom | tr -d ' \n'; }
+random(){ head -c32 /dev/urandom | sha256sum | cut -c1-32; }
 http_stop(){
  if [ -s "$S/http.pid" ];then p=$(cat "$S/http.pid");case "$p" in ''|*[!0-9]*)return;;esac
   if [ -r "/proc/$p/cmdline" ] && tr '\000' ' ' < "/proc/$p/cmdline" | grep -F '/usr/share/shpun/portal' >/dev/null;then kill "$p" 2>/dev/null || true;fi
