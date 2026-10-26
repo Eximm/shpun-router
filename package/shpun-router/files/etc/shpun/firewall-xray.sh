@@ -684,6 +684,7 @@ nft_stop() {
     tproxy_routes_del
 }
 
+[ "${1:-}" = stop ] || [ ! -s /tmp/shpun-subscription-portal/blocked ] || exit 0
 case "$1" in
     start|"")
         load_conf

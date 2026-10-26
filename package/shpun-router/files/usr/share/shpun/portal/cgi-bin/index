@@ -1,0 +1,26 @@
+#!/bin/sh
+set -eu
+S=/tmp/shpun-subscription-portal
+reply(){ printf 'Status: %s\r\nCache-Control: no-store\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n%s\n' "$1" "$2";exit 0; }
+[ -s "$S/authority" ] && [ -s "$S/network" ] && [ -s "$S/token" ] || reply '503 Service Unavailable' 'Страница временно недоступна.'
+authority=$(cat "$S/authority")
+# Only directly attached LAN clients may read the token or acknowledge. No proxy headers.
+ucode -e 'import{readfile}from"fs";let n=split(trim(readfile("/tmp/shpun-subscription-portal/network")),"/");function ip(s){if(!match(s||"",/^([0-9]{1,3}\.){3}[0-9]{1,3}$/))exit(1);let v=0;for(let p in split(s,".")){if(int(p)>255)exit(1);v=v*256+int(p);}return v;}let mask=int(n[1]),f=1;if(mask<1||mask>32)exit(1);for(let b=0;b<32-mask;b++)f*=2;if(int(ip(ARGV[0])/f)!=int(ip(n[0])/f))exit(1);' "${REMOTE_ADDR:-}" || reply '403 Forbidden' 'Доступ только из вашей Wi-Fi сети.'
+if [ "${HTTP_HOST:-}" != "$authority" ];then
+ [ "${REQUEST_METHOD:-GET}" = GET ] || reply '403 Forbidden' 'Неверный адрес.'
+ printf 'Status: 302 Found\r\nLocation: http://%s/cgi-bin/index\r\nCache-Control: no-store\r\n\r\n' "$authority";exit 0
+fi
+case "${REQUEST_METHOD:-GET}" in
+ POST)
+  [ "${CONTENT_LENGTH:-}" = 38 ] || reply '400 Bad Request' 'Обновите страницу.'
+  [ -z "${HTTP_ORIGIN:-}" ] || [ "$HTTP_ORIGIN" = "http://$authority" ] || reply '403 Forbidden' 'Неверный источник.'
+  body=$(dd bs=1 count=38 2>/dev/null)
+  [ "$body" = "token=$(cat "$S/token")" ] || reply '403 Forbidden' 'Обновите страницу.'
+  printf '%s' "$(cat "$S/token")" | /etc/shpun/subscription-portal.sh ack || reply '409 Conflict' 'Состояние изменилось. Обновите страницу.'
+  printf 'Status: 303 See Other\r\nLocation: https://app.shpun.net\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\n\r\n';;
+ GET|HEAD)
+  printf "Status: 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'\r\n\r\n"
+  [ "${REQUEST_METHOD:-GET}" != HEAD ] || exit 0
+  ucode -e 'import{readfile}from"fs";let r="/tmp/shpun-subscription-portal/",s=json(readfile(r+"state.json")),h=readfile("/usr/share/shpun/portal/page.html");let a=trim(readfile(r+"authority")),t=trim(readfile(r+"token"));if(!match(a,/^[0-9.]+:2080$/)||!match(t,/^[a-f0-9]{32}$/))exit(1);h=replace(h,/@@ACTION@@/g,"http://"+a+"/cgi-bin/index");h=replace(h,/@@TOKEN@@/g,t);h=replace(h,/@@BADGE@@/g,s.phase=="captive"?"Подписка истекла":"Прямой доступ для оплаты");h=replace(h,/@@TITLE@@/g,s.phase=="captive"?"Ваша VPN-подписка закончилась":"Продлите подписку в ShpunApp");print(h);';;
+ *) reply '405 Method Not Allowed' 'Метод не поддерживается.';;
+esac

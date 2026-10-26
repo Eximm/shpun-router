@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=shpun-router
-PKG_VERSION:=1.1.15
+PKG_VERSION:=1.2.0
 PKG_RELEASE:=1
 SHPUN_LUCI_TAG:=$(subst .,_,$(PKG_VERSION))_r$(PKG_RELEASE)
 
@@ -16,7 +16,7 @@ define Package/shpun-router
   SUBMENU:=VPN
   TITLE:=Shpun Router integration (ucode backend)
   PKGARCH:=all
-  DEPENDS:=+luci-base +jsonfilter +ucode +ucode-mod-fs +ucode-mod-uci +rpcd-mod-ucode +kmod-nft-tproxy +curl
+  DEPENDS:=+luci-base +uhttpd +jsonfilter +ucode +ucode-mod-fs +ucode-mod-uci +rpcd-mod-ucode +kmod-nft-tproxy +curl
 endef
 
 define Package/$(PKG_NAME)/description
@@ -55,6 +55,9 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_DIR) $(1)/usr/share/shpun/presets
 	$(INSTALL_DIR) $(1)/usr/share/luci/status/include
 	$(INSTALL_DIR) $(1)/www/luci-static/resources/view/status/include
+	$(INSTALL_DIR) $(1)/usr/share/shpun/portal/cgi-bin
+	$(INSTALL_DATA) ./files/usr/share/shpun/portal/page.html $(1)/usr/share/shpun/portal/page.html
+	$(INSTALL_BIN) ./files/usr/share/shpun/portal/cgi-bin/index $(1)/usr/share/shpun/portal/cgi-bin/index
 	$(INSTALL_DIR) $(1)/etc/uci-defaults
 
 	# --- core scripts ---
@@ -64,6 +67,9 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_DATA) ./files/etc/shpun/xhttp-outbound.uc        $(1)/etc/shpun/xhttp-outbound.uc
 	$(INSTALL_DATA) ./files/etc/shpun/subscription-notice.uc   $(1)/etc/shpun/subscription-notice.uc
 	$(INSTALL_BIN) ./files/etc/shpun/subscription-notice.sh    $(1)/etc/shpun/subscription-notice.sh
+	$(INSTALL_BIN) ./files/etc/shpun/subscription-portal.sh $(1)/etc/shpun/subscription-portal.sh
+	$(INSTALL_DATA) ./files/etc/shpun/subscription-portal-state.uc $(1)/etc/shpun/subscription-portal-state.uc
+	$(INSTALL_DATA) ./files/etc/shpun/subscription-portal-dns.uc $(1)/etc/shpun/subscription-portal-dns.uc
 	$(INSTALL_DATA) ./files/usr/share/shpun/subscription-sources.sh $(1)/usr/share/shpun/subscription-sources.sh
 	$(INSTALL_BIN) ./files/etc/shpun/rebuild-config-deferred.sh $(1)/etc/shpun/rebuild-config-deferred.sh
 	$(INSTALL_BIN) ./files/etc/shpun/switch-server.sh         $(1)/etc/shpun/switch-server.sh

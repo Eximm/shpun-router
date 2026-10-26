@@ -25,6 +25,7 @@ jobs:
         run: |
           node deploy/test-server-modal.cjs
           node deploy/test-subscription-notice.cjs
+          node deploy/test-subscription-portal.cjs
           if test -f deploy/test-network-modal.cjs; then node deploy/test-network-modal.cjs; fi
       - name: Check every packaged shell script
         run: |

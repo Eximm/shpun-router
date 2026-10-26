@@ -342,6 +342,12 @@ reset_subscription_unavailable_count() {
 }
 
 reset_subscription_state() {
+ if [ -s /tmp/shpun-subscription-portal/blocked ];then
+  # Retain an inert profile/selection for renewal; the portal fence prevents VPN use.
+  disable_dead_vpn_path
+  printf '%s\n' "${1:-subscription_expired}" > "$VERROR_FILE"
+  return 0
+ fi
 	local reason="${1:-subscription_unavailable}"
 
 	log "subscription reset: $reason"
@@ -2890,6 +2896,7 @@ restore_subscription_from_url_file() {
 }
 
 ensure_vpn_from_subscription() {
+ [ ! -s /tmp/shpun-subscription-portal/blocked ] || return 0
 	local old_config_sha active_config_sha new_config_sha vpn_was_running config_backup config_lock_owned=0
 
 	if [ ! -s "$SUB_FILE" ]; then
@@ -3110,11 +3117,21 @@ poll_subscription_loop() {
 }
 
 refresh_subscription_source_metadata() {
-	local url body
-	[ -s "$CONFIG_URL_FILE" ] || return 0
+ local url body portal_generation portal_trusted
+ portal_generation=$(cat /tmp/shpun-subscription-portal/generation 2>/dev/null || true)
+ if [ ! -s "$CONFIG_URL_FILE" ];then
+  # Older bindings can derive the same authoritative gateway from their inert profile.
+  UID_SUB=$(jsonfilter -i "$SUB_FILE" -e '@.uid' 2>/dev/null || true)
+  USI_SUB=$(jsonfilter -i "$SUB_FILE" -e '@.usi' 2>/dev/null || true)
+  [ -n "$UID_SUB" ] && [ -n "$USI_SUB" ] && get_code || return 0
+  if [ -n "$CONFIG_API_URL" ];then url="${CONFIG_API_URL}?uid=${UID_SUB}&usi=${USI_SUB}&code=${CLEAN_CODE}&format=json"
+  else BASE_URL="${API_URL%/shm/v1/public/router_public}";url="${BASE_URL}/shm/v1/public/router_config?uid=${UID_SUB}&usi=${USI_SUB}&code=${CLEAN_CODE}&format=json";fi
+  save_config_url "$url" || return 0
+ fi
 	url="$(cat "$CONFIG_URL_FILE" 2>/dev/null | tr -d '\r\n')"
 	case "$url" in https://*|http://*) ;; *) return 0 ;; esac
 	url="$(append_format_json "$url")"
+ portal_trusted=0;case "$url" in https://*)portal_trusted=1;;esac
 	detect_http_client
 	case "$HTTP_BIN" in
 		curl) body="$(curl -fsS -A "$HTTP_USER_AGENT" --connect-timeout 5 --max-time 15 "$url" 2>/dev/null)" || body="" ;;
@@ -3130,6 +3147,9 @@ refresh_subscription_source_metadata() {
 	save_subscription_url "$url" || return 0
 	save_router_software_metadata_text "$body" >/dev/null 2>&1 || true
 	log "subscription source metadata refreshed"
+ if [ "$portal_trusted" = 1 ] && [ -n "$portal_generation" ] && [ -x /etc/shpun/subscription-portal.sh ];then
+  /etc/shpun/subscription-portal.sh confirm "$portal_generation" >/dev/null 2>&1 || true
+ fi
 }
 
 check_subscription_alive() {
@@ -3362,9 +3382,18 @@ main_loop() {
 	TUNNEL_QUALITY_WARNED=0
 	LAST_TUNNEL_PROBE=0
 
-	while :; do
-		load_conf
-		reconcile_vpn_ready
+ while :; do
+  load_conf
+  if [ -s /tmp/shpun-subscription-portal/blocked ];then
+   portal_now=$(date +%s)
+   if [ $((portal_now-${PORTAL_LAST_PROFILE_CHECK:-0})) -ge 30 ];then
+    refresh_subscription_source_metadata
+    PORTAL_LAST_PROFILE_CHECK=$portal_now
+   fi
+   sleep "$MAIN_LOOP_SLEEP"
+   continue
+  fi
+  reconcile_vpn_ready
 		[ -x /etc/shpun/disable-flow-offload.sh ] && /etc/shpun/disable-flow-offload.sh apply || true
 		ensure_lan_ipv6_disabled
 

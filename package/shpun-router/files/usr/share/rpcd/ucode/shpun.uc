@@ -1311,7 +1311,14 @@ return {
 			}
 		},
 
-		reset_vpn: {
+		subscription_continue: {
+   call: function(req) {
+    if (!exists('/tmp/shpun-subscription-portal/blocked')) return {ok:1};
+    let p=popen('/etc/shpun/subscription-portal.sh continue >/dev/null 2>&1');
+    return {ok: p && p.close()==0 ? 1 : 0};
+   }
+  },
+  reset_vpn: {
 			call: function(req) {
 				try {
 					let p1 = popen("/etc/init.d/shpun-vpn stop >/dev/null 2>&1");

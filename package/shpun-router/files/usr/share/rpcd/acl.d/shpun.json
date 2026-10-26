@@ -21,6 +21,7 @@
           "ota_install",
           "refresh_connection",
           "reset_vpn",
+          "subscription_continue",
           "custom_routes_set",
           "server_set",
           "server_auto_set",

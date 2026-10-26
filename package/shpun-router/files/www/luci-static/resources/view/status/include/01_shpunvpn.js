@@ -87,6 +87,7 @@ if (typeof String.prototype.format !== 'function') {
  *  RPC
  * ========================================================== */
 
+var callShpunSubscriptionContinue = rpc.declare({ object: 'shpun', method: 'subscription_continue', expect: { '': {} } });
 var callShpunState = rpc.declare({
 	object: 'shpun', method: 'state', expect: { '': {} }
 });
@@ -999,8 +1000,6 @@ return view.extend({
 		var err      = (state.vpn_error || '').trim();
 		var stateErr = (state.ok === 0 && state.error) ? String(state.error) : '';
 		var subscriptionExpired = !!(state.subscription_notice && state.subscription_notice.status === 'expired');
-		var subscriptionPage = /^https:\/\/sub\.netget\.online\/[A-Za-z0-9_-]+$/.test(String(state.subscription_url || '').trim())
-			? String(state.subscription_url).trim() : '';
 
 		var routing       = state.routing || {};
 		var routingMode   = String(routing.mode || 'full').trim();
@@ -1078,8 +1077,13 @@ return view.extend({
 				E('div', { 'class': 'shpun-hint-box' }, subscriptionExpired
 					? 'Подписка истекла. Продлите услугу в ShpunApp. Повторно привязывать роутер не нужно.' : hintText),
 				subscriptionExpired ? E('div', { 'class': 'shpun-routing-actions' }, [
-					E('a', { 'class': 'shpun-btn shpun-btn--primary', 'href': appLink, 'target': '_blank', 'rel': 'noopener noreferrer' }, 'Продлить в ShpunApp'),
-					subscriptionPage ? E('a', { 'class': 'shpun-btn shpun-btn--ghost', 'href': subscriptionPage, 'target': '_blank', 'rel': 'noopener noreferrer' }, 'Страница подписки') : null
+					E('a', { 'class': 'shpun-btn shpun-btn--primary', 'href': appLink, 'rel': 'noopener noreferrer', 'click': function(ev) {
+ ev.preventDefault();
+ callShpunSubscriptionContinue().then(function(r) {
+  if (r && r.ok === 1) window.location.href = appLink;
+  else ui.addNotification(null, E('p', {}, 'Не удалось включить прямой доступ. Повторите попытку.'), 'error');
+ }).catch(function() { ui.addNotification(null, E('p', {}, 'Роутер временно недоступен.'), 'error'); });
+ } }, 'Продлить в ShpunApp')
 				]) : null,
 
 				E('div', { 'class': 'shpun-card-main' }, [

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Independent read-only metadata observer. Never changes subscription, binding, DNS or VPN state.
+# Metadata observer; the separate expiry controller owns temporary captive/payment access.
 set -eu
 umask 077
 ROOT=${SHPUN_NOTICE_ROOT:-/etc/shpun}
@@ -51,6 +51,18 @@ observe() {
 
 case "${1:-once}" in
 	once) observe ;;
-	watch) while :; do sh "$0" once || true; sleep 300; done ;;
+	watch)
+  next=0
+  trap 'exit 130' HUP INT TERM
+  while :;do
+   now=$(date +%s)
+   if [ "$now" -ge "$next" ];then
+    sh "$0" once || true
+    interval=60;[ ! -s /tmp/shpun-subscription-portal/blocked ] || interval=15
+    next=$((now+interval))
+   fi
+   if [ "$ROOT" = /etc/shpun ] && [ -x /etc/shpun/subscription-portal.sh ];then /etc/shpun/subscription-portal.sh reconcile || true;fi
+   sleep 5
+  done ;;
 	*) exit 2 ;;
 esac

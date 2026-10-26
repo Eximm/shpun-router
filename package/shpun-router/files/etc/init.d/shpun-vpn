@@ -25,6 +25,7 @@ load_conf() {
 }
 
 start_service() {
+    [ ! -s /tmp/shpun-subscription-portal/blocked ] || return 0
     # The managed updater starts the agent once apk is complete. Starting
     # Xray from default_postinst would load the large route set twice.
     [ "${SHPUN_MANAGED_UPDATE:-0}" = "1" ] && {
