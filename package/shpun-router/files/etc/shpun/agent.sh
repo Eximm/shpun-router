@@ -376,8 +376,9 @@ note_subscription_unavailable() {
 	log "all subscription sources unavailable ($fail_count/$SUB_UNAVAILABLE_RESET_LIMIT): $reason"
 
 	if [ "$fail_count" -ge "$SUB_UNAVAILABLE_RESET_LIMIT" ]; then
-		reset_subscription_state "$reason"
-		return 1
+		# Unreachable or malformed sources do not prove service revocation.
+		# Only an explicit authoritative rejection may clear the saved profile.
+		log "subscription sources unavailable; keeping saved subscription and VPN state"
 	fi
 
 	return 0

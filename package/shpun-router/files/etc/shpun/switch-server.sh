@@ -196,7 +196,8 @@ fi
 # A preserved engine may predate Hysteria support. Never replace a working
 # Reality tunnel with a Hysteria config that this engine cannot load.
 if [ "${SWITCH_SERVER_VALIDATE:-0}" = "1" ] ||
-	[ "$(jsonfilter -i "$CONFIG_CANDIDATE" -e '@.outbounds[0].protocol' 2>/dev/null)" = "hysteria" ]; then
+	[ "$(jsonfilter -i "$CONFIG_CANDIDATE" -e '@.outbounds[0].protocol' 2>/dev/null)" = "hysteria" ] ||
+    [ "$(jsonfilter -i "$CONFIG_CANDIDATE" -e '@.outbounds[0].streamSettings.network' 2>/dev/null)" = "xhttp" ]; then
 	if ! make_validation_config "$CONFIG_CANDIDATE" "$CONFIG_VALIDATE" ||
 		! "$ENGINE_BIN" run -test -config "$CONFIG_VALIDATE" >/dev/null 2>&1; then
 		rm -f "$SELECTED_CANDIDATE" "$AUTO_SELECT_CANDIDATE" "$CONFIG_CANDIDATE" "$CONFIG_VALIDATE" "$CONFIG_BACKUP"

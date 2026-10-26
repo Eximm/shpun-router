@@ -1,8 +1,8 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=shpun-router
-PKG_VERSION:=1.1.14
-PKG_RELEASE:=3
+PKG_VERSION:=1.1.15
+PKG_RELEASE:=1
 SHPUN_LUCI_TAG:=$(subst .,_,$(PKG_VERSION))_r$(PKG_RELEASE)
 
 PKG_MAINTAINER:=Shpun VPN
@@ -61,6 +61,9 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_BIN) ./files/etc/shpun/agent.sh                 $(1)/etc/shpun/agent.sh
 	$(INSTALL_BIN) ./files/etc/shpun/build-config.sh          $(1)/etc/shpun/build-config.sh
 	$(INSTALL_DATA) ./files/etc/shpun/hysteria2-outbound.uc    $(1)/etc/shpun/hysteria2-outbound.uc
+	$(INSTALL_DATA) ./files/etc/shpun/xhttp-outbound.uc        $(1)/etc/shpun/xhttp-outbound.uc
+	$(INSTALL_DATA) ./files/etc/shpun/subscription-notice.uc   $(1)/etc/shpun/subscription-notice.uc
+	$(INSTALL_BIN) ./files/etc/shpun/subscription-notice.sh    $(1)/etc/shpun/subscription-notice.sh
 	$(INSTALL_DATA) ./files/usr/share/shpun/subscription-sources.sh $(1)/usr/share/shpun/subscription-sources.sh
 	$(INSTALL_BIN) ./files/etc/shpun/rebuild-config-deferred.sh $(1)/etc/shpun/rebuild-config-deferred.sh
 	$(INSTALL_BIN) ./files/etc/shpun/switch-server.sh         $(1)/etc/shpun/switch-server.sh
@@ -83,11 +86,14 @@ define Package/$(PKG_NAME)/install
 		$(1)/usr/share/shpun/presets/always_vpn.domains
 	$(INSTALL_DATA) ./files/etc/shpun/routes/presets/always_vpn.cidrs \
 		$(1)/usr/share/shpun/presets/always_vpn.cidrs
+	$(INSTALL_DATA) ./files/etc/shpun/routes/presets/smart_ru.domains \
+		$(1)/usr/share/shpun/presets/smart_ru.domains
 
 	# --- init scripts ---
 	$(INSTALL_BIN) ./files/etc/init.d/shpun-agent             $(1)/etc/init.d/shpun-agent
 	$(INSTALL_BIN) ./files/etc/init.d/shpun-vpn               $(1)/etc/init.d/shpun-vpn
 	$(INSTALL_BIN) ./files/etc/init.d/shpun-auto-update       $(1)/etc/init.d/shpun-auto-update
+	$(INSTALL_BIN) ./files/etc/init.d/shpun-subscription-notice $(1)/etc/init.d/shpun-subscription-notice
 
 	# --- rpcd ucode backend ---
 	$(INSTALL_DATA) ./files/usr/share/rpcd/ucode/shpun.uc     $(1)/usr/share/rpcd/ucode/shpun.uc
@@ -154,6 +160,8 @@ define Package/$(PKG_NAME)/postinst
 	/etc/init.d/shpun-agent enable 2>/dev/null || true
 	/etc/init.d/shpun-vpn enable 2>/dev/null || true
 	/etc/init.d/shpun-auto-update enable 2>/dev/null || true
+	/etc/init.d/shpun-subscription-notice enable 2>/dev/null || true
+	/etc/init.d/shpun-subscription-notice restart 2>/dev/null || true
 
 	/etc/init.d/rpcd restart 2>/dev/null || true
 

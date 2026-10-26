@@ -1,0 +1,92 @@
+diff --git a/proxy/dokodemo/dokodemo.go b/proxy/dokodemo/dokodemo.go
+index 39c790c..2d4b375 100644
+--- a/proxy/dokodemo/dokodemo.go
++++ b/proxy/dokodemo/dokodemo.go
+@@ -5,6 +5,7 @@ import (
+ 	"slices"
+ 	"strconv"
+ 	"strings"
++	"sync"
+ 
+ 	"github.com/xtls/xray-core/common"
+ 	"github.com/xtls/xray-core/common/buf"
+@@ -201,6 +202,9 @@ func (d *DokodemoDoor) Process(ctx context.Context, network net.Network, conn st
+ 	return nil // Unlike Dispatch(), DispatchLink() will not return until the outbound finishes Process()
+ }
+ 
++// Socket factory is replaceable by hermetic tests.
++var packetWriterSocketFactory = FakeUDP
++
+ func NewPacketWriter(conn net.PacketConn, d *net.Destination, mark int, back *net.UDPAddr) buf.Writer {
+ 	writer := &PacketWriter{
+ 		conn:  conn,
+@@ -213,13 +217,21 @@ func NewPacketWriter(conn net.PacketConn, d *net.Destination, mark int, back *ne
+ }
+ 
+ type PacketWriter struct {
+-	conn  net.PacketConn
+-	conns map[net.Destination]net.PacketConn
+-	mark  int
+-	back  *net.UDPAddr
++	mu     sync.Mutex
++	closed bool
++	conn   net.PacketConn
++	conns  map[net.Destination]net.PacketConn
++	mark   int
++	back   *net.UDPAddr
+ }
+ 
+ func (w *PacketWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
++	w.mu.Lock()
++	defer w.mu.Unlock()
++	if w.closed {
++		buf.ReleaseMulti(mb)
++		return errors.New("packet writer closed")
++	}
+ 	for {
+ 		mb2, b := buf.SplitFirst(mb)
+ 		mb = mb2
+@@ -229,8 +241,9 @@ func (w *PacketWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
+ 		var err error
+ 		if b.UDP != nil && b.UDP.Address.Family().IsIP() {
+ 			conn := w.conns[*b.UDP]
++			temporary := conn == nil
+ 			if conn == nil {
+-				conn, err = FakeUDP(
++				conn, err = packetWriterSocketFactory(
+ 					&net.UDPAddr{
+ 						IP:   b.UDP.Address.IP(),
+ 						Port: int(b.UDP.Port),
+@@ -242,13 +255,16 @@ func (w *PacketWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
+ 					b.Release()
+ 					continue
+ 				}
+-				w.conns[*b.UDP] = conn
++				// This socket only forges the source of one reply. Keeping it
++				// for the full source-port session retains historical destinations
++				// indefinitely when other UDP traffic keeps that session alive.
+ 			}
+ 			_, err = conn.WriteTo(b.Bytes(), w.back)
++			if temporary {
++				conn.Close()
++			}
+ 			if err != nil {
+ 				errors.LogInfo(context.Background(), err.Error())
+-				w.conns[*b.UDP] = nil
+-				conn.Close()
+ 			}
+ 			b.Release()
+ 		} else {
+@@ -264,6 +280,12 @@ func (w *PacketWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
+ }
+ 
+ func (w *PacketWriter) Close() error {
++	w.mu.Lock()
++	defer w.mu.Unlock()
++	if w.closed {
++		return nil
++	}
++	w.closed = true
+ 	for _, conn := range w.conns {
+ 		if conn != nil {
+ 			conn.Close()

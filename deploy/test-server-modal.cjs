@@ -29,7 +29,8 @@ async function run(selected, excludeRu, emptyHysteria, adminDisabled = 0) {
     {index:0, proto:'vless', host:'rush1.lenivo.site', name:'FI / Через РФ', latency_ms:30},
     {index:1, proto:'vless', host:'msk2.shpyn.online', name:'MSK / Напрямую', latency_ms:null},
     {index:2, proto:'hysteria2', host:'fi.example.net', name:'FI', latency_ms:80},
-    {index:3, proto:'hy2', host:'nl.example.net', name:'NL', latency_ms:40}
+    {index:3, proto:'hy2', host:'nl.example.net', name:'NL', latency_ms:40},
+    {index:4, proto:'vless', transport:'xhttp', security:'tls', host:'cdn.example.net', name:'XHTTP test', latency_ms:50}
   ].filter(s => !emptyHysteria || s.index < 2);
   const rpc = {declare: spec => (...args) => {
     calls.push([spec.method, ...args]);
@@ -60,6 +61,15 @@ async function run(selected, excludeRu, emptyHysteria, adminDisabled = 0) {
     assert.deepEqual(calls.find(c => c[0] === 'server_set'), ['server_set',3]);
     assert.ok(notes.some(n => flatten(n).some(e => e.textContent.includes('Авто-выбор выключен'))));
   } else assert.equal(button('Hysteria 2 ·').attrs.disabled, true);
+  assert.ok(button('XHTTP · ' + (emptyHysteria ? 0 : 1)));
+  assert.equal(api.getServerDisplayGroup({proto:'vless',transport:'xhttp',host:'rush1.lenivo.site'}, 'Через РФ'), 'xhttp');
+  if (!emptyHysteria) {
+    button('XHTTP ·').click();
+    assert.equal(list().children.length, 1);
+    assert.ok(flatten(list().children).some(n => n.textContent === 'XHTTP'));
+    button('Найти рабочий').click(); await settle();
+    assert.deepEqual(calls.filter(c => c[0] === 'server_auto_start').at(-1), ['server_auto_start', [4]]);
+  } else assert.equal(button('XHTTP ·').attrs.disabled, true);
   button('Reality · РФ-шлюз').click();
   assert.equal(!!button('Найти рабочий').disabled, !!excludeRu);
   assert.ok(all().some(n => n.attrs.title && n.attrs.title.includes('не до конечного')));
@@ -87,5 +97,5 @@ async function run(selected, excludeRu, emptyHysteria, adminDisabled = 0) {
 }
 (async () => {
   await run(0,1,false); await run(2,0,false); await run(1,1,true);
-  await run(2,1,false,1);
+  await run(2,1,false,1); await run(4,0,false);
 })().catch(err => {console.error(err);process.exitCode=1;});

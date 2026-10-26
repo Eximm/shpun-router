@@ -16,6 +16,12 @@ MOCK_DIR="$TMP_DIR/mock"
 STATE_DIR="$TMP_DIR/state"
 mkdir -p "$MOCK_DIR" "$STATE_DIR"
 
+# The stale-lock path can reach the builder on a configured router. Rewrite
+# every runtime path in a private copy; an installed VPN must never be touched.
+sed "s#/etc/shpun/#$STATE_DIR/#g; s#/etc/init.d/shpun-vpn#$TMP_DIR/forbidden-vpn-service#g; s#/tmp/xray#$STATE_DIR/missing-xray#g" \
+	"$SWITCH_SCRIPT" > "$TMP_DIR/switch-under-test.sh"
+SWITCH_SCRIPT="$TMP_DIR/switch-under-test.sh"
+
 printf '%s\n' '#!/bin/sh' 'exit 0' > "$MOCK_DIR/logger"
 printf '%s\n' '#!/bin/sh' 'printf "%s\n" "{\"subscription\":{\"links\":[\"vless://test\"]}}"' > "$MOCK_DIR/jsonfilter"
 printf '%s\n' \

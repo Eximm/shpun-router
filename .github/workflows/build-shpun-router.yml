@@ -1,4 +1,4 @@
-name: Build shpun-router OpenWrt package
+name: Build shpun-router OpenWrt 24 package
 
 on:
   push:
@@ -6,118 +6,85 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
-    runs-on: ubuntu-latest
-
+    runs-on: ubuntu-24.04
     env:
       SDK_URL: https://downloads.openwrt.org/releases/24.10.3/targets/ath79/generic/openwrt-sdk-24.10.3-ath79-generic_gcc-13.3.0_musl.Linux-x86_64.tar.zst
       SDK_DIR: openwrt-sdk-24.10.3-ath79-generic_gcc-13.3.0_musl.Linux-x86_64
       PACKAGE_NAME: shpun-router
-
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Check LuCI server selection behavior
-        run: node deploy/test-server-modal.cjs
-
-      - name: Check subscription migration shell syntax
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Check LuCI and subscription notice behavior
         run: |
-          for file in deploy/test-subscription-migration.sh package/shpun-router/files/usr/share/shpun/subscription-sources.sh package/shpun-router/files/etc/shpun/agent.sh; do
-            sh -n "$file" || exit 1
+          node deploy/test-server-modal.cjs
+          node deploy/test-subscription-notice.cjs
+          if test -f deploy/test-network-modal.cjs; then node deploy/test-network-modal.cjs; fi
+      - name: Check every packaged shell script
+        run: |
+          set -eu
+          find package/shpun-router/files deploy -type f -print0 | while IFS= read -r -d '' file; do
+            if head -1 "$file" | grep -q '^#!/bin/sh'; then sh -n "$file"; fi
           done
-
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            build-essential libncurses5-dev gawk unzip file \
-            libssl-dev wget python3 zstd
-
+          sudo apt-get install -y build-essential libncurses-dev gawk unzip file libssl-dev wget python3 zstd
       - name: Cache OpenWrt SDK
         id: cache-sdk
         uses: actions/cache@v4
         with:
           path: sdk
-          key: linux-openwrt-sdk-24.10.3-ath79-v1
-
-      - name: Download & unpack OpenWrt SDK (on cache miss)
+          key: linux-ubuntu24-openwrt-sdk-24.10.3-ath79-generic_gcc-13.3.0_musl.Linux-x86_64-v2
+      - name: Download and verify SDK
         if: steps.cache-sdk.outputs.cache-hit != 'true'
         run: |
-          echo "SDK cache miss — downloading"
-          wget -O sdk.tar.zst "$SDK_URL"
-          tar -I zstd -xf sdk.tar.zst
+          set -eu
+          wget -q -O "$SDK_DIR.tar.zst" "$SDK_URL"
+          wget -q -O sdk-sha256sums "${SDK_URL%/*}/sha256sums"
+          awk -v name="$SDK_DIR.tar.zst" '$2==name || $2=="*"name' sdk-sha256sums > sdk-check.sha256
+          test -s sdk-check.sha256
+          sha256sum -c sdk-check.sha256
+          tar -I zstd -xf "$SDK_DIR.tar.zst"
           mv "$SDK_DIR" sdk
-          ls -la sdk
-
-      - name: Configure SDK (only once)
-        if: steps.cache-sdk.outputs.cache-hit != 'true'
-        working-directory: sdk
+      - name: Stage reviewed script-only package
         run: |
-          make defconfig
-
-      - name: Debug cache hit
-        run: echo "SDK cache hit = ${{ steps.cache-sdk.outputs.cache-hit }}"
-
-      - name: SDK info
-        working-directory: sdk
-        run: |
-          pwd
-          ls -la
-
-      - name: Copy package into SDK
-        run: |
-          mkdir -p sdk/package
-          rm -rf sdk/package/${PACKAGE_NAME}
-          cp -r package/${PACKAGE_NAME} sdk/package/
-          ls -la sdk/package/${PACKAGE_NAME}
-
-      - name: Clean package
-        working-directory: sdk
-        run: |
-          make package/${PACKAGE_NAME}/clean V=s || true
-          rm -rf bin/ota
-          find bin -type f -name "${PACKAGE_NAME}_*.ipk" -delete 2>/dev/null || true
-
+          set -eu
+          test -d sdk/staging_dir
+          rm -rf "sdk/package/$PACKAGE_NAME"
+          cp -a "package/$PACKAGE_NAME" "sdk/package/$PACKAGE_NAME"
+          find "sdk/package/$PACKAGE_NAME" -type f -exec sed -i 's/\r$//' {} \;
+          printf '%s\n' '# CONFIG_ALL is not set' '# CONFIG_ALL_KMODS is not set' '# CONFIG_ALL_NONSHARED is not set' 'CONFIG_PACKAGE_shpun-router=m' > sdk/.config
       - name: Build package
         working-directory: sdk
         run: |
-          make package/${PACKAGE_NAME}/compile -j"$(nproc)" V=s
-
-      - name: List built packages
-        working-directory: sdk
-        run: |
-          find bin -name "*${PACKAGE_NAME}*.ipk" -print || echo "No ipk found"
-
-      - name: Create clean OTA filename
-        id: ota
-        working-directory: sdk
-        run: |
-          set -e
-
-          PKG_VERSION=$(sed -n 's/^PKG_VERSION:=\s*//p' package/${PACKAGE_NAME}/Makefile)
-          echo "Detected PKG_VERSION=$PKG_VERSION"
-
-          ORIG_IPK=$(find bin -type f -name "${PACKAGE_NAME}_*.ipk" ! -path "bin/ota/*" -print -quit)
-
-          if [ -z "$ORIG_IPK" ]; then
-            echo "ERROR: No shpun-router ipk found" >&2
-            exit 1
-          fi
-
-          echo "Original ipk: $ORIG_IPK"
-
+          set -eu
+          make defconfig
+          make package/${PACKAGE_NAME}/clean V=s
           rm -rf bin/ota
+          find bin -type f -name '*shpun-router*.ipk' -delete
+          make package/${PACKAGE_NAME}/compile -j2 V=s NO_DEPS=1
+      - name: Prepare OTA artifact with checksum and source identity
+        working-directory: sdk
+        run: |
+          set -eu
+          version=$(sed -n 's/^PKG_VERSION:=[[:space:]]*//p' package/${PACKAGE_NAME}/Makefile)
+          release=$(sed -n 's/^PKG_RELEASE:=[[:space:]]*//p' package/${PACKAGE_NAME}/Makefile)
+          built=$(find bin -type f -name '*shpun-router*.ipk' ! -path 'bin/ota/*' -print -quit)
+          test -n "$built"
           mkdir -p bin/ota
-          CLEAN_IPK="bin/ota/${PACKAGE_NAME}_${PKG_VERSION}_all.ipk"
-
-          mv "$ORIG_IPK" "$CLEAN_IPK"
-          ls -lh "$CLEAN_IPK"
-          echo "clean_ipk=sdk/$CLEAN_IPK" >> "$GITHUB_OUTPUT"
-
-      - name: Upload shpun-router OTA package
-        uses: actions/upload-artifact@v4
+          cp "$built" "bin/ota/${PACKAGE_NAME}_${version}_all.ipk"
+          cd bin/ota
+          sha256sum "${PACKAGE_NAME}_${version}_all.ipk" > SHA256SUMS
+          printf '{"commit":"%s","version":"%s","release":"%s","openwrt":"24"}\n' "$GITHUB_SHA" "$version" "$release" > source.json
+      - uses: actions/upload-artifact@v4
         with:
           name: shpun-router-ota
-          path: ${{ steps.ota.outputs.clean_ipk }}
+          path: sdk/bin/ota/
+          if-no-files-found: error

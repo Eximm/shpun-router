@@ -13,3 +13,6 @@ package/shpun-router/files/etc/init.d/* text eol=lf
 package/shpun-router/files/etc/uci-defaults/* text eol=lf
 package/shpun-router/files/etc/shpun/router_updater text eol=lf
 .gitattributes text eol=lf
+
+# Unified diff context intentionally contains space-plus-tab and blank context lines.
+deploy/xray/*.patch text eol=lf -whitespace

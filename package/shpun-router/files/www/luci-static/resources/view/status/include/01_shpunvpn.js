@@ -328,6 +328,8 @@ function compareVersions(a, b) {
 function buildStatusBadge(state) {
 	if (state && state.ok === 0)
 		return E('span', { 'class': 'shpun-badge shpun-badge--err' }, [ E('span', { 'class': 'shpun-badge-dot' }), 'Ошибка виджета' ]);
+	if (state && state.subscription_notice && state.subscription_notice.status === 'expired')
+		return E('span', { 'class': 'shpun-badge shpun-badge--warn' }, [ E('span', { 'class': 'shpun-badge-dot' }), 'Подписка истекла' ]);
 
 	var hasCode = !!(state.code && state.code.trim().length > 0);
 	var hasSub  = !!state.has_sub;
@@ -378,7 +380,7 @@ function buildServerBadges(server) {
 		return [];
 
 	var proto = String(server.proto || '').toLowerCase();
-	var protoLabel = proto === 'vless' ? 'VLESS' : (proto.toUpperCase() || 'VPN');
+	var protoLabel = getServerProtocolLabel(server);
 	var location = formatServerLocation(server.name || server.host || 'Server', protoLabel);
 	var exitPing = parseInt(server.exit_ping_ms, 10);
 	var badges = [
@@ -499,9 +501,18 @@ function getServerConnectionGroup(server, location) {
 	return /^rush[0-9]*\.lenivo\.site$/.test(host) ? 'gateway' : 'direct';
 }
 
+function getServerProtocolLabel(server) {
+	var proto = String((server || {}).proto || '').toLowerCase();
+	if (proto === 'hy2' || proto === 'hysteria2') return 'Hysteria 2';
+	if (proto === 'vless' && server.transport === 'xhttp') return 'XHTTP';
+	if (proto === 'vless') return server.security && server.security !== 'reality' ? 'VLESS' : 'Reality';
+	return proto.toUpperCase() || 'VPN';
+}
+
 function getServerDisplayGroup(server, location) {
 	var proto = String((server || {}).proto || '').toLowerCase();
 	if (proto === 'hysteria2' || proto === 'hy2') return 'hysteria2';
+	if (proto === 'vless' && server.transport === 'xhttp') return 'xhttp';
 	return getServerConnectionGroup(server, location);
 }
 
@@ -689,11 +700,12 @@ function openServersModal() {
 		var chosen = selected;
 		var list = E('div', { 'class': 'shpun-server-list' });
 		var rows = [];
-		var groupCounts = { gateway: 0, direct: 0, hysteria2: 0 };
+		var groupCounts = { gateway: 0, direct: 0, hysteria2: 0, xhttp: 0 };
 		var activeGroup = 'gateway';
 		var gatewayButton;
 		var directButton;
 		var hysteriaButton;
+		var xhttpButton;
 		var autoButton;
 
 		function markSelected() {
@@ -714,6 +726,7 @@ function openServersModal() {
 			gatewayButton.className = 'shpun-server-switch-btn' + (activeGroup === 'gateway' ? ' is-active' : '');
 			directButton.className = 'shpun-server-switch-btn' + (activeGroup === 'direct' ? ' is-active' : '');
 			hysteriaButton.className = 'shpun-server-switch-btn' + (activeGroup === 'hysteria2' ? ' is-active' : '');
+			xhttpButton.className = 'shpun-server-switch-btn' + (activeGroup === 'xhttp' ? ' is-active' : '');
 			autoButton.textContent = 'Найти рабочий сервер в этой группе';
 			autoButton.disabled = (activeGroup === 'gateway' && autoState.excludeRu) ? true : null;
 			list.scrollTop = 0;
@@ -721,7 +734,7 @@ function openServersModal() {
 
 		servers.forEach(function(s) {
 			var proto = String(s.proto || 'vpn').toLowerCase();
-			var protoLabel = proto === 'vless' ? 'Reality' : ((proto === 'hy2' || proto === 'hysteria2') ? 'Hysteria 2' : (proto.toUpperCase() || 'VPN'));
+			var protoLabel = getServerProtocolLabel(s);
 			var isSelected = s.index === selected;
 			var location = formatServerLocation(s.name || ('Server ' + s.index), protoLabel);
 			var group = getServerDisplayGroup(s, location);
@@ -735,7 +748,7 @@ function openServersModal() {
 			var badge = E('span', { 'class': 'shpun-server-kind ' + (isSelected ? 'shpun-server-kind--main' : 'shpun-server-kind--reserve') }, isSelected ? 'Текущий' : 'В подписке');
 			var latencyNode = E('span', {
 				'class': 'shpun-server-latency shpun-server-latency--' + latencyClass,
-				'title': hasLatency ? (group === 'gateway' ? 'ICMP-пинг до РФ-шлюза, не до конечного VPN-сервера. Не проверка туннеля.' : 'ICMP-пинг до узла. Не проверка Reality или Hysteria 2.') : 'Нет ответа ICMP. Это не доказывает отказ VPN.'
+				'title': hasLatency ? (group === 'gateway' ? 'ICMP-пинг до РФ-шлюза, не до конечного VPN-сервера. Не проверка туннеля.' : 'ICMP-пинг до узла. Не проверка VPN-туннеля.') : 'Нет ответа ICMP. Это не доказывает отказ VPN.'
 			}, latencyText);
 			var meta = E('span', { 'class': 'shpun-server-meta' }, [
 				latencyNode,
@@ -775,6 +788,12 @@ function openServersModal() {
 			'disabled': groupCounts.hysteria2 === 0 ? true : null,
 			'click': function(ev) { ev.preventDefault(); activeGroup = 'hysteria2'; renderGroup(); }
 		}, 'Hysteria 2 · ' + groupCounts.hysteria2);
+		xhttpButton = E('button', {
+			'type': 'button',
+			'class': 'shpun-server-switch-btn',
+			'disabled': groupCounts.xhttp === 0 ? true : null,
+			'click': function(ev) { ev.preventDefault(); activeGroup = 'xhttp'; renderGroup(); }
+		}, 'XHTTP · ' + groupCounts.xhttp);
 		rows.sort(function(a, b) {
 			if (a.latency == null && b.latency == null) return a.index - b.index;
 			if (a.latency == null) return 1;
@@ -904,7 +923,7 @@ function openServersModal() {
 		autoToggleBtn.style = 'flex:1 1 220px;';
 		renderAutoToggle();
 
-		var serverSwitch = E('div', { 'class': 'shpun-server-switch' }, [ gatewayButton, directButton, hysteriaButton ]);
+		var serverSwitch = E('div', { 'class': 'shpun-server-switch' }, [ gatewayButton, directButton, hysteriaButton, xhttpButton ]);
 		renderGroup();
 
 		ui.showModal('Серверы VPN', [
@@ -979,6 +998,9 @@ return view.extend({
 		var vpnReady = !!state.vpn_ready;
 		var err      = (state.vpn_error || '').trim();
 		var stateErr = (state.ok === 0 && state.error) ? String(state.error) : '';
+		var subscriptionExpired = !!(state.subscription_notice && state.subscription_notice.status === 'expired');
+		var subscriptionPage = /^https:\/\/sub\.netget\.online\/[A-Za-z0-9_-]+$/.test(String(state.subscription_url || '').trim())
+			? String(state.subscription_url).trim() : '';
 
 		var routing       = state.routing || {};
 		var routingMode   = String(routing.mode || 'full').trim();
@@ -1053,7 +1075,12 @@ return view.extend({
 					E('div', { 'class': 'shpun-status-group' }, statusRows)
 				]),
 
-				E('div', { 'class': 'shpun-hint-box' }, hintText),
+				E('div', { 'class': 'shpun-hint-box' }, subscriptionExpired
+					? 'Подписка истекла. Продлите услугу в ShpunApp. Повторно привязывать роутер не нужно.' : hintText),
+				subscriptionExpired ? E('div', { 'class': 'shpun-routing-actions' }, [
+					E('a', { 'class': 'shpun-btn shpun-btn--primary', 'href': appLink, 'target': '_blank', 'rel': 'noopener noreferrer' }, 'Продлить в ShpunApp'),
+					subscriptionPage ? E('a', { 'class': 'shpun-btn shpun-btn--ghost', 'href': subscriptionPage, 'target': '_blank', 'rel': 'noopener noreferrer' }, 'Страница подписки') : null
+				]) : null,
 
 				E('div', { 'class': 'shpun-card-main' }, [
 					E('div', { 'class': 'shpun-col-main' }, [
@@ -1067,6 +1094,7 @@ return view.extend({
 								E('div', { 'class': 'shpun-field-label' }, 'Статус услуги'),
 								E('div', { 'class': 'shpun-field-value' }, [
 									stateErr ? 'Ошибка виджета'
+									: subscriptionExpired ? 'Подписка истекла'
 									: !code && !hasSub ? 'Ожидает генерации кода'
 									: !hasSub ? 'Ожидает привязки'
 									: vpnReady ? 'Подключен'

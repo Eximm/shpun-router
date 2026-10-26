@@ -1,0 +1,111 @@
+name: Build validated Xray UDP reply fix
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ shpun-router ]
+    paths:
+      - deploy/xray/**
+      - .github/workflows/build-xray-reply-fix.yml
+
+permissions:
+  contents: read
+
+env:
+  XRAY_COMMIT: 45cf2898ab12e97a55dd8f1f3d78d903340bdc9e
+  GO_VERSION: 1.26.4
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: router
+      - uses: actions/checkout@v4
+        with:
+          repository: XTLS/Xray-core
+          ref: 45cf2898ab12e97a55dd8f1f3d78d903340bdc9e
+          path: xray
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.4'
+          cache-dependency-path: xray/go.sum
+      - name: Apply exact tested patch and run race regressions
+        working-directory: xray
+        run: |
+          set -eu
+          test "$(git rev-parse HEAD)" = "$XRAY_COMMIT"
+          git apply --check ../router/deploy/xray/udp-reply-close1.patch
+          git apply ../router/deploy/xray/udp-reply-close1.patch
+          cp ../router/deploy/xray/reply_close_test.go proxy/dokodemo/reply_close_test.go
+          go test -race ./proxy/dokodemo -run 'Test(Reply|ConcurrentReply|RepeatedDestination)' -count=1
+
+  build:
+    needs: unit-tests
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: mips_24kc
+            goarch: mips
+            goarm: ''
+            gomips: softfloat
+          - arch: mipsel_24kc
+            goarch: mipsle
+            goarm: ''
+            gomips: softfloat
+          - arch: armv7
+            goarch: arm
+            goarm: '7'
+            gomips: ''
+          - arch: aarch64
+            goarch: arm64
+            goarm: ''
+            gomips: ''
+          - arch: amd64
+            goarch: amd64
+            goarm: ''
+            gomips: ''
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: router
+      - uses: actions/checkout@v4
+        with:
+          repository: XTLS/Xray-core
+          ref: 45cf2898ab12e97a55dd8f1f3d78d903340bdc9e
+          path: xray
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.4'
+          cache-dependency-path: xray/go.sum
+      - name: Apply tested patch
+        working-directory: xray
+        run: |
+          set -eu
+          test "$(git rev-parse HEAD)" = "$XRAY_COMMIT"
+          git apply --check ../router/deploy/xray/udp-reply-close1.patch
+          git apply ../router/deploy/xray/udp-reply-close1.patch
+      - name: Build pinned patched core
+        working-directory: xray
+        env:
+          CGO_ENABLED: 0
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+          GOMIPS: ${{ matrix.gomips }}
+          ROUTER_ARCH: ${{ matrix.arch }}
+        run: |
+          set -eu
+          mkdir -p build
+          go build -buildvcs=false -trimpath -ldflags='-s -w -X github.com/xtls/xray-core/core.build=45cf289-shpun-udp-reply-close1' -o "build/xray-$ROUTER_ARCH" ./main
+          cd build
+          sha256sum "xray-$ROUTER_ARCH" > SHA256SUMS
+          printf '{"source":"%s","go":"%s","patch":"udp-reply-close1","router_commit":"%s","architecture":"%s"}\n' "$XRAY_COMMIT" "$GO_VERSION" "$GITHUB_SHA" "$ROUTER_ARCH" > source.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xray-26.6.27-reply-close1-${{ matrix.arch }}
+          path: xray/build/
+          if-no-files-found: error

@@ -20,4 +20,7 @@ start_service() {
 	procd_set_param respawn 3600 5 300
 	procd_set_param nice 15
 	procd_close_instance
+	# Older running updaters already call this service after opkg completes.
+	# Start the new observer here too, so its first managed OTA needs no reboot.
+	[ ! -x /etc/init.d/shpun-subscription-notice ] || /etc/init.d/shpun-subscription-notice start
 }

@@ -3,6 +3,7 @@
 CONF="/etc/shpun/agent.conf"
 DOMAINS_FILE="/etc/shpun/routes/presets/always_vpn.domains"
 SMART_DOMAINS_FILE="/etc/shpun/routes/presets/smart_ru.domains"
+SMART_BUILTIN_DOMAINS_FILE="${SMART_BUILTIN_DOMAINS_FILE:-/usr/share/shpun/presets/smart_ru.domains}"
 CUSTOM_ROUTES_FILE="/etc/shpun/routes/custom.json"
 MODE_FILE="/etc/shpun/routes/mode"
 TRACK_FILE="/tmp/shpun-always-vpn.dnsmasq"
@@ -136,10 +137,12 @@ apply_direct_nftsets() {
 
 	mode="full"
 	[ -f "$MODE_FILE" ] && mode="$(tr -d '\r\n ' < "$MODE_FILE")"
-	if [ "$mode" = "smart_ru" ] && [ -s "$SMART_DOMAINS_FILE" ]; then
+	if [ "$mode" = "smart_ru" ]; then
 		while IFS= read -r raw_domain; do
 			append_direct_domain "$raw_domain"
-		done < "$SMART_DOMAINS_FILE"
+		done <<EOF
+$(cat "$SMART_DOMAINS_FILE" "$SMART_BUILTIN_DOMAINS_FILE" 2>/dev/null | sort -u)
+EOF
 	fi
 
 	if [ -s "$CUSTOM_ROUTES_FILE" ] && command -v jsonfilter >/dev/null 2>&1; then

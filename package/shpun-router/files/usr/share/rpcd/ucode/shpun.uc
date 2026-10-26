@@ -30,6 +30,8 @@ const FW_CUR_OLD   = DIR + "/router_version";
 
 const LASTCHK   = DIR + "/last_sub_check";
 
+
+
 const ROUTES_DIR      = DIR + "/routes";
 const ROUTES_MODE     = ROUTES_DIR + "/mode";
 const ROUTES_VER      = ROUTES_DIR + "/ru.version";
@@ -185,6 +187,18 @@ function parse_json_safe(raw) {
 	} catch(e) {
 		return null;
 	}
+}
+
+function subscription_notice() {
+	try {
+		let value = json(readfile('/tmp/shpun-subscription-notice/state.json'));
+		let now = clock()[0];
+		let fresh = type(value.checked_at) == 'int' && now >= value.checked_at && now - value.checked_at <= 600;
+		let status = fresh && value.source_available == true &&
+			(value.status == 'expired' || value.status == 'active') ? value.status : 'unknown';
+		return { status: status, expires_at: value.expires_at, checked_at: value.checked_at,
+			source_available: fresh && value.source_available == true };
+	} catch (e) { return { status: 'unknown', source_available: false }; }
 }
 
 function has_valid_subscription(raw) {
@@ -389,6 +403,22 @@ function parse_link_info(link, idx, selected) {
 		rest = substr(rest, 0, hash);
 	}
 
+	// Public transport metadata only; never return URI query/authentication.
+	let transport = "", security = "";
+	let query_at = index(rest, "?");
+	if (proto == "vless" && query_at >= 0) {
+		for (let item in split(substr(rest, query_at + 1), "&")) {
+			let eq = index(item, "=");
+			let key = eq >= 0 ? substr(item, 0, eq) : item;
+			let value = eq >= 0 ? substr(item, eq + 1) : "";
+			key = replace(key, /%([0-9a-fA-F]{2})/g, (m, h) => chr(int(h, 16)));
+			value = replace(value, /%([0-9a-fA-F]{2})/g, (m, h) => chr(int(h, 16)));
+			if (key == "type" && (value == "tcp" || value == "xhttp")) transport = value;
+			if (key == "security" && (value == "tls" || value == "reality" || value == "none")) security = value;
+		}
+	}
+	if (proto == "vless" && !transport) transport = "tcp";
+
 	let no_query = rest;
 	let q = index(no_query, "?");
 	if (q >= 0)
@@ -430,6 +460,8 @@ function parse_link_info(link, idx, selected) {
 		index: idx,
 		selected: selected,
 		proto: proto,
+		transport: transport,
+		security: security,
 		host: host,
 		port: port,
 		name: name
@@ -445,6 +477,8 @@ function public_server_info(info) {
 		index: info.index,
 		selected: info.selected,
 		proto: info.proto,
+		transport: info.transport,
+		security: info.security,
 		name: info.name,
 		host: info.host,
 		port: info.port
@@ -700,6 +734,7 @@ return {
 						fw_last = "";
 
 					let res = {
+						subscription_notice: subscription_notice(),
 						code:             code_raw || "",
 						has_sub:          has_sub,
 						subscription_url: sub_url || "",

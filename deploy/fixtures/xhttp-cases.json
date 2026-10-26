@@ -1,0 +1,117 @@
+[
+  {
+    "name": "tls-auto",
+    "ok": true,
+    "uri": "vless://00000000-0000-0000-0000-000000000001@127.0.0.1:18443?type=xhttp&security=tls&sni=example.com&host=cdn.example.com&path=%2Fmedia%2Fa%2Bb&mode=auto&alpn=h2&extra=%7B%22headers%22%3A%20%7B%22X-Test%22%3A%20%22a%2Bb%5C%22c%22%7D%2C%20%22xmux%22%3A%20%7B%22maxConcurrency%22%3A%20%2216-32%22%2C%20%22maxConnections%22%3A%200%2C%20%22cMaxReuseTimes%22%3A%200%2C%20%22hMaxRequestTimes%22%3A%20%22600-900%22%2C%20%22hMaxReusableSecs%22%3A%20%221800-3000%22%2C%20%22hKeepAlivePeriod%22%3A%200%7D%7D"
+  },
+  {
+    "name": "tls-packet-up",
+    "ok": true,
+    "uri": "vless://00000000-0000-0000-0000-000000000001@127.0.0.1:18443?type=xhttp&security=tls&sni=example.com&host=cdn.example.com&path=%2Fmedia%2Fa%2Bb&mode=packet-up&alpn=h2&extra=%7B%22headers%22%3A%20%7B%22X-Test%22%3A%20%22a%2Bb%5C%22c%22%7D%2C%20%22xmux%22%3A%20%7B%22maxConcurrency%22%3A%20%2216-32%22%2C%20%22maxConnections%22%3A%200%2C%20%22cMaxReuseTimes%22%3A%200%2C%20%22hMaxRequestTimes%22%3A%20%22600-900%22%2C%20%22hMaxReusableSecs%22%3A%20%221800-3000%22%2C%20%22hKeepAlivePeriod%22%3A%200%7D%7D"
+  },
+  {
+    "name": "tls-stream-up",
+    "ok": true,
+    "uri": "vless://00000000-0000-0000-0000-000000000001@127.0.0.1:18443?type=xhttp&security=tls&sni=example.com&host=cdn.example.com&path=%2Fmedia%2Fa%2Bb&mode=stream-up&alpn=h2&extra=%7B%22headers%22%3A%20%7B%22X-Test%22%3A%20%22a%2Bb%5C%22c%22%7D%2C%20%22xmux%22%3A%20%7B%22maxConcurrency%22%3A%20%2216-32%22%2C%20%22maxConnections%22%3A%200%2C%20%22cMaxReuseTimes%22%3A%200%2C%20%22hMaxRequestTimes%22%3A%20%22600-900%22%2C%20%22hMaxReusableSecs%22%3A%20%221800-3000%22%2C%20%22hKeepAlivePeriod%22%3A%200%7D%7D"
+  },
+  {
+    "name": "tls-stream-one",
+    "ok": true,
+    "uri": "vless://00000000-0000-0000-0000-000000000001@127.0.0.1:18443?type=xhttp&security=tls&sni=example.com&host=cdn.example.com&path=%2Fmedia%2Fa%2Bb&mode=stream-one&alpn=h2&extra=%7B%22headers%22%3A%20%7B%22X-Test%22%3A%20%22a%2Bb%5C%22c%22%7D%2C%20%22xmux%22%3A%20%7B%22maxConcurrency%22%3A%20%2216-32%22%2C%20%22maxConnections%22%3A%200%2C%20%22cMaxReuseTimes%22%3A%200%2C%20%22hMaxRequestTimes%22%3A%20%22600-900%22%2C%20%22hMaxReusableSecs%22%3A%20%221800-3000%22%2C%20%22hKeepAlivePeriod%22%3A%200%7D%7D"
+  },
+  {
+    "name": "ipv6",
+    "ok": true,
+    "uri": "vless://00000000-0000-0000-0000-000000000001@[2001:db8::1]:18443?type=xhttp&security=tls"
+  },
+  {
+    "name": "none",
+    "ok": true,
+    "uri": "vless://00000000-0000-0000-0000-000000000001@127.0.0.1:18443?type=xhttp&security=none"
+  },
+  {
+    "name": "reality",
+    "ok": true,
+    "uri": "vless://00000000-0000-0000-0000-000000000001@127.0.0.1:18443?type=xhttp&security=reality&sni=example.com&pbk=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&sid=0123456789abcdef"
+  },
+  {
+    "name": "bad-port",
+    "ok": false,
+    "uri": "vless://00000000-0000-0000-0000-000000000001@127.0.0.1:70000?type=xhttp"
+  },
+  {
+    "name": "bad-mode",
+    "ok": false,
+    "uri": "vless://00000000-0000-0000-0000-000000000001@127.0.0.1:18443?type=xhttp&mode=surprise"
+  },
+  {
+    "name": "bad-extra",
+    "ok": false,
+    "uri": "vless://00000000-0000-0000-0000-000000000001@127.0.0.1:18443?type=xhttp&extra=%5B%5D"
+  },
+  {
+    "name": "bad-json",
+    "ok": false,
+    "uri": "vless://00000000-0000-0000-0000-000000000001@127.0.0.1:18443?type=xhttp&extra=%7B"
+  },
+  {
+    "name": "vision",
+    "ok": false,
+    "uri": "vless://00000000-0000-0000-0000-000000000001@127.0.0.1:18443?type=xhttp&flow=xtls-rprx-vision"
+  },
+  {
+    "name": "insecure",
+    "ok": false,
+    "uri": "vless://00000000-0000-0000-0000-000000000001@127.0.0.1:18443?type=xhttp&security=tls&allowInsecure=true"
+  },
+  {
+    "name": "nested-insecure",
+    "ok": false,
+    "uri": "vless://00000000-0000-0000-0000-000000000001@127.0.0.1:18443?type=xhttp&extra=%7B%22downloadSettings%22%3A%20%7B%22tlsSettings%22%3A%20%7B%22allowInsecure%22%3A%20true%7D%7D%7D"
+  },
+  {
+    "name": "unknown-option",
+    "ok": false,
+    "uri": "vless://00000000-0000-0000-0000-000000000001@127.0.0.1:18443?type=xhttp&mux=true"
+  },
+  {
+    "name": "bad-security",
+    "ok": false,
+    "uri": "vless://00000000-0000-0000-0000-000000000001@127.0.0.1:18443?type=xhttp&security=surprise"
+  },
+  {
+    "name": "missing-key",
+    "ok": false,
+    "uri": "vless://00000000-0000-0000-0000-000000000001@127.0.0.1:18443?type=xhttp&security=reality&sni=example.com"
+  },
+  {
+    "name": "header-newline",
+    "ok": false,
+    "uri": "vless://00000000-0000-0000-0000-000000000001@127.0.0.1:18443?type=xhttp&host=cdn.example.com%0D%0AX-Test%3A%20yes"
+  },
+  {
+    "name": "bad-percent",
+    "ok": false,
+    "uri": "vless://00000000-0000-0000-0000-000000000001@127.0.0.1:18443?type=xhttp&path=%ZZ"
+  },
+  {
+    "name": "duplicate",
+    "ok": false,
+    "uri": "vless://00000000-0000-0000-0000-000000000001@127.0.0.1:18443?type=xhttp&type=xhttp"
+  },
+  {
+    "name": "tcp-tls",
+    "ok": true,
+    "uri": "vless://00000000-0000-0000-0000-000000000001@127.0.0.1:18443?type=tcp&security=tls&sni=example.com"
+  },
+  {
+    "name": "hy2",
+    "ok": true,
+    "uri": "hy2://synthetic@127.0.0.1:18443?sni=example.com"
+  },
+  {
+    "name": "hostname-bootstrap",
+    "ok": true,
+    "uri": "vless://00000000-0000-0000-0000-000000000001@edge.example.com:443?type=xhttp&security=tls&sni=edge.example.com"
+  }
+]

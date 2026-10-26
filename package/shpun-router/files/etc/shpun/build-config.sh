@@ -7,6 +7,7 @@ CONF="${CONF:-/etc/shpun/agent.conf}"
 SELECTED_LINK_FILE="${SELECTED_LINK_FILE:-/etc/shpun/selected_link_index}"
 ROUTES_MODE_FILE="${ROUTES_MODE_FILE:-/etc/shpun/routes/mode}"
 SMART_RU_DOMAINS_FILE="${SMART_RU_DOMAINS_FILE:-/etc/shpun/routes/presets/smart_ru.domains}"
+SMART_RU_BUILTIN_DOMAINS_FILE="${SMART_RU_BUILTIN_DOMAINS_FILE:-/usr/share/shpun/presets/smart_ru.domains}"
 ALWAYS_VPN_DOMAINS_FILE="${ALWAYS_VPN_DOMAINS_FILE:-/etc/shpun/routes/presets/always_vpn.domains}"
 CUSTOM_ROUTES_FILE="${CUSTOM_ROUTES_FILE:-/etc/shpun/routes/custom.json}"
 
@@ -181,7 +182,7 @@ domain_to_xray() {
 
 build_smart_ru_domain_rule() {
     [ "$(get_routing_mode)" = "smart_ru" ] || return 0
-    [ -s "$SMART_RU_DOMAINS_FILE" ] || return 0
+    [ -s "$SMART_RU_DOMAINS_FILE" ] || [ -s "$SMART_RU_BUILTIN_DOMAINS_FILE" ] || return 0
 
     first=1
     domains=""
@@ -213,7 +214,9 @@ build_smart_ru_domain_rule() {
           \"$escaped\""
         fi
         count=$((count + 1))
-    done < "$SMART_RU_DOMAINS_FILE"
+    done <<EOF
+$(cat "$SMART_RU_DOMAINS_FILE" "$SMART_RU_BUILTIN_DOMAINS_FILE" 2>/dev/null | sort -u)
+EOF
 
     [ "$count" -gt 0 ] || return 0
 
@@ -331,6 +334,8 @@ CUSTOM_VPN_RULE="$(build_custom_domain_rule vpn proxy)"
 # 2. VLESS / Reality
 # ==========================
 
+XHTTP_DNS_BLOCK=""
+XHTTP_BOOTSTRAP_RULE=""
 if [ "$PROTO" = "vless" ]; then
         LINK_NO_PROTO="${LINK#vless://}"
         LINK_NO_FRAGMENT="${LINK_NO_PROTO%%#*}"
@@ -421,6 +426,22 @@ if [ "$PROTO" = "vless" ]; then
         [ -z "$SNI" ]        && SNI="$HOST"
         [ -z "$SPX" ]        && SPX="/"
 
+        if [ "$TYPE" = "xhttp" ]; then
+            XHTTP_BUILDER="${XHTTP_BUILDER:-/etc/shpun/xhttp-outbound.uc}"
+            PROXY_OUTBOUND="$(printf '%s' "$LINK" | ucode "$XHTTP_BUILDER" 2>/dev/null)" || {
+                logger -t shpun-build "Invalid or unsupported VLESS XHTTP link"
+                exit 1
+            }
+            SERVER="$(printf '%s' "$PROXY_OUTBOUND" | jsonfilter -e '@.settings.vnext[0].address')"
+            SERVER="$(json_escape "$SERVER")"
+            PORT="$(printf '%s' "$PROXY_OUTBOUND" | jsonfilter -e '@.settings.vnext[0].port')"
+            FRAGMENT_OUTBOUND_BLOCK=""
+            XHTTP_BOOTSTRAP_DNS="$(printf '%s' "$LINK" | XHTTP_OUTPUT=bootstrap ucode "$XHTTP_BUILDER" 2>/dev/null)" || exit 1
+            if [ -n "$XHTTP_BOOTSTRAP_DNS" ]; then
+                XHTTP_DNS_BLOCK="\"dns\": $XHTTP_BOOTSTRAP_DNS,"
+                XHTTP_BOOTSTRAP_RULE='{"type":"field","inboundTag":["xhttp-bootstrap"],"outboundTag":"direct"},'
+            fi
+        else
         if [ -n "$FRAGMENT_RAW" ]; then
             [ -n "$FRAGMENT_LENGTH" ]   || FRAGMENT_LENGTH="$(csv_part "$FRAGMENT_RAW" 1)"
             [ -n "$FRAGMENT_INTERVAL" ] || FRAGMENT_INTERVAL="$(csv_part "$FRAGMENT_RAW" 2)"
@@ -625,6 +646,7 @@ $STREAM_SETTINGS
     }
 EOF
 )
+        fi # Existing VLESS TCP builder
 else
         HY2_BUILDER="${HY2_BUILDER:-/etc/shpun/hysteria2-outbound.uc}"
         PROXY_OUTBOUND="$(printf '%s' "$LINK" | ucode "$HY2_BUILDER" 2>/dev/null)" || {
@@ -640,6 +662,7 @@ fi
 
         cat >"$OUT_CFG" <<EOF
 {
+  $XHTTP_DNS_BLOCK
   "log": {
     "access": "none",
     "error": "none",
@@ -726,6 +749,7 @@ $FRAGMENT_OUTBOUND_BLOCK
   "routing": {
     "domainStrategy": "IPIfNonMatch",
     "rules": [
+      $XHTTP_BOOTSTRAP_RULE
       {
         "type": "field",
         "inboundTag": ["dns-in"],

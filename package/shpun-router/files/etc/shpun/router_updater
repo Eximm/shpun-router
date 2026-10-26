@@ -459,6 +459,9 @@ rm -f "$CONF_DIR/vpn_ready" "$CONF_DIR/xray_config_pending" "$CONF_DIR/dns_proxy
 /etc/init.d/rpcd restart 2>/dev/null || true
 /etc/init.d/shpun-auto-update enable 2>/dev/null || true
 /etc/init.d/shpun-auto-update start 2>/dev/null || true
+# The observer defers its start during managed postinst, then starts here after OTA.
+/etc/init.d/shpun-subscription-notice enable 2>/dev/null || true
+/etc/init.d/shpun-subscription-notice restart 2>/dev/null || true
 
 log "update finished OK"
 exit 0
