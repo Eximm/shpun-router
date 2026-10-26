@@ -105,6 +105,6 @@ add rule inet shpun_subscription_portal forward iifname "$lanif" udp dport { 53,
 add rule inet shpun_subscription_portal forward iifname "$lanif" tcp dport 53 accept
 add rule inet shpun_subscription_portal forward iifname "$lanif" reject with icmpx type admin-prohibited
 add chain inet shpun_subscription_portal input { type filter hook input priority -190; policy accept; }
-add rule inet shpun_subscription_portal input iifname != "$lanif" tcp dport 2080 drop
+add rule inet shpun_subscription_portal input iifname != "$lanif" iifname != "lo" tcp dport 2080 drop
 RULES
 touch "$S/nft-owned"
