@@ -21,7 +21,7 @@ rules_clear(){
 release(){
  rules_clear;http_stop
  if [ -f "$S/dns.json" ];then ucode "$ROOT/subscription-portal-dns.uc" "$S/dns.json" restore;/etc/init.d/dnsmasq reload;fi
- rm -f "$S/blocked" "$S/ack" "$S/profile" "$S/generation" "$S/token" "$S/network-held"
+ rm -f "$S/blocked" "$S/ack" "$S/ack-at" "$S/profile" "$S/generation" "$S/token" "$S/network-held"
  [ ! -x /etc/init.d/shpun-dns-policy ] || /etc/init.d/shpun-dns-policy start
 }
 locked=0
@@ -46,6 +46,7 @@ case "${1:-reconcile}" in
   if [ "$1" = continue ];then token=$(cat "$S/token");else token=$(head -c32);fi
   [ "$token" = "$(cat "$S/token")" ] || exit 1
   cp "$S/generation" "$S/ack"
+  date +%s > "$S/ack-at"
   rules_clear
   # The VPN remains fenced off until fresh HEAD plus authoritative profile ok=1.
   exit 0;;
@@ -54,7 +55,7 @@ case "${1:-reconcile}" in
  *) exit 2;;
 esac
 bind=$(binding);gen=$(random)
-SHPUN_PORTAL_BINDING=$bind SHPUN_PORTAL_GENERATION=$gen ucode -e 'import{readfile}from"fs";let r="/tmp/shpun-subscription-portal/";function load(p){try{return json(readfile(p));}catch(e){return {};}}print(sprintf("%J",{now:int(clock()[0]),binding:getenv("SHPUN_PORTAL_BINDING"),generation:getenv("SHPUN_PORTAL_GENERATION"),notice:load("/tmp/shpun-subscription-notice/state.json"),previous:load(r+"state.json"),ack:trim(readfile(r+"ack")||""),profile:trim(readfile(r+"profile")||"")}));' | ucode "$ROOT/subscription-portal-state.uc" > "$S/next"
+SHPUN_PORTAL_BINDING=$bind SHPUN_PORTAL_GENERATION=$gen ucode -e 'import{readfile}from"fs";let r="/tmp/shpun-subscription-portal/";function load(p){try{return json(readfile(p));}catch(e){return {};}}print(sprintf("%J",{now:int(clock()[0]),binding:getenv("SHPUN_PORTAL_BINDING"),generation:getenv("SHPUN_PORTAL_GENERATION"),notice:load("/tmp/shpun-subscription-notice/state.json"),previous:load(r+"state.json"),ack:trim(readfile(r+"ack")||""),ack_at:int(trim(readfile(r+"ack-at")||"0")),profile:trim(readfile(r+"profile")||"")}));' | ucode "$ROOT/subscription-portal-state.uc" > "$S/next"
 phase=$(jsonfilter -i "$S/next" -e '@.phase')
 if [ "$phase" = idle ];then
  [ ! -e "$S/blocked" ] || release
@@ -62,7 +63,7 @@ if [ "$phase" = idle ];then
 fi
 nextgen=$(jsonfilter -i "$S/next" -e '@.generation')
 if [ ! -s "$S/generation" ] || [ "$(cat "$S/generation")" != "$nextgen" ];then
- echo "$nextgen" > "$S/generation";random > "$S/token";rm -f "$S/ack" "$S/profile"
+ echo "$nextgen" > "$S/generation";random > "$S/token";rm -f "$S/ack" "$S/ack-at" "$S/profile"
 fi
 # Fence agent/init before touching its routes or process.
 cp "$S/generation" "$S/blocked"

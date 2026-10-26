@@ -23,6 +23,11 @@ const cases=[
  ['old-binding',{notice:active,previous:{...state,binding:'c'.repeat(64)}},'idle'],
  ['unlimited-renewal',{notice:{...active,expires_at:0},previous:state,profile:generation},'idle'],
  ['stale-paid-keeps-direct',{notice:{...active,checked_at:now-601},previous:state,profile:generation},'verifying'],
+ ['six-hours-minus-one',{notice:expired,previous:{...state,acknowledged:true,acknowledged_at:now-21599}},'direct'],
+ ['six-hours-boundary',{notice:expired,previous:{...state,acknowledged:true,acknowledged_at:now-21600},ack:generation,ack_at:now-21600},'captive'],
+ ['six-hours-expired',{notice:expired,previous:{...state,acknowledged:false,acknowledged_at:now-21601},ack:generation,ack_at:now-21601},'captive'],
+ ['next-payment-click',{notice:expired,previous:{...state,acknowledged:false,acknowledged_at:now-21601},ack:generation,ack_at:now},'direct'],
+ ['paid-before-six-hours',{notice:active,previous:{...state,acknowledged:true,acknowledged_at:now-100},profile:generation},'idle'],
  ['new-expiry-new-session',{notice:expired,previous:{phase:'idle',binding},profile:'old'},'captive'],
 ];
 if(process.argv[2]==='prepare'){

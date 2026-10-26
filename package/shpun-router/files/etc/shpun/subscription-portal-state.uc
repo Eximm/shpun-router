@@ -9,8 +9,13 @@ function decide(i) {
  if(!held && !expired)return {phase:'idle',binding:i.binding};
  let generation=held?p.generation:i.generation;
  if(active && i.profile==generation)return {phase:'idle',binding:i.binding};
- let phase=expired ? ((held && p.acknowledged)||i.ack==generation?'direct':'captive') : 'verifying';
- return {phase,binding:i.binding,generation,acknowledged:(held&&p.acknowledged)||i.ack==generation,expires_at:expired?n.expires_at:p.expires_at||0};
+ let acknowledged=(held&&p.acknowledged)||i.ack==generation;
+ let acknowledged_at=i.ack_at||p.acknowledged_at||0;
+ // Legacy local pilots without a timestamp get one grace window, never an endless one.
+ if(acknowledged && !acknowledged_at)acknowledged_at=now;
+ acknowledged=acknowledged && acknowledged_at<=now && now-acknowledged_at<21600;
+ let phase=expired ? (acknowledged?'direct':'captive') : 'verifying';
+ return {phase,binding:i.binding,generation,acknowledged,acknowledged_at,expires_at:expired?n.expires_at:p.expires_at||0};
 }
 let input=json(readfile('/dev/stdin'));
 if(type(input)!='object'||type(input.now)!='int'||!match(input.binding||'',/^[a-f0-9]{64}$/)||!match(input.generation||'',/^[a-f0-9]{32}$/))exit(1);

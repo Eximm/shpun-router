@@ -207,6 +207,15 @@ function injectStyles() {
 		+ '.shpun-routing-meta{font-size:11px;line-height:1.45;color:#b8c3d9;text-align:right;}'
 		+ '.shpun-routing-note{margin:0 0 10px;padding:9px 11px;border-radius:10px;background:rgba(59,130,246,.10);border:1px solid rgba(96,165,250,.18);color:#bfdbfe;font-size:11px;line-height:1.45;}'
 		+ '.shpun-routing-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;}'
+		+ '.shpun-renew-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}'
+		+ '.shpun-renew-actions .shpun-btn{width:auto;min-width:220px;max-width:100%;min-height:44px;padding:11px 24px;font-size:14px;}'
+		+ '.shpun-widget-card a.shpun-btn,.shpun-widget-card a.shpun-btn:link,.shpun-widget-card a.shpun-btn:visited,.shpun-widget-card a.shpun-btn:hover,.shpun-widget-card a.shpun-btn:focus{color:#fff;text-decoration:none;}'
+		+ '.shpun-btn:focus-visible{outline:3px solid #aaa0ff;outline-offset:3px;}'
+		+ '.shpun-network-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}'
+		+ '.shpun-region-toggle{display:inline-grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;width:min(100%,240px);padding:4px;border:1px solid rgba(120,140,180,.24);border-radius:999px;background:rgba(7,14,29,.5);}'
+		+ '.shpun-region-toggle .shpun-btn{min-height:38px;padding:8px 20px;border-color:transparent;white-space:nowrap;}'
+		+ '.shpun-network-actions>.shpun-btn{width:auto;min-height:44px;padding:10px 18px;}'
+		+ '@media(max-width:480px){.shpun-renew-actions .shpun-btn{width:100%;min-width:0;}.shpun-region-toggle{width:100%;}.shpun-network-actions>.shpun-btn{width:100%;}}'
 		+ '.shpun-code{font-family:monospace;font-size:18px;font-weight:800;letter-spacing:.06em;color:#fff;}'
 		+ '.shpun-code-copy{display:inline-block;cursor:pointer;border-bottom:1px dashed rgba(165,180,252,.55);}'
 		+ '.shpun-code-copy:hover{color:#c4b5fd;border-bottom-color:#a78bfa;}'
@@ -1076,7 +1085,7 @@ return view.extend({
 
 				E('div', { 'class': 'shpun-hint-box' }, subscriptionExpired
 					? 'Подписка истекла. Продлите услугу в ShpunApp. Повторно привязывать роутер не нужно.' : hintText),
-				subscriptionExpired ? E('div', { 'class': 'shpun-routing-actions' }, [
+				subscriptionExpired ? E('div', { 'class': 'shpun-renew-actions' }, [
 					E('a', { 'class': 'shpun-btn shpun-btn--primary', 'href': appLink, 'rel': 'noopener noreferrer', 'click': function(ev) {
  ev.preventDefault();
  callShpunSubscriptionContinue().then(function(r) {
