@@ -67,6 +67,7 @@ jobs:
           set -eu
           make defconfig
           make package/${PACKAGE_NAME}/clean V=s
+          mkdir -p bin
           rm -rf bin/ota
           find bin -type f -name '*shpun-router*.ipk' -delete
           make package/${PACKAGE_NAME}/compile -j2 V=s NO_DEPS=1
