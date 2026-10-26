@@ -97,9 +97,9 @@ if nft list table inet shpun_subscription_portal >/dev/null 2>&1;then
 fi
 nft -f - <<RULES
 add table inet shpun_subscription_portal
-add chain inet shpun_subscription_portal redirect { type nat hook prerouting priority -101; policy accept; }
-add rule inet shpun_subscription_portal redirect iifname "$lanif" fib daddr type local return
-add rule inet shpun_subscription_portal redirect iifname "$lanif" ip protocol tcp tcp dport 80 redirect to :2080
+add chain inet shpun_subscription_portal captive_nat { type nat hook prerouting priority -101; policy accept; }
+add rule inet shpun_subscription_portal captive_nat iifname "$lanif" fib daddr type local return
+add rule inet shpun_subscription_portal captive_nat iifname "$lanif" ip protocol tcp tcp dport 80 redirect to :2080
 add chain inet shpun_subscription_portal forward { type filter hook forward priority -190; policy accept; }
 add rule inet shpun_subscription_portal forward iifname "$lanif" udp dport { 53, 123 } accept
 add rule inet shpun_subscription_portal forward iifname "$lanif" tcp dport 53 accept
