@@ -193,7 +193,7 @@ function subscription_notice() {
 	try {
 		let value = json(readfile('/tmp/shpun-subscription-notice/state.json'));
 		let now = clock()[0];
-		let limit = value.status == 'active' && (value.expires_at == 0 || value.expires_at > now) ? 21600 : 600;
+		let limit = value.status == 'active' && (value.expires_at == 0 || value.expires_at > now) ? 21600 : (value.status == 'expired' ? 2400 : 600);
 		let fresh = type(value.checked_at) == 'int' && now >= value.checked_at && now - value.checked_at <= limit;
 		let status = fresh && value.source_available == true &&
 			(value.status == 'expired' || value.status == 'active') ? value.status : 'unknown';

@@ -7,7 +7,7 @@ RUNTIME=${SHPUN_NOTICE_RUNTIME:-/tmp/shpun-subscription-notice}
 HELPER=${SHPUN_NOTICE_HELPER:-/etc/shpun/subscription-notice.uc}
 
 sanitize() {
-	ucode -e 'import {readfile} from "fs"; let p;try{p=json(readfile(ARGV[0]+"/state.json"));}catch(e){};print(sprintf("%J",{headers:readfile(ARGV[0]+"/headers")||"",previous:p,now:int(ARGV[1]),fingerprint:ARGV[2],source_binding:ARGV[3],portal_held:!!readfile("/tmp/shpun-subscription-portal/blocked")}));' \
+	ucode -e 'import {readfile} from "fs"; let p;try{p=json(readfile(ARGV[0]+"/state.json"));}catch(e){};print(sprintf("%J",{headers:readfile(ARGV[0]+"/headers")||"",previous:p,now:int(ARGV[1]),fingerprint:ARGV[2],source_binding:ARGV[3],portal_held:!!readfile("/tmp/shpun-subscription-portal/blocked")&&p?.source_binding==ARGV[3]}));' \
 		"$RUNTIME" "$(date +%s)" "$fingerprint" "$source_binding" > "$RUNTIME/request"
 	ucode "$HELPER" < "$RUNTIME/request" > "$RUNTIME/next"
 }
@@ -27,7 +27,7 @@ observe() {
 	source_binding=$(cat "$ROOT/subscription_url" "$ROOT/subscription_mirror_url" 2>/dev/null | sha256sum | cut -d' ' -f1)
 	now=$(date +%s)
 	# Shared persisted deadline prevents watch restarts/once callers from bypassing the budget.
-	if [ -s "$RUNTIME/state.json" ] && ucode -e 'import{readfile}from"fs";let s=json(readfile(ARGV[0]));let now=int(ARGV[1]);if(s.source_binding!=ARGV[2]||!s.next_check_at||s.checked_at>now||s.next_check_at<=now||s.next_check_at>now+21600)exit(1);' "$RUNTIME/state.json" "$now" "$source_binding" 2>/dev/null;then return 0;fi
+	if [ -s "$RUNTIME/state.json" ] && ucode -e 'import{readfile}from"fs";let s=json(readfile(ARGV[0]));let now=int(ARGV[1]);if(s.version!=2||s.source_binding!=ARGV[2]||!s.next_check_at||s.checked_at>now||s.next_check_at<=now||s.next_check_at>now+21600)exit(1);' "$RUNTIME/state.json" "$now" "$source_binding" 2>/dev/null;then return 0;fi
 	version=unknown
 	for v in fw_current router_software_version router_version;do
 	 [ -s "$ROOT/$v" ] || continue

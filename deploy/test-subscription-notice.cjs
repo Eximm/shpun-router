@@ -72,10 +72,10 @@ for(const [name,state,input,delay] of [
  ['unlimited',{status:'active',source_available:true,expires_at:0},{},21600],
  ['expiry-deadline',{status:'active',source_available:true,expires_at:now+120},{},120],
  ['near-expiry-minimum',{status:'active',source_available:true,expires_at:now+1},{},30],
- ['expired-five-minutes',{status:'expired',source_available:true},{},300],
- ['renewal-held',{status:'active',source_available:true,expires_at:now+86400},{portal_held:true},300],
- ['failure-first',{status:'unknown',source_available:false},{},300],
- ['failure-second',{status:'unknown',source_available:false},{previous:{poll_failures:1}},600],
- ['failure-capped',{status:'unknown',source_available:false},{previous:{poll_failures:5}},3600],
+ ['expired-thirty-minutes',{status:'expired',source_available:true},{},1800],
+ ['renewal-held',{status:'active',source_available:true,expires_at:now+86400},{portal_held:true},1800],
+ ['failure-without-confirmed-expiry',{status:'unknown',source_available:false},{},21600],
+ ['failure-second',{status:'unknown',source_available:false},{previous:{poll_failures:1}},21600],
+ ['failure-capped',{status:'unknown',source_available:false},{portal_held:true,previous:{poll_failures:5}},3600],
 ]){schedule(state,{now,...input});assert.equal(state.next_check_at-now,delay,name);}
 console.log('PASS nine request-budget/expiry/backoff/renewal scheduling cases');

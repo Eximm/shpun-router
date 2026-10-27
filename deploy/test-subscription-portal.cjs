@@ -11,7 +11,9 @@ const state={phase:'captive',binding,generation,acknowledged:false,expires_at:no
 const base={binding,generation,now};
 const cases=[
  ['healthy',{notice:active},'idle'],['offline',{notice:{}},'idle'],
- ['expired',{notice:expired},'captive'],['stale-expiry',{notice:{...expired,checked_at:now-601}},'idle'],
+ ['expired',{notice:expired},'captive'],['stale-expiry',{notice:{...expired,checked_at:now-2401}},'idle'],
+ ['expired-between-thirty-minute-polls',{notice:{...expired,checked_at:now-1799}},'captive'],
+ ['expired-poll-margin',{notice:{...expired,checked_at:now-2400}},'captive'],
  ['future-clock',{notice:{...expired,checked_at:now+1}},'idle'],
  ['acknowledged',{notice:expired,previous:state,ack:generation},'direct'],
  ['ack-sticks',{notice:expired,previous:{...state,acknowledged:true}},'direct'],

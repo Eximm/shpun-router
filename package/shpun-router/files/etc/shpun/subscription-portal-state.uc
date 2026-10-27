@@ -3,7 +3,7 @@ import { readfile } from 'fs';
 function decide(i) {
  let n=i.notice||{},p=i.previous||{},now=i.now;
  let held=p.binding==i.binding && !!p.generation;
- let fresh=n.source_available==true && n.checked_at<=now && now-n.checked_at<=600;
+ let fresh=n.source_available==true && n.checked_at<=now && now-n.checked_at<=(n.status=='expired'?2400:600);
  let expired=fresh && n.status=='expired' && n.expires_at>0 && n.expires_at<=now;
  let active=fresh && n.status=='active' && (n.expires_at==0 || n.expires_at>now);
  if(!held && !expired)return {phase:'idle',binding:i.binding};

@@ -18,7 +18,7 @@ function http_date(value) {
 }
 
 function notice_state(headers, now, fingerprint, previous) {
-	let result = { version: 1, status: 'unknown', expires_at: null, checked_at: now,
+	let result = { version: 2, status: 'unknown', expires_at: null, checked_at: now,
 		source_available: false, fingerprint: fingerprint || '', last_confirmed_at: 0 };
 	// Only the final HTTP response counts (ignore proxy CONNECT / informational headers).
 	let status = 0, info = [], dates = [], age = 0;
@@ -58,12 +58,11 @@ function notice_state(headers, now, fingerprint, previous) {
 }
 
 function schedule(result,input) {
-// Active accounts: six hours, but never sleep beyond their declared expiry.
-// Unpaid: five minutes (within the portal's ten-minute freshness window).
-// Unavailable: bounded exponential backoff; no repeated 15-second retries.
+// Fast activation checks require a previously confirmed expiry (portal hold).
+// Ordinary source/WAN errors do not activate an unpaid polling mode.
 let failures=result.source_available?0:min(5,(input.previous?.poll_failures||0)+1);
-let interval=result.status=='active'&&!input.portal_held?21600:300;
-if(result.status=='unknown')interval=min(3600,300*(1<<(failures-1)));
+let interval=result.status=='expired'||input.portal_held?1800:21600;
+if(result.status=='unknown' && input.portal_held)interval=3600;
 if(result.status=='active' && result.expires_at>input.now)
  interval=min(interval,max(30,result.expires_at-input.now));
 result.poll_failures=failures;
