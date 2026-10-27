@@ -7,8 +7,8 @@ RUNTIME=${SHPUN_NOTICE_RUNTIME:-/tmp/shpun-subscription-notice}
 HELPER=${SHPUN_NOTICE_HELPER:-/etc/shpun/subscription-notice.uc}
 
 sanitize() {
-	ucode -e 'import {readfile} from "fs"; let p;try{p=json(readfile(ARGV[0]+"/state.json"));}catch(e){};print(sprintf("%J",{headers:readfile(ARGV[0]+"/headers")||"",previous:p,now:int(ARGV[1]),fingerprint:ARGV[2]}));' \
-		"$RUNTIME" "$(date +%s)" "$fingerprint" > "$RUNTIME/request"
+	ucode -e 'import {readfile} from "fs"; let p;try{p=json(readfile(ARGV[0]+"/state.json"));}catch(e){};print(sprintf("%J",{headers:readfile(ARGV[0]+"/headers")||"",previous:p,now:int(ARGV[1]),fingerprint:ARGV[2],source_binding:ARGV[3],portal_held:!!readfile("/tmp/shpun-subscription-portal/blocked")}));' \
+		"$RUNTIME" "$(date +%s)" "$fingerprint" "$source_binding" > "$RUNTIME/request"
 	ucode "$HELPER" < "$RUNTIME/request" > "$RUNTIME/next"
 }
 
@@ -24,6 +24,17 @@ observe() {
 	printf '%s\n' "$$" > "$RUNTIME/lock/pid"
 	trap 'rm -f "$RUNTIME/headers" "$RUNTIME/next" "$RUNTIME/request" "$RUNTIME/lock/pid"; rmdir "$RUNTIME/lock" 2>/dev/null || true' EXIT
 	trap 'exit 130' HUP INT TERM
+	source_binding=$(cat "$ROOT/subscription_url" "$ROOT/subscription_mirror_url" 2>/dev/null | sha256sum | cut -d' ' -f1)
+	now=$(date +%s)
+	# Shared persisted deadline prevents watch restarts/once callers from bypassing the budget.
+	if [ -s "$RUNTIME/state.json" ] && ucode -e 'import{readfile}from"fs";let s=json(readfile(ARGV[0]));let now=int(ARGV[1]);if(s.source_binding!=ARGV[2]||!s.next_check_at||s.checked_at>now||s.next_check_at<=now||s.next_check_at>now+21600)exit(1);' "$RUNTIME/state.json" "$now" "$source_binding" 2>/dev/null;then return 0;fi
+	version=unknown
+	for v in fw_current router_software_version router_version;do
+	 [ -s "$ROOT/$v" ] || continue
+	 candidate=$(tr -d '\r\n ' < "$ROOT/$v")
+	 case "$candidate" in ''|*[!a-zA-Z0-9._+-]*)continue;;esac
+	 version=$candidate;break
+	done
 	url=''; fingerprint=''; valid=0
 	rm -f "$RUNTIME/headers"
 	for file in subscription_url subscription_mirror_url; do
@@ -36,7 +47,7 @@ observe() {
 		fingerprint=$(printf '%s' "$url" | sha256sum | cut -d' ' -f1)
 		if printf 'url = "%s"\n' "$url" | curl -q -K - --head --silent --show-error \
 			--proto '=https' --noproxy '*' --connect-timeout 4 --max-time 10 \
-			--user-agent ShpunRouter --header 'Cache-Control: no-cache' \
+			--user-agent "ShpunRouter/$version" --header 'Cache-Control: no-cache' \
 			--dump-header "$RUNTIME/headers" --output /dev/null 2>/dev/null; then
 			sanitize
 			if [ "$(jsonfilter -i "$RUNTIME/next" -e '@.source_available')" = true ]; then valid=1; break; fi
@@ -52,15 +63,9 @@ observe() {
 case "${1:-once}" in
 	once) observe ;;
 	watch)
-  next=0
   trap 'exit 130' HUP INT TERM
   while :;do
-   now=$(date +%s)
-   if [ "$now" -ge "$next" ];then
-    sh "$0" once || true
-    interval=60;[ ! -s /tmp/shpun-subscription-portal/blocked ] || interval=15
-    next=$((now+interval))
-   fi
+   sh "$0" once || true
    if [ "$ROOT" = /etc/shpun ] && [ -x /etc/shpun/subscription-portal.sh ];then /etc/shpun/subscription-portal.sh reconcile || true;fi
    sleep 5
   done ;;

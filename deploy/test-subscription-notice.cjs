@@ -65,3 +65,17 @@ for(const status of ['active','expired','unknown']) {
 const unsafe=flat(api.render({code:'fixture',has_sub:true,subscription_notice:{status:'expired'},subscription_url:'javascript:alert(1)'}));
 assert.ok(!unsafe.some(x=>x.tag==='a'&&x.attrs.href.startsWith('javascript:')));
 console.log('PASS actual LuCI render expired/active/unknown and safe links');
+
+const schedule=new Function('min','max',functions+'\nreturn schedule;')(Math.min,Math.max);
+for(const [name,state,input,delay] of [
+ ['active-six-hours',{status:'active',source_available:true,expires_at:now+86400},{},21600],
+ ['unlimited',{status:'active',source_available:true,expires_at:0},{},21600],
+ ['expiry-deadline',{status:'active',source_available:true,expires_at:now+120},{},120],
+ ['near-expiry-minimum',{status:'active',source_available:true,expires_at:now+1},{},30],
+ ['expired-five-minutes',{status:'expired',source_available:true},{},300],
+ ['renewal-held',{status:'active',source_available:true,expires_at:now+86400},{portal_held:true},300],
+ ['failure-first',{status:'unknown',source_available:false},{},300],
+ ['failure-second',{status:'unknown',source_available:false},{previous:{poll_failures:1}},600],
+ ['failure-capped',{status:'unknown',source_available:false},{previous:{poll_failures:5}},3600],
+]){schedule(state,{now,...input});assert.equal(state.next_check_at-now,delay,name);}
+console.log('PASS nine request-budget/expiry/backoff/renewal scheduling cases');

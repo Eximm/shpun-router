@@ -37,6 +37,17 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential libncurses-dev gawk unzip file libssl-dev wget python3 zstd
+      - name: Validate real ucode runtime and shell request budget
+        run: |
+          sudo apt-get install -y cmake libjson-c-dev
+          git clone https://github.com/jow-/ucode.git /tmp/notice-ucode
+          git -C /tmp/notice-ucode checkout aabdeb4f5060c91c5929bf6d7af745c6aabf5ec5
+          cmake -S /tmp/notice-ucode -B /tmp/notice-ucode/build -DCMAKE_INSTALL_PREFIX=/tmp/notice-runtime -DUBUS_SUPPORT=OFF -DUCI_SUPPORT=OFF
+          cmake --build /tmp/notice-ucode/build -j2
+          cmake --install /tmp/notice-ucode/build
+          export PATH="/tmp/notice-runtime/bin:$PATH"
+          export LD_LIBRARY_PATH=/tmp/notice-runtime/lib
+          sh deploy/test-notice-runtime.sh
       - name: Cache OpenWrt SDK
         id: cache-sdk
         uses: actions/cache@v4

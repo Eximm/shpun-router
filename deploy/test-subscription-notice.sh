@@ -8,18 +8,20 @@ trap cleanup EXIT
 mkdir "$d/root" "$d/bin"
 echo 'https://sub.example.test/direct' > "$d/root/subscription_url"
 echo 'https://sub.example.test/mirror' > "$d/root/subscription_mirror_url"
+echo 9.9.9 > "$d/root/fw_current"
 export SHPUN_NOTICE_ROOT="$d/root" SHPUN_NOTICE_RUNTIME="$d/runtime" SHPUN_NOTICE_HELPER="$src/subscription-notice.uc" NOTICE_FIXTURE="$d"
 cat > "$d/bin/curl" <<'CURL'
 #!/bin/sh
 set -eu
 request=$(cat)
 echo request >> "$NOTICE_FIXTURE/requests"
-header=''; head=0
+header=''; head=0; ua=''
 while [ "$#" -gt 0 ]; do
- case "$1" in --dump-header) shift;header=$1 ;; --head) head=1 ;; https://*|http://*) echo URL_IN_ARGV >&2;exit 1 ;; esac
+ case "$1" in --user-agent) shift;ua=$1 ;; --dump-header) shift;header=$1 ;; --head) head=1 ;; https://*|http://*) echo URL_IN_ARGV >&2;exit 1 ;; esac
  shift
 done
 test "$head" = 1
+test "$ua" = ShpunRouter/9.9.9
 mode=$(cat "$NOTICE_FIXTURE/mode")
 case "$mode" in fail) exit 7 ;; mirror) case "$request" in *direct*) printf 'HTTP/2 502\r\n\r\n' > "$header";exit 0 ;; esac ;; esac
 now=$(date +%s);expiry=$((now+86400))
@@ -30,6 +32,7 @@ CURL
 chmod +x "$d/bin/curl"
 export PATH="$d/bin:$PATH"
 check() {
+ rm -f "$d/runtime/state.json"
  echo "$1" > "$d/mode"
  sh "$src/subscription-notice.sh" once
  actual=$(jsonfilter -i "$d/runtime/state.json" -e '@.status')
@@ -46,6 +49,14 @@ check malformed unknown
 check unlimited active
 before=$(wc -l < "$d/requests");check mirror active;after=$(wc -l < "$d/requests");test "$((after-before))" = 2
 mkdir "$d/runtime/lock";echo 999999 > "$d/runtime/lock/pid";check active active
+before=$(wc -l < "$d/requests")
+sh "$src/subscription-notice.sh" once
+sh "$src/subscription-notice.sh" once
+after=$(wc -l < "$d/requests");test "$before" = "$after"
+echo https://sub.example.test/rebound > "$d/root/subscription_url"
+sh "$src/subscription-notice.sh" once
+after=$(wc -l < "$d/requests");test "$after" -eq "$((before+1))"
+echo PASS shared-deadline-and-binding-change
 rm "$d/root/subscription_url" "$d/root/subscription_mirror_url"
 check active unknown
 echo PASS expiry-renewal-outage-mirror-recovery-and-unbound-no-vpn-mutation

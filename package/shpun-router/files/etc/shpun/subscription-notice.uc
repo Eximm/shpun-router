@@ -57,8 +57,24 @@ function notice_state(headers, now, fingerprint, previous) {
 	return result;
 }
 
+function schedule(result,input) {
+// Active accounts: six hours, but never sleep beyond their declared expiry.
+// Unpaid: five minutes (within the portal's ten-minute freshness window).
+// Unavailable: bounded exponential backoff; no repeated 15-second retries.
+let failures=result.source_available?0:min(5,(input.previous?.poll_failures||0)+1);
+let interval=result.status=='active'&&!input.portal_held?21600:300;
+if(result.status=='unknown')interval=min(3600,300*(1<<(failures-1)));
+if(result.status=='active' && result.expires_at>input.now)
+ interval=min(interval,max(30,result.expires_at-input.now));
+result.poll_failures=failures;
+result.source_binding=input.source_binding||'';
+result.next_check_at=input.now+interval;
+}
+
 let input;
 try { input = json(readfile('/dev/stdin')); } catch (e) { exit(1); }
 if (type(input) != 'object' || type(input.headers) != 'string' ||
     type(input.now) != 'int' || input.now < 0 || type(input.fingerprint) != 'string') exit(1);
-print(sprintf('%J\n', notice_state(input.headers, input.now, input.fingerprint, input.previous)));
+let result=notice_state(input.headers, input.now, input.fingerprint, input.previous);
+schedule(result,input);
+print(sprintf('%J\n',result));
