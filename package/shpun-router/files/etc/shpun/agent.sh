@@ -2895,8 +2895,32 @@ restore_subscription_from_url_file() {
 	return 0
 }
 
+# Only the portal's authenticated paid transition creates this marker.
+resume_paid_subscription() {
+ local pending="${PAID_RESUME_FILE:-/tmp/shpun-subscription-portal/resume-pending}"
+ local attempt="${PAID_RESUME_ATTEMPT_FILE:-/tmp/shpun-subscription-portal/resume-last-attempt}"
+ local now last
+ [ -s "$pending" ] || return 0
+ now=$(date +%s);last=$(cat "$attempt" 2>/dev/null || true)
+ case "$last" in ''|*[!0-9]*)last=0;;esac
+ # Failed source/config preparation must not turn into a subscription fetch loop.
+ [ "$last" -eq 0 ] || [ $((now-last)) -ge 1800 ] || return 1
+ echo "$now" > "$attempt"
+ SHPUN_PAID_RESUME=1
+ if { refresh_subscription_from_url "$SUB_URL_FILE" direct || refresh_subscription_from_url "$SUB_MIRROR_URL_FILE" mirror; } && ensure_vpn_from_subscription;then
+  SHPUN_PAID_RESUME=0
+  rm -f "$pending" "$attempt"
+  log "confirmed paid subscription resumed with freshly prepared config"
+  return 0
+ fi
+ SHPUN_PAID_RESUME=0
+ log "paid subscription resume awaits valid source/config; direct access retained"
+ return 1
+}
+
 ensure_vpn_from_subscription() {
  [ ! -s /tmp/shpun-subscription-portal/blocked ] || return 0
+ [ ! -s "${PAID_RESUME_FILE:-/tmp/shpun-subscription-portal/resume-pending}" ] || [ "${SHPUN_PAID_RESUME:-0}" = 1 ] || return 1
 	local old_config_sha active_config_sha new_config_sha vpn_was_running config_backup config_lock_owned=0
 
 	if [ ! -s "$SUB_FILE" ]; then
@@ -3002,7 +3026,7 @@ ensure_vpn_from_subscription() {
 		return 0
 	fi
 
-	if [ "$vpn_was_running" = "1" ] && [ -n "$active_config_sha" ] && [ -n "$new_config_sha" ]; then
+	if [ "$vpn_was_running" = "1" ] && [ -n "$active_config_sha" ] && [ -n "$new_config_sha" ] && [ "${SHPUN_PAID_RESUME:-0}" != 1 ]; then
 		echo "$new_config_sha" > "$CONFIG_PENDING_FILE"
 		echo "ok" > "$VPN_READY_FILE"
 		rm -f "$VERROR_FILE"
@@ -3390,6 +3414,10 @@ main_loop() {
     refresh_subscription_source_metadata
     PORTAL_LAST_PROFILE_CHECK=$portal_now
    fi
+   sleep "$MAIN_LOOP_SLEEP"
+   continue
+  fi
+  if ! resume_paid_subscription;then
    sleep "$MAIN_LOOP_SLEEP"
    continue
   fi

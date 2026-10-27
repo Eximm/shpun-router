@@ -8,7 +8,7 @@ function decide(i) {
  let active=fresh && n.status=='active' && (n.expires_at==0 || n.expires_at>now);
  if(!held && !expired)return {phase:'idle',binding:i.binding};
  let generation=held?p.generation:i.generation;
- if(active && i.profile==generation)return {phase:'idle',binding:i.binding};
+ if(active && i.profile==generation)return {phase:'idle',binding:i.binding,paid_confirmed:true};
  let acknowledged=(held&&p.acknowledged)||i.ack==generation;
  let acknowledged_at=i.ack_at||p.acknowledged_at||0;
  // Legacy local pilots without a timestamp get one grace window, never an endless one.

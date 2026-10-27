@@ -50,7 +50,7 @@ case "${1:-reconcile}" in
   rules_clear
   # The VPN remains fenced off until fresh HEAD plus authoritative profile ok=1.
   exit 0;;
- stop) lock;release;rm -f "$S/state.json";exit 0;;
+ stop) lock;release;rm -f "$S/state.json" "$S/resume-pending" "$S/resume-last-attempt";exit 0;;
  reconcile) lock;;
  *) exit 2;;
 esac
@@ -58,12 +58,19 @@ bind=$(binding);gen=$(random)
 SHPUN_PORTAL_BINDING=$bind SHPUN_PORTAL_GENERATION=$gen ucode -e 'import{readfile}from"fs";let r="/tmp/shpun-subscription-portal/";function load(p){try{return json(readfile(p));}catch(e){return {};}}print(sprintf("%J",{now:int(clock()[0]),binding:getenv("SHPUN_PORTAL_BINDING"),generation:getenv("SHPUN_PORTAL_GENERATION"),notice:load("/tmp/shpun-subscription-notice/state.json"),previous:load(r+"state.json"),ack:trim(readfile(r+"ack")||""),ack_at:int(trim(readfile(r+"ack-at")||"0")),profile:trim(readfile(r+"profile")||"")}));' | ucode "$ROOT/subscription-portal-state.uc" > "$S/next"
 phase=$(jsonfilter -i "$S/next" -e '@.phase')
 if [ "$phase" = idle ];then
- [ ! -e "$S/blocked" ] || release
+ if [ -e "$S/blocked" ];then
+  if [ "$(jsonfilter -i "$S/next" -e '@.paid_confirmed')" = true ];then
+   cp "$S/generation" "$S/resume-pending.next";mv "$S/resume-pending.next" "$S/resume-pending"
+  else
+   rm -f "$S/resume-pending" "$S/resume-last-attempt"
+  fi
+  release
+ fi
  mv "$S/next" "$S/state.json";exit 0
 fi
 nextgen=$(jsonfilter -i "$S/next" -e '@.generation')
 if [ ! -s "$S/generation" ] || [ "$(cat "$S/generation")" != "$nextgen" ];then
- echo "$nextgen" > "$S/generation";random > "$S/token";rm -f "$S/ack" "$S/ack-at" "$S/profile"
+ echo "$nextgen" > "$S/generation";random > "$S/token";rm -f "$S/ack" "$S/ack-at" "$S/profile" "$S/resume-pending" "$S/resume-last-attempt"
 fi
 # Fence agent/init before touching its routes or process.
 cp "$S/generation" "$S/blocked"

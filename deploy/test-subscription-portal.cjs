@@ -40,6 +40,7 @@ if(process.argv[2]==='prepare'){
 cases.forEach(([name,i,wanted],k)=>{
  const got=process.argv[2]==='verify'?JSON.parse(fs.readFileSync(path.join(process.argv[3],`${k}.result.json`),'utf8')):decide({...base,...i});
  assert.equal(got.phase,wanted,name);
+ assert.equal(got.paid_confirmed===true,["paid-and-authorized","unlimited-renewal","paid-before-six-hours"].includes(name),name+" paid resume gate");
  assert.ok(!JSON.stringify(got).match(/subscription_url|uuid|userinfo/),name);
 });
 const widget=fs.readFileSync(path.join(b,'www/luci-static/resources/view/status/include/01_shpunvpn.js'),'utf8');

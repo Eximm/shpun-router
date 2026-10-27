@@ -23,3 +23,5 @@ node deploy/test-subscription-portal.cjs prepare "$d/portal"
 for f in "$d"/portal/*.json;do ucode package/shpun-router/files/etc/shpun/subscription-portal-state.uc < "$f" > "${f%.json}.result.json";done
 node deploy/test-subscription-portal.cjs verify "$d/portal"
 sh deploy/test-subscription-notice.sh "$root/package/shpun-router/files/etc/shpun"
+
+sh deploy/test-portal-resume.sh

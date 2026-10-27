@@ -13,7 +13,9 @@ fi
 case "${REQUEST_METHOD:-GET}" in
  POST)
   [ "${CONTENT_LENGTH:-}" = 38 ] || reply '400 Bad Request' 'Обновите страницу.'
-  [ -z "${HTTP_ORIGIN:-}" ] || [ "$HTTP_ORIGIN" = "http://$authority" ] || reply '403 Forbidden' 'Неверный источник.'
+  # Captive assistants may serialize an opaque origin as null. LAN, canonical
+  # Host and the unpredictable per-session token remain mandatory for every POST.
+  [ -z "${HTTP_ORIGIN:-}" ] || [ "$HTTP_ORIGIN" = null ] || [ "$HTTP_ORIGIN" = "http://$authority" ] || reply '403 Forbidden' 'Неверный источник.'
   body=$(dd bs=1 count=38 2>/dev/null)
   [ "$body" = "token=$(cat "$S/token")" ] || reply '403 Forbidden' 'Обновите страницу.'
   printf '%s' "$(cat "$S/token")" | /etc/shpun/subscription-portal.sh ack || reply '409 Conflict' 'Состояние изменилось. Обновите страницу.'

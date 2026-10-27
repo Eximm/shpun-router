@@ -48,6 +48,8 @@ jobs:
           export PATH="/tmp/notice-runtime/bin:$PATH"
           export LD_LIBRARY_PATH=/tmp/notice-runtime/lib
           sh deploy/test-notice-runtime.sh
+          sh deploy/test-paid-resume.sh
+          sh deploy/test-portal-cgi.sh
       - name: Cache OpenWrt SDK
         id: cache-sdk
         uses: actions/cache@v4
