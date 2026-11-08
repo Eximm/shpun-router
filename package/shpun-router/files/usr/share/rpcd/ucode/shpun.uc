@@ -1,5 +1,5 @@
-import { open, popen, rename, unlink } from "fs";
-import { link_value, subscription_links, server_identity, server_groups } from "/etc/shpun/server-groups.uc";
+import { open, popen, rename, unlink, stat } from "fs";
+import { link_value, subscription_links, server_identity, server_groups, is_ru_exit } from "/etc/shpun/server-groups.uc";
 
 const DIR       = "/etc/shpun";
 const CODE      = DIR + "/router_code";
@@ -447,7 +447,9 @@ function parse_link_info(link, idx, selected) {
 		security: security,
 		host: host,
 		port: port,
-		name: name
+		name: name,
+		// The transport goes through a Russian relay ("Через РФ", "XHTTP RF").
+		via_ru: !!match(lc(replace(fragment, /%([0-9a-fA-F]{2})/g, (m, h) => chr(int(h, 16)))), /(через[ +]рф|Через[ +]РФ|ЧЕРЕЗ[ +]РФ|[ +]rf([ +]|$))/)
 	};
 }
 
@@ -464,7 +466,8 @@ function public_server_info(info) {
 		security: info.security,
 		name: info.name,
 		host: info.host,
-		port: info.port
+		port: info.port,
+		via_ru: info.via_ru
 	};
 }
 
@@ -493,10 +496,128 @@ function get_current_server() {
 	return parse_link_info(links[selected], selected, true);
 }
 
+function is_safe_ping_host(host) {
+	host = trim(norm(host));
+	return !!(host && length(host) <= 253 && index(host, ".") >= 0 &&
+		match(host, /^[A-Za-z0-9.-]+$/));
+}
+
+function parse_ping_ms(value) {
+	value = trim(norm(value));
+	let m = match(value, /^([0-9]+)(\.[0-9]+)?$/);
+	if (!m) return null;
+	let ms = int(m[1]);
+	if (ms > 10000) return null;
+	return ms < 1 ? 1 : ms;
+}
+
+// One parallel ICMP round (max 8 at once, 1 s timeout) to the server endpoints.
+// This is the server's own response time, not a tunnel check.
+function measure_host_latencies(hosts) {
+	let result = {}, cmd = "", pending = 0, i = 0;
+	for (let host in hosts) {
+		if (!is_safe_ping_host(host)) continue;
+		cmd += "(o=$(ping -n -c 1 -W 1 " + host + " 2>/dev/null); v=${o#*time=}; " +
+			"[ \"$v\" = \"$o\" ] && v=- || v=${v%% *}; printf '%s %s\\n' " + host + " \"$v\") & ";
+		if (++pending >= 8) { cmd += "wait; "; pending = 0; }
+		i++;
+	}
+	if (!i) return result;
+	for (let line in split(trim(readcmd(cmd + "wait")), "\n")) {
+		let parts = split(trim(line), " ");
+		if (length(parts) == 2) result[parts[0]] = parse_ping_ms(parts[1]);
+	}
+	return result;
+}
+
+// Tunnel transfer times recorded by auto-failover.sh ("index seconds|fail epoch").
+const SELECTION_SCORES = "/tmp/shpun-selection-scores";
+const SELECTION_PROGRESS = "/tmp/shpun-selection-progress";
+const SELECTION_MEASURED_AT = "/tmp/shpun-selection-measured-at";
+const SELECTION_SCORE_TTL = 6 * 3600;
+
+function read_selection_scores() {
+	let scores = {}, now = time();
+	// Indexes are only meaningful for the subscription they were measured on.
+	let since = stat(SUB)?.mtime || 0;
+	for (let line in split(readfile(SELECTION_SCORES) || "", "\n")) {
+		let p = split(trim(line), " ");
+		if (length(p) != 3) continue;
+		let at = int(p[2]);
+		if (at <= 0 || at < since || now - at > SELECTION_SCORE_TTL || at - now > 300) continue;
+		scores[p[0]] = p[1] == "fail" ? -1 : int(+p[1] * 1000);
+	}
+	return scores;
+}
+
+// Pick the endpoint that identifies a server: a host used by this server only
+// (shared RU gateways would give every country the same number).
+function group_ping_host(group, links, host_users) {
+
+	for (let idx in group.indexes) {
+		let info = parse_link_info(links[idx], idx, false);
+		if (!info.host) continue;
+		if (host_users[info.host] == 1 && server_group(info) == "direct") return info.host;
+
+	}
+	return null;
+}
+
+function server_rows(links, selected, with_ping) {
+	let groups = server_groups(links), host_users = {}, hosts = [];
+	for (let group in groups) {
+		let seen = {};
+		for (let idx in group.indexes) {
+			let host = parse_link_info(links[idx], idx, false).host;
+			if (host && !seen[host]) { seen[host] = true; host_users[host] = (host_users[host] || 0) + 1; }
+		}
+	}
+	let ping_hosts = map(groups, g => group_ping_host(g, links, host_users));
+	for (let h in ping_hosts) if (h && index(hosts, h) < 0) push(hosts, h);
+	let latencies = with_ping ? measure_host_latencies(hosts) : {};
+	let scores = read_selection_scores();
+
+	let rows = [];
+	for (let i = 0; i < length(groups); i++) {
+		let g = groups[i], tunnel = null, failed = 0, checked = 0;
+		for (let idx in g.indexes) {
+			let s = scores["" + idx];
+			if (s == null) continue;
+			checked++;
+			if (s < 0) failed++;
+			else if (tunnel == null || s < tunnel) tunnel = s;
+		}
+		push(rows, {
+			id: g.key, index: g.indexes[0], name: g.name,
+			selected: index(g.indexes, selected) >= 0,
+			ru_exit: is_ru_exit(g),
+			latency_ms: ping_hosts[i] ? latencies[ping_hosts[i]] : null,
+			tunnel_ms: tunnel,
+			tunnel_failed: checked > 0 && failed == checked
+		});
+	}
+
+	// Recommend the fastest verified non-RU server; without tunnel checks,
+	// the one with the lowest server response time.
+	let best = null, key = null;
+	for (let r in rows) {
+		if (r.ru_exit || r.tunnel_failed) continue;
+		let v = r.tunnel_ms != null ? r.tunnel_ms : (r.latency_ms != null ? 100000 + r.latency_ms : null);
+		if (v != null && (key == null || v < key)) { best = r; key = v; }
+	}
+	if (best) best.recommended = true;
+	return rows;
+}
+
 function server_selection_running() {
 	let status = trim(readfile(SERVER_AUTO_STATUS));
-	return (status == "starting" || status == "running") &&
-		trim(readcmd("test -d /tmp/shpun-auto-failover.lock && echo busy")) == "busy";
+	if (status != "starting" && status != "running")
+		return false;
+	if (trim(readcmd("test -d /tmp/shpun-auto-failover.lock && echo busy")) == "busy")
+		return true;
+	// The selector was just launched and has not taken its lock yet.
+	let at = stat(SERVER_AUTO_STATUS)?.mtime || 0;
+	return status == "starting" && time() - at < 15;
 }
 
 function start_server_selection(args) {
@@ -704,6 +825,22 @@ return {
 					res.auto_admin_disabled = auto_admin ? 1 : 0;
 					res.auto_effective_enabled = (auto_sel == 1 && !auto_admin) ? 1 : 0;
 					res.tunnel_quality_degraded = exists(TUNNEL_QUALITY_DEGRADED) ? 1 : 0;
+
+					// Cheap suggestion from stored VPN measurements only (no ping here:
+					// the widget refreshes this often). Shown when another server is
+					// clearly faster than the current one.
+					try {
+						let rows = server_rows(subscription_links(parse_json_safe(readfile(SUB))),
+							int(trim(readfile(SELECTED_LINK) || "0")), false);
+						let rec = null, cur = null;
+						for (let r in rows) {
+							if (r.recommended) rec = r;
+							if (r.selected) cur = r;
+						}
+						if (rec && !rec.selected && rec.tunnel_ms != null)
+							res.recommendation = { index: rec.index, id: rec.id, name: rec.name, tunnel_ms: rec.tunnel_ms,
+								current_tunnel_ms: cur ? cur.tunnel_ms : null };
+					} catch(e) {}
 
 					return res;
 				} catch(e) {
@@ -955,12 +1092,10 @@ return {
 				try {
 					let links = subscription_links(parse_json_safe(readfile(SUB)));
 					let selected = int(trim(readfile(SELECTED_LINK) || "0"));
-					let servers = [];
-					for (let group in server_groups(links))
-						push(servers, { id: group.key, index: group.indexes[0], name: group.name,
-							selected: index(group.indexes, selected) >= 0 });
+					let servers = server_rows(links, selected, true);
 					let admin_disabled = auto_admin_disabled();
 					return { ok: 1, selected, count: length(servers), servers,
+						measured_at: int(trim(readfile(SELECTION_MEASURED_AT) || "0")) || null,
 						auto_admin_disabled: admin_disabled ? 1 : 0,
 						auto_effective_enabled: read_toggle(SERVER_AUTO_SELECT, 1) == 1 && !admin_disabled ? 1 : 0,
 						auto_running: server_selection_running() };
@@ -1041,13 +1176,24 @@ return {
 			}
 		},
 
+		servers_measure: {
+			call: function() {
+				return start_server_selection("--measure");
+			}
+		},
+
 		server_auto_status: {
 			call: function(req) {
 				try {
 					let status = trim(readfile(SERVER_AUTO_STATUS));
 					let selected = int(trim(readfile(SELECTED_LINK) || "0"));
 					let running = server_selection_running();
-					return { ok: 1, status: status || "idle", running: running, selected: selected };
+					let res = { ok: 1, status: status || "idle", running: running, selected: selected };
+					// "<tested> <total> <action>" written by auto-failover.sh while probing.
+					let p = split(trim(readfile(SELECTION_PROGRESS) || ""), " ");
+					if (running && length(p) == 3)
+						res.progress = { tested: int(p[0]), total: int(p[1]), action: p[2] };
+					return res;
 				} catch(e) {
 					return { ok: 0, error: ("" + e) };
 				}

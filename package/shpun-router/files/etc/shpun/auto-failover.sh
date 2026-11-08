@@ -9,6 +9,17 @@ BUILD_SCRIPT="${BUILD_SCRIPT:-$STATE_DIR/build-config.sh}"
 ENGINE_BIN="${ENGINE_BIN:-/tmp/xray}"
 VPN_READY_FILE="${VPN_READY_FILE:-$STATE_DIR/vpn_ready}"
 LAST_ATTEMPT_FILE="$STATE_DIR/auto_failover_last_attempt"
+# Grouped recovery backs off after every attempt that found nothing better:
+# COOLDOWN, 2x, 4x ... capped at AUTO_FAILOVER_MAX_COOLDOWN. The agent reads
+# NEXT_ATTEMPT_FILE and clears both files once the tunnel probe succeeds.
+FAIL_COUNT_FILE="$STATE_DIR/auto_failover_fail_count"
+NEXT_ATTEMPT_FILE="$STATE_DIR/auto_failover_next_attempt"
+SELECTION_DIR_PREFIX="${SELECTION_DIR_PREFIX:-/tmp/shpun-selection.}"
+PROBE_TCP_TABLE="${PROBE_TCP_TABLE:-/proc/net/tcp}"
+SCORES_FILE="${SELECTION_SCORES_FILE:-/tmp/shpun-selection-scores}"
+PROGRESS_FILE="${SELECTION_PROGRESS_FILE:-/tmp/shpun-selection-progress}"
+MEASURED_AT_FILE="${SELECTION_MEASURED_AT_FILE:-/tmp/shpun-selection-measured-at}"
+MEMINFO_FILE="${MEMINFO_FILE:-/proc/meminfo}"
 LAST_SUCCESS_FILE="$STATE_DIR/auto_failover_last_success"
 FROM_FILE="$STATE_DIR/auto_failover_from"
 AUTO_SELECT_STATUS_FILE="$STATE_DIR/auto_select_status"
@@ -21,6 +32,13 @@ LOGTAG="shpun-failover"
 AUTO_FAILOVER_COOLDOWN_DEFAULT=600
 AUTO_FAILOVER_MAX_CANDIDATES_DEFAULT=16
 AUTO_FAILOVER_READY_TIMEOUT_DEFAULT=30
+AUTO_FAILOVER_MAX_COOLDOWN_DEFAULT=3600
+# A probe Xray needs ~30 MB RSS next to the live one; never start it when the
+# router could be pushed into OOM or a watchdog reset.
+SELECTION_MIN_AVAILABLE_KB_DEFAULT=65536
+SELECTION_PROBE_PORT_DEFAULT=18809
+# Seconds to wait for the probe engine listener; slow MIPS CPUs need several.
+SELECTION_START_TIMEOUT_DEFAULT=8
 HTTP_PROXY_PORT_DEFAULT=10809
 TUNNEL_PROBE_URL_DEFAULT="http://api.ipify.org"
 TUNNEL_PROBE_FALLBACK_URL_DEFAULT="http://cp.cloudflare.com/generate_204"
@@ -256,6 +274,7 @@ cleanup_group_selection() {
 	if [ "$interactive" = 1 ] && [ "$(cat "$AUTO_SELECT_STATUS_FILE" 2>/dev/null)" = running ]; then
 		printf 'failed:%s\n' "$current" > "$AUTO_SELECT_STATUS_FILE"
 	fi
+	rm -f "$PROGRESS_FILE"
 	rm -f "$LOCKDIR/pid"
 	rmdir "$LOCKDIR" 2>/dev/null || true
 }
@@ -280,6 +299,109 @@ selection_curl() {
 	shift
 	curl -q -fsS --noproxy '' --connect-timeout 2 -m "$limit" \
 		-x "http://127.0.0.1:$HTTP_PROXY_PORT" "$@" 2>/dev/null
+}
+
+short_pause() {
+	usleep 200000 2>/dev/null || sleep 1
+}
+
+# Kill probe engines and remove probe directories left by a killed selector.
+# Only called while holding the selection lock, so nothing here is live.
+cleanup_stale_probes() {
+	local cmd pid dir line killed=0
+	for cmd in /proc/[0-9]*/cmdline; do
+		pid="${cmd#/proc/}"
+		pid="${pid%/cmdline}"
+		[ "$pid" != "$$" ] || continue
+		line="$(tr '\000' ' ' < "$cmd" 2>/dev/null)" || continue
+		case "$line" in
+			*"${SELECTION_DIR_PREFIX}"*"/shpun-probe run "*) ;;
+			*) continue ;;
+		esac
+		kill "$pid" 2>/dev/null && { killed=1; log "stopped stale selection probe pid $pid"; }
+	done
+	# Give the killed engine a moment to release the probe port.
+	[ "$killed" = 0 ] || sleep 1
+	for dir in "${SELECTION_DIR_PREFIX}"*; do
+		[ -d "$dir" ] && [ ! -L "$dir" ] || continue
+		rm -f "$dir/index" "$dir/config.json" "$dir/subscription.json" "$dir/shpun-probe" "$dir/sample"
+		rmdir "$dir" 2>/dev/null || true
+	done
+}
+
+# 0 when something listens on 127.0.0.1:PORT (TCP LISTEN state 0A).
+probe_port_listening() {
+	local hex
+	hex="$(printf '%04X' "$1")"
+	grep -qE "^ *[0-9]+: 0100007F:${hex} 00000000:0000 0A " "$PROBE_TCP_TABLE" 2>/dev/null
+}
+
+wait_probe_port() {
+	local stop_at
+	stop_at=$(( $(date +%s) + SELECTION_START_TIMEOUT ))
+	while [ "$(date +%s)" -le "$stop_at" ]; do
+		kill -0 "$probe_pid" 2>/dev/null || return 1
+		probe_port_listening "$HTTP_PROXY_PORT" && return 0
+		[ "$(probe_time_limit 1)" ] || return 1
+		short_pause
+	done
+	return 1
+}
+
+mem_available_kb() {
+	awk '/^MemAvailable:/ {print $2; found=1} END {if (!found) print 0}' "$MEMINFO_FILE" 2>/dev/null
+}
+
+selection_memory_ok() {
+	local avail
+	avail="$(mem_available_kb)"
+	case "$avail" in ''|*[!0-9]*) avail=0 ;; esac
+	[ "$avail" -ge "$SELECTION_MIN_AVAILABLE_KB" ] && return 0
+	log "selection probe skipped: MemAvailable ${avail}kB < ${SELECTION_MIN_AVAILABLE_KB}kB"
+	return 1
+}
+
+# Escalating pause between grouped recovery attempts that changed nothing.
+schedule_next_attempt() {
+	local now="$1" fails delay shift_n
+	fails="$(cat "$FAIL_COUNT_FILE" 2>/dev/null | tr -d '\r\n ' || true)"
+	case "$fails" in ''|*[!0-9]*) fails=0 ;; esac
+	shift_n="$fails"
+	[ "$shift_n" -le 6 ] || shift_n=6
+	delay=$((AUTO_FAILOVER_COOLDOWN << shift_n))
+	[ "$delay" -le "$AUTO_FAILOVER_MAX_COOLDOWN" ] || delay="$AUTO_FAILOVER_MAX_COOLDOWN"
+	printf '%s\n' "$((fails + 1))" > "$FAIL_COUNT_FILE" 2>/dev/null || true
+	printf '%s\n' "$((now + delay))" > "$NEXT_ATTEMPT_FILE" 2>/dev/null || true
+	log "next grouped recovery attempt in ${delay}s (attempt $((fails + 1)))"
+}
+
+# Remember per-connection results for the LuCI server list (RAM only).
+record_score() {
+	local file="$SCORES_FILE" tmp
+	tmp="$(mktemp "${file}.XXXXXX")" || return 0
+	{ grep -v "^$1 " "$file" 2>/dev/null | tail -n 199; printf '%s %s %s\n' "$1" "$2" "$(date +%s)"; } > "$tmp"
+	mv "$tmp" "$file" 2>/dev/null || rm -f "$tmp"
+}
+
+clear_recovery_backoff() {
+	rm -f "$FAIL_COUNT_FILE" "$NEXT_ATTEMPT_FILE" 2>/dev/null || true
+}
+
+recovery_due() {
+	local now="$1" next last
+	next="$(cat "$NEXT_ATTEMPT_FILE" 2>/dev/null | tr -d '\r\n ' || true)"
+	case "$next" in
+		''|*[!0-9]*) ;;
+		*)
+			# A clock jump backwards must not freeze recovery for hours.
+			[ "$((next - now))" -le "$AUTO_FAILOVER_MAX_COOLDOWN" ] || return 0
+			[ "$now" -ge "$next" ]
+			return
+			;;
+	esac
+	last="$(cat "$LAST_ATTEMPT_FILE" 2>/dev/null || true)"
+	case "$last" in ''|*[!0-9]*) last=0 ;; esac
+	[ "$last" -eq 0 ] || [ "$now" -lt "$last" ] || [ "$((now-last))" -ge "$AUTO_FAILOVER_COOLDOWN" ]
 }
 
 candidate_score() {
@@ -320,12 +442,25 @@ probe_candidate() {
 		] };
 		exit(writefile(p, sprintf("%J", c)) ? 0 : 1);
 	' "$probe_dir/config.json" "$HTTP_PROXY_PORT" >/dev/null 2>&1 || return 1
+	selection_memory_ok || return 2
+	if probe_port_listening "$HTTP_PROXY_PORT"; then
+		log "selection probe port $HTTP_PROXY_PORT is busy"
+		return 2
+	fi
 	"$probe_dir/shpun-probe" run -config "$probe_dir/config.json" >/dev/null 2>&1 &
 	probe_pid=$!
-	sleep 1
-	if kill -0 "$probe_pid" 2>/dev/null && score="$(candidate_score)" && kill -0 "$probe_pid" 2>/dev/null; then
+	# Wait for the real listener instead of a fixed delay: slow CPUs need
+	# several seconds to start Xray and would otherwise fail every candidate.
+	if ! wait_probe_port; then
 		stop_selection_probe
-		SCORE="$score"
+		return 1
+	fi
+	# Two transfers: a single sample is too noisy to call a transport stable.
+	local first second
+	if first="$(candidate_score)" && kill -0 "$probe_pid" 2>/dev/null &&
+		second="$(candidate_score)" && kill -0 "$probe_pid" 2>/dev/null; then
+		stop_selection_probe
+		SCORE="$(awk -v a="$first" -v b="$second" 'BEGIN {printf "%.3f", (a+b)/2}')"
 		return 0
 	fi
 	stop_selection_probe
@@ -333,8 +468,8 @@ probe_candidate() {
 }
 
 select_grouped_server() {
-	local only=- skip=- candidates candidate tried=0 best= best_score= score
-	local old_selection old_mode expected_hash limit now last
+	local only=- skip=- first=- exclude_ru=0 candidates candidate tried=0 best= best_score= score
+	local old_selection old_mode expected_hash limit now recovering=0 deadline=75 probe_rc low_memory=0 measuring=0 total
 	old_selection="$(cat "$SELECTED_LINK_FILE" 2>/dev/null || true)"
 	old_mode="$(cat "$SERVER_AUTO_SELECT_FILE" 2>/dev/null || true)"
 	current="$old_selection"
@@ -348,6 +483,16 @@ select_grouped_server() {
 	case "$GROUP_ACTION" in
 		--initial)
 			[ ! -s "$VPN_READY_FILE" ] && [ ! -e "$SELECTED_LINK_FILE" ] && auto_select_still_enabled || return 1
+			exclude_ru=1
+			deadline=40
+			;;
+		--choose-all)
+			exclude_ru=1
+			;;
+		--measure)
+			# Refresh the VPN time of every server for the LuCI list; never switches.
+			measuring=1
+			deadline=150
 			;;
 		--choose-server)
 			only="$1"
@@ -356,56 +501,103 @@ select_grouped_server() {
 			;;
 		--recover-quality|--recover-failed)
 			now="$(date +%s)"
-			last="$(cat "$LAST_ATTEMPT_FILE" 2>/dev/null || true)"
-			case "$last" in ''|*[!0-9]*) last=0 ;; esac
-			[ "$last" -eq 0 ] || [ "$now" -lt "$last" ] || [ "$((now-last))" -ge "$AUTO_FAILOVER_COOLDOWN" ] || return 0
+			recovery_due "$now" || return 0
 			printf '%s\n' "$now" > "$LAST_ATTEMPT_FILE"
-			auto_select_still_enabled || only="$current"
-			skip="$current"
+			recovering=1
+			# Re-check the active connection first in a separate engine: when it
+			# still works there, only the live engine is stuck and a restart helps;
+			# when it fails there too, restarting it would only drop sessions.
+			first="$current"
+			if auto_select_still_enabled; then
+				exclude_ru=1
+			else
+				only="$current"
+			fi
 			;;
 	esac
 
+	cleanup_stale_probes
 	umask 077
-	probe_dir="$(mktemp -d /tmp/shpun-selection.XXXXXX)" || return 1
+	probe_dir="$(mktemp -d "${SELECTION_DIR_PREFIX}XXXXXX")" || return 1
 	cp "$SUB_FILE" "$probe_dir/subscription.json" || return 1
 	if [ -n "$expected_hash" ]; then
 		[ "$(sha256sum "$probe_dir/subscription.json" | awk '{print $1}')" = "$expected_hash" ] || return 1
 	fi
 	ln -s "$ENGINE_BIN" "$probe_dir/shpun-probe" || return 1
-	HTTP_PROXY_PORT=18809
-	INITIAL_DEADLINE=$(( $(date +%s) + 40 ))
-	candidates="$(ucode "$STATE_DIR/server-selection.uc" candidates "$probe_dir/subscription.json" "$only" "$skip" 2>/dev/null)" || candidates=
-	limit="$AUTO_FAILOVER_MAX_CANDIDATES"
-	# A pinned server tests every published transport, subject to the overall deadline.
-	[ "$only" = - ] || limit=9999
+	HTTP_PROXY_PORT="$SELECTION_PROBE_PORT"
+	INITIAL_DEADLINE=$(( $(date +%s) + deadline ))
+	if [ "$measuring" = 1 ]; then
+		# One transport per server: the fastest one seen before, else the first.
+		candidates="$(ucode "$STATE_DIR/server-selection.uc" representatives "$probe_dir/subscription.json" "$SCORES_FILE" 2>/dev/null)" || candidates=
+		limit=9999
+	else
+		candidates="$(ucode "$STATE_DIR/server-selection.uc" candidates "$probe_dir/subscription.json" "$only" "$skip" "$first" "$exclude_ru" 2>/dev/null)" || candidates=
+		limit="$AUTO_FAILOVER_MAX_CANDIDATES"
+		# A pinned server tests every published transport, subject to the overall deadline.
+		[ "$only" = - ] || limit=9999
+	fi
+	total=0
+	for candidate in $candidates; do total=$((total + 1)); done
+	[ "$total" -le "$limit" ] || total="$limit"
 	for candidate in $candidates; do
 		case "$candidate" in ''|*[!0-9]*) continue ;; esac
 		selection_is_current || return 1
 		[ "$tried" -lt "$limit" ] && [ "$(date +%s)" -lt "$INITIAL_DEADLINE" ] || break
+		# Progress for the LuCI dialog: "<tested> <total> <action>".
+		printf '%s %s %s\n' "$tried" "$total" "$GROUP_ACTION" > "$PROGRESS_FILE" 2>/dev/null || true
 		tried=$((tried + 1))
-		if probe_candidate "$candidate"; then
+		probe_candidate "$candidate"
+		probe_rc=$?
+		if [ "$probe_rc" -eq 0 ]; then
 			score="$SCORE"
 			log "grouped candidate index $candidate passed (HTTPS score $score)"
+			record_score "$candidate" "$score"
 			if [ -z "$best" ] || awk -v a="$score" -v b="$best_score" 'BEGIN {exit !(a<b)}'; then
 				best="$candidate"
 				best_score="$score"
 			fi
+		elif [ "$probe_rc" -eq 2 ]; then
+			# Not enough memory or a foreign listener: stop probing, change nothing.
+			low_memory=1
+			tried=$((tried - 1))
+			break
 		else
 			log "grouped candidate index $candidate failed tunnel checks"
+			record_score "$candidate" fail
 		fi
 	done
 
 	selection_is_current || return 1
-	if [ -z "$best" ]; then
-		log "no working server in grouped search ($tried tested)"
-		if [ "$GROUP_ACTION" = --recover-failed ]; then
-			SHPUN_SELECTION_SOURCE="$probe_dir/subscription.json" switch_to "$current" || true
+	if [ "$measuring" = 1 ]; then
+		date +%s > "$MEASURED_AT_FILE" 2>/dev/null || true
+		if [ "$low_memory" = 1 ]; then
+			printf '%s\n' "error:low_memory" > "$AUTO_SELECT_STATUS_FILE"
+			return 1
 		fi
+		printf 'measured:%s\n' "$tried" > "$AUTO_SELECT_STATUS_FILE"
+		log "server measurement refreshed ($tried servers tested)"
+		return 0
+	fi
+	if [ -z "$best" ]; then
+		log "no working server in grouped search ($tried tested); keeping the current connection untouched"
+		[ "$recovering" = 0 ] || schedule_next_attempt "$now"
+		[ "$low_memory" = 0 ] || [ "$interactive" = 0 ] || printf '%s\n' "error:low_memory" > "$AUTO_SELECT_STATUS_FILE"
 		return 1
 	fi
 
 	if [ "$GROUP_ACTION" = --initial ]; then
 		write_selection_value "$SELECTED_LINK_FILE" "$best" || return 1
+	elif [ "$best" = "$current" ] && [ "$recovering" = 1 ]; then
+		if [ "$GROUP_ACTION" = --recover-quality ]; then
+			# The active connection is still the best one: nothing to fix here.
+			log "grouped recovery: current index $current is still the best connection"
+			schedule_next_attempt "$now"
+			return 0
+		fi
+		log "grouped recovery: current index $current works in a fresh engine; restarting the live tunnel"
+		schedule_next_attempt "$now"
+		SHPUN_SELECTION_SOURCE="$probe_dir/subscription.json" switch_to "$current" || return 1
+		return 0
 	elif [ "$best" = "$current" ] && [ -s "$VPN_READY_FILE" ]; then
 		[ "$GROUP_ACTION" != --choose-server ] || write_selection_value "$SERVER_AUTO_SELECT_FILE" 0 || return 1
 	elif [ "$GROUP_ACTION" = --choose-server ]; then
@@ -416,6 +608,7 @@ select_grouped_server() {
 	if [ "$GROUP_ACTION" = --choose-all ]; then
 		write_selection_value "$SERVER_AUTO_SELECT_FILE" 1 || return 1
 	fi
+	clear_recovery_backoff
 	if [ "$interactive" = 1 ]; then
 		rm -f "$LAST_ATTEMPT_FILE"
 		printf 'ok:%s\n' "$best" > "$AUTO_SELECT_STATUS_FILE"
@@ -442,6 +635,11 @@ case "$AUTO_FAILOVER_COOLDOWN" in ''|*[!0-9]*) AUTO_FAILOVER_COOLDOWN="$AUTO_FAI
 case "$AUTO_FAILOVER_MAX_CANDIDATES" in ''|*[!0-9]*) AUTO_FAILOVER_MAX_CANDIDATES="$AUTO_FAILOVER_MAX_CANDIDATES_DEFAULT" ;; esac
 case "$AUTO_FAILOVER_READY_TIMEOUT" in ''|*[!0-9]*) AUTO_FAILOVER_READY_TIMEOUT="$AUTO_FAILOVER_READY_TIMEOUT_DEFAULT" ;; esac
 case "$TUNNEL_QUALITY_PROBE_MIN_BYTES" in ''|*[!0-9]*) TUNNEL_QUALITY_PROBE_MIN_BYTES="$TUNNEL_QUALITY_PROBE_MIN_BYTES_DEFAULT" ;; esac
+case "$AUTO_FAILOVER_MAX_COOLDOWN" in ''|*[!0-9]*) AUTO_FAILOVER_MAX_COOLDOWN="$AUTO_FAILOVER_MAX_COOLDOWN_DEFAULT" ;; esac
+[ "$AUTO_FAILOVER_MAX_COOLDOWN" -ge "$AUTO_FAILOVER_COOLDOWN" ] || AUTO_FAILOVER_MAX_COOLDOWN="$AUTO_FAILOVER_COOLDOWN"
+case "$SELECTION_MIN_AVAILABLE_KB" in ''|*[!0-9]*) SELECTION_MIN_AVAILABLE_KB="$SELECTION_MIN_AVAILABLE_KB_DEFAULT" ;; esac
+case "$SELECTION_PROBE_PORT" in ''|*[!0-9]*) SELECTION_PROBE_PORT="$SELECTION_PROBE_PORT_DEFAULT" ;; esac
+case "$SELECTION_START_TIMEOUT" in ''|*[!0-9]*) SELECTION_START_TIMEOUT="$SELECTION_START_TIMEOUT_DEFAULT" ;; esac
 case "$TUNNEL_QUALITY_CONFIRM_MIN_SUCCESS" in ''|*[!0-9]*) TUNNEL_QUALITY_CONFIRM_MIN_SUCCESS="$TUNNEL_QUALITY_CONFIRM_MIN_SUCCESS_DEFAULT" ;; esac
 [ "$TUNNEL_QUALITY_CONFIRM_MIN_SUCCESS" -gt 0 ] 2>/dev/null || TUNNEL_QUALITY_CONFIRM_MIN_SUCCESS="$TUNNEL_QUALITY_CONFIRM_MIN_SUCCESS_DEFAULT"
 
@@ -452,8 +650,8 @@ case "$SERVER_AUTO_EXCLUDE_RU" in 1|yes|true|on) SERVER_AUTO_EXCLUDE_RU=1 ;; *) 
 INITIAL_DEADLINE=
 GROUP_ACTION="${1:-}"
 interactive=0
-case "$GROUP_ACTION" in --choose-all|--choose-server) interactive=1 ;; esac
-case "$GROUP_ACTION" in --initial|--choose-all|--choose-server|--recover-quality|--recover-failed) shift ;; *) GROUP_ACTION= ;; esac
+case "$GROUP_ACTION" in --choose-all|--choose-server|--measure) interactive=1 ;; esac
+case "$GROUP_ACTION" in --initial|--choose-all|--choose-server|--measure|--recover-quality|--recover-failed) shift ;; *) GROUP_ACTION= ;; esac
 MANUAL_SELECT=0
 if [ -n "${AUTO_FAILOVER_CANDIDATES:-}" ]; then
 	MANUAL_SELECT=1

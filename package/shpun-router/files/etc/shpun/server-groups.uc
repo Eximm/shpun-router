@@ -68,13 +68,22 @@ function server_groups(links) {
 	return groups;
 }
 
-function server_candidates(links, only) {
+// A group exits in Russia when its display name ends with the RU country code
+// or carries the RU flag. Relays "Через РФ" exit abroad and are not affected.
+function is_ru_exit(group) {
+	return !!(match(group.key, /^name:.*[ ]ru$/) || match(group.name, /^🇷🇺/));
+}
+
+function server_candidates(links, only, exclude_ru) {
 	let groups = server_groups(links);
 	if (only != null) {
 		for (let group in groups)
 			if (index(group.indexes, only) >= 0) return group.indexes;
 		return [];
 	}
+	// Global automatic search never lands on a Russian exit; manual choice still can.
+	if (exclude_ru)
+		groups = filter(groups, g => !is_ru_exit(g));
 
 	// Spread early attempts across both locations and transport types.
 	// Many feeds list one transport first for every city; trying that
@@ -107,4 +116,4 @@ function server_candidates(links, only) {
 }
 
 
-export { link_value, subscription_links, server_identity, server_groups, server_candidates };
+export { link_value, subscription_links, server_identity, server_groups, server_candidates, is_ru_exit };

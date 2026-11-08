@@ -51,6 +51,7 @@ jobs:
           sh deploy/test-paid-resume.sh
           ucode deploy/test-server-groups.uc
           sh deploy/test-initial-server-selection.sh
+          sh deploy/test-pinned-subscription-refresh.sh
           sh deploy/test-portal-cgi.sh
       - name: Cache OpenWrt SDK
         id: cache-sdk

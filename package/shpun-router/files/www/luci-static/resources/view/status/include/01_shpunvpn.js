@@ -124,6 +124,9 @@ var callShpunServerSet = rpc.declare({
 var callShpunServerAutoStart = rpc.declare({
 	object: 'shpun', method: 'server_auto_start', params: ['candidates'], expect: { '': {} }
 });
+var callShpunServersMeasure = rpc.declare({
+	object: 'shpun', method: 'servers_measure', expect: { '': {} }
+});
 var callShpunServerAutoStatus = rpc.declare({
 	object: 'shpun', method: 'server_auto_status', expect: { '': {} }
 });
@@ -280,6 +283,14 @@ function injectStyles() {
 		+ '.shpun-server-row .shpun-server-latency--good{color:#86efac!important;background:rgba(22,163,74,.22)!important;border-color:rgba(74,222,128,.42)!important;box-shadow:inset 0 0 0 1px rgba(34,197,94,.05);}'
 		+ '.shpun-server-row .shpun-server-latency--medium{color:#fde047!important;background:rgba(202,138,4,.22)!important;border-color:rgba(250,204,21,.42)!important;box-shadow:inset 0 0 0 1px rgba(250,204,21,.05);}'
 		+ '.shpun-server-row .shpun-server-latency--slow{color:#fca5a5!important;background:rgba(220,38,38,.22)!important;border-color:rgba(248,113,113,.44)!important;box-shadow:inset 0 0 0 1px rgba(248,113,113,.05);}'
+		+ '.shpun-hint-box--suggest{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;border-color:rgba(250,204,21,.28)!important;}'
+		+ '.shpun-hint-box--suggest>span{flex:1 1 260px;}.shpun-hint-box.shpun-hint-box--suggest .shpun-btn{flex:0 0 auto;width:auto;min-width:0;padding:8px 20px;}'
+		+ '.shpun-recommend-btn{width:100%;margin:0 0 8px;}'
+		+ '.shpun-measured-at{font-size:12px;opacity:.75;margin-top:8px;}'
+		+ '.shpun-server-meta{flex-wrap:wrap;}'
+		+ '.shpun-modal-btn{white-space:nowrap;word-break:normal;overflow-wrap:normal;}'
+		+ '.shpun-modal-footer{flex-wrap:wrap;}'
+		+ '@media(max-width:640px){.shpun-server-row{grid-template-columns:1fr;gap:6px;}.shpun-server-meta{justify-content:flex-start;white-space:normal;}.shpun-hint-box.shpun-hint-box--suggest .shpun-btn{width:100%;}.shpun-modal-footer .shpun-modal-btn{flex:1 1 140px;}.shpun-widget-header{flex-direction:column;align-items:stretch;gap:12px;}.shpun-status-group{align-items:flex-start;max-width:none;}.shpun-status-row{justify-content:flex-start;}}'
 		+ '.shpun-server-latency--unknown{color:#94a3b8;background:rgba(148,163,184,.08);border-color:rgba(148,163,184,.16);}'
 		+ '.shpun-server-kind{font-size:11px;font-weight:800;padding:3px 8px;border-radius:999px;border:1px solid rgba(120,140,180,.18);white-space:nowrap;}'
 		+ '.shpun-server-kind--main{color:#bbf7d0;background:rgba(22,163,74,.14);border-color:rgba(34,197,94,.24);}'
@@ -382,7 +393,7 @@ function buildServerBadges(server) {
 	if (!server)
 		return [];
 
-	var location = server.name || 'Сервер';
+	var location = displayServerName(server.name) || 'Сервер';
 	var exitPing = parseInt(server.exit_ping_ms, 10);
 	var badges = [
 		makeBadge('shpun-badge--server', location)
@@ -394,7 +405,44 @@ function buildServerBadges(server) {
 	if (!isNaN(exitPing) && exitPing >= 0)
 		badges.push(makeBadge('shpun-badge--check', 'Пинг ' + exitPing + ' ms', 'Время отклика от роутера до финального IP выхода из VPN-туннеля.'));
 
+	var protocol = getProtocolLabel(server);
+	if (protocol)
+		badges.push(makeBadge('shpun-badge--check', protocol, 'Способ подключения, который роутер выбрал как рабочий для этого сервера.'));
+
 	return badges;
+}
+
+// Flag emoji render as two letters on Windows ("FI Helsinki FI"); the name
+// already ends with the country code, so show it without the flag.
+function displayServerName(name) {
+	return String(name || '').replace(/^(?:\uD83C[\uDDE6-\uDDFF]){2}\s*/, '');
+}
+
+// Human name of the active connection method; the router picks it itself.
+function getProtocolLabel(server) {
+	var proto = String(server.proto || '').toLowerCase();
+	var label = '';
+	if (proto === 'hysteria2' || proto === 'hy2')
+		label = 'Hysteria 2';
+	else if (proto === 'vless' && server.transport === 'xhttp')
+		label = 'XHTTP';
+	else if (proto === 'vless' && server.security === 'reality')
+		label = 'Reality';
+	else if (proto === 'vless')
+		label = 'VLESS';
+	if (label && server.via_ru)
+		label += ' · через РФ';
+	return label;
+}
+
+function formatLatency(ms) {
+	if (ms == null || ms === '') return null;
+	ms = Number(ms);
+	return (ms != null && isFinite(ms) && ms >= 0) ? Math.round(ms) : null;
+}
+
+function latencyClass(ms, good, medium) {
+	return ms == null ? 'unknown' : (ms <= good ? 'good' : (ms <= medium ? 'medium' : 'slow'));
 }
 
 function getRoutingModeLabel(mode) {
@@ -617,53 +665,67 @@ function openCustomRoutesModal() {
 	});
 }
 
+var SERVERS_TITLE = 'Серверы VPN';
+
+function dismiss() { ui.hideModal(); }
+function showMessage(message) {
+	ui.showModal(SERVERS_TITLE, [
+		E('p', {}, message),
+		E('div', { 'class': 'shpun-modal-footer' }, [
+			E('button', { 'type': 'button', 'class': 'shpun-modal-btn', 'click': dismiss }, 'Закрыть')
+		])
+	]);
+}
+
+function withProgress(message, progress) {
+	if (!progress || !(progress.total > 0))
+		return message;
+	var tested = Math.min(progress.tested, progress.total);
+	return message + ' Проверено ' + tested + ' из ' + progress.total + '.';
+}
+
+// Start a selection or measurement and follow it with live progress.
+function choose(request, message) {
+	showMessage(message);
+	request.then(function(result) {
+		result = result || {};
+		if (!result.ok) {
+			showMessage(result.busy ? 'Роутер уже проверяет серверы. Попробуйте чуть позже.' :
+				'Не удалось запустить проверку: ' + (result.error || 'ошибка'));
+			return;
+		}
+		var started = Date.now();
+		function poll() {
+			callShpunServerAutoStatus().then(function(result) {
+				result = result || {};
+				var status = String(result.status || '');
+				if (result.running && Date.now() - started < 180000) {
+					showMessage(withProgress(message, result.progress));
+					window.setTimeout(poll, 1500);
+				} else if (status.indexOf('measured:') === 0) {
+					openServersModal();
+				} else if (status.indexOf('ok:') === 0) {
+					dismiss();
+					ui.addNotification(null, E('p', {}, 'Подключение выбрано.'), 'info');
+					window.setTimeout(function() { window.location.reload(); }, 1200);
+				} else if (status === 'error:low_memory') {
+					showMessage('На роутере сейчас мало свободной памяти, проверку отложили. Попробуйте позже.');
+				} else {
+					showMessage(result.running ? 'Проверка продолжается в фоне.' :
+						'Рабочее подключение не найдено. Текущий выбор сохранён.');
+				}
+			}).catch(function() {
+				if (Date.now() - started < 180000) window.setTimeout(poll, 1500);
+				else showMessage('Не удалось получить результат проверки.');
+			});
+		}
+		window.setTimeout(poll, 1000);
+	}).catch(function(err) {
+		showMessage('Не удалось запустить проверку: ' + String(err));
+	});
+}
+
 function openServersModal() {
-	var title = 'Серверы VPN';
-
-	function dismiss() { ui.hideModal(); }
-	function showMessage(message) {
-		ui.showModal(title, [
-			E('p', {}, message),
-			E('div', { 'class': 'shpun-modal-footer' }, [
-				E('button', { 'type': 'button', 'class': 'shpun-modal-btn', 'click': dismiss }, 'Закрыть')
-			])
-		]);
-	}
-
-	function choose(request, message) {
-		showMessage(message);
-		request.then(function(result) {
-			result = result || {};
-			if (!result.ok) {
-				showMessage(result.busy ? 'Роутер уже проверяет серверы. Попробуйте чуть позже.' :
-					'Не удалось запустить проверку: ' + (result.error || 'ошибка'));
-				return;
-			}
-			var started = Date.now();
-			function poll() {
-				callShpunServerAutoStatus().then(function(result) {
-					result = result || {};
-					if (result.running && Date.now() - started < 90000) {
-						window.setTimeout(poll, 1500);
-					} else if (String(result.status || '').indexOf('ok:') === 0) {
-						dismiss();
-						ui.addNotification(null, E('p', {}, 'Подключение выбрано.'), 'info');
-						window.setTimeout(function() { window.location.reload(); }, 1200);
-					} else {
-						showMessage(result.running ? 'Проверка продолжается в фоне.' :
-							'Рабочее подключение не найдено. Текущий выбор сохранён.');
-					}
-				}).catch(function() {
-					if (Date.now() - started < 90000) window.setTimeout(poll, 1500);
-					else showMessage('Не удалось получить результат проверки.');
-				});
-			}
-			window.setTimeout(poll, 1000);
-		}).catch(function(err) {
-			showMessage('Не удалось запустить проверку: ' + String(err));
-		});
-	}
-
 	showMessage('Загружаем список серверов…');
 	callShpunServersGet().then(function(res) {
 		res = res || {};
@@ -690,27 +752,84 @@ function openServersModal() {
 			auto ? E('span', { 'class': 'shpun-server-kind shpun-server-kind--main' }, 'Включён') : ''
 		]);
 
-		var rows = res.servers.map(function(server) {
+		// Recommended first, then verified by VPN time, then by ping;
+		// unreachable after them and Russian exits last.
+		var servers = res.servers.slice().sort(function(a, b) {
+			if (!!a.recommended !== !!b.recommended) return a.recommended ? -1 : 1;
+			if (!!a.ru_exit !== !!b.ru_exit) return a.ru_exit ? 1 : -1;
+			if (!!a.tunnel_failed !== !!b.tunnel_failed) return a.tunnel_failed ? 1 : -1;
+			var at = formatLatency(a.tunnel_ms), bt = formatLatency(b.tunnel_ms);
+			if ((at == null) !== (bt == null)) return at == null ? 1 : -1;
+			if (at != null && at !== bt) return at - bt;
+			var av = formatLatency(a.latency_ms), bv = formatLatency(b.latency_ms);
+			if (av == null && bv == null) return a.index - b.index;
+			if (av == null) return 1;
+			if (bv == null) return -1;
+			return av - bv || a.index - b.index;
+		});
+
+		var rows = servers.map(function(server) {
+			var ping = formatLatency(server.latency_ms);
+			var tunnel = formatLatency(server.tunnel_ms);
+			var meta = [];
+			if (server.recommended)
+				meta.push(E('span', { 'class': 'shpun-server-kind shpun-server-kind--reserve', 'title': 'Самый быстрый проверенный сервер вне РФ' }, 'Рекомендуем'));
+			if (server.selected)
+				meta.push(E('span', { 'class': 'shpun-server-kind shpun-server-kind--main' }, 'Текущий'));
+			if (server.tunnel_failed)
+				meta.push(E('span', { 'class': 'shpun-server-latency shpun-server-latency--slow', 'title': 'При последней проверке подключиться через этот сервер не удалось' }, 'Недоступен'));
+			else if (tunnel != null)
+				meta.push(E('span', { 'class': 'shpun-server-latency shpun-server-latency--' + latencyClass(tunnel, 700, 1500), 'title': 'Время загрузки тестового файла через VPN при последней проверке' }, 'VPN ' + tunnel + ' мс'));
+			meta.push(E('span', {
+				'class': 'shpun-server-latency shpun-server-latency--' + latencyClass(ping, 80, 160),
+				'title': ping != null ? 'Время отклика сервера (ping) от роутера' : 'Сервер не ответил на ping. Это не значит, что VPN через него не работает.'
+			}, ping != null ? 'пинг ' + ping + ' мс' : 'пинг —'));
+
 			return E('button', {
 				'type': 'button',
 				'class': 'shpun-server-row' + (server.selected && !auto ? ' is-selected' : ''),
 				'disabled': res.auto_running ? true : null,
 				'click': function(ev) {
 					ev.preventDefault();
-					choose(callShpunServerSet(server.index, server.id), 'Проверяем подключения к ' + server.name + '…');
+					choose(callShpunServerSet(server.index, server.id), 'Проверяем подключения к ' + displayServerName(server.name) + '…');
 				}
 			}, [
-				E('span', { 'class': 'shpun-server-location' }, server.name),
-				server.selected ? E('span', { 'class': 'shpun-server-kind shpun-server-kind--main' }, 'Текущий') : ''
+				E('span', { 'class': 'shpun-server-location' }, displayServerName(server.name)),
+				E('span', { 'class': 'shpun-server-meta' }, meta)
 			]);
 		});
-		ui.showModal(title, [
+		var recommended = servers.filter(function(s) { return s.recommended && !s.selected; })[0];
+		var recommendButton = recommended ? E('button', {
+			'type': 'button',
+			'class': 'shpun-modal-btn shpun-modal-btn--primary shpun-recommend-btn',
+			'disabled': res.auto_running ? true : null,
+			'click': function(ev) {
+				ev.preventDefault();
+				choose(callShpunServerSet(recommended.index, recommended.id), 'Подключаем ' + displayServerName(recommended.name) + '…');
+			}
+		}, 'Подключить ' + displayServerName(recommended.name)) : '';
+		var measuredAt = Number(res.measured_at) > 0
+			? 'Замеры через VPN: ' + new Date(res.measured_at * 1000).toLocaleString([], { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+			: 'Замеров через VPN ещё не было — нажмите «Обновить замеры».';
+
+		ui.showModal(SERVERS_TITLE, [
 			E('div', { 'class': 'shpun-modal-wrap' }, [
 				E('div', { 'class': 'shpun-modal-desc' }, res.auto_running ? 'Роутер проверяет подключения…' :
-					'Автовыбор подбирает сервер сам. Чтобы закрепить сервер, выберите его из списка.'),
+					'Автовыбор сам подбирает лучший сервер и способ подключения. Чтобы закрепить страну, выберите её из списка. «VPN» — время ответа через туннель, «пинг» — отклик самого сервера.'),
+				recommendButton,
 				autoButton,
 				E('div', { 'class': 'shpun-server-list' }, rows),
+				E('div', { 'class': 'shpun-modal-desc shpun-measured-at' }, measuredAt),
 				E('div', { 'class': 'shpun-modal-footer' }, [
+					E('button', {
+						'type': 'button',
+						'class': 'shpun-modal-btn',
+						'disabled': res.auto_running ? true : null,
+						'click': function(ev) {
+							ev.preventDefault();
+							choose(callShpunServersMeasure(), 'Измеряем скорость серверов через VPN…');
+						}
+					}, 'Обновить замеры'),
 					E('button', { 'type': 'button', 'class': 'shpun-modal-btn', 'click': dismiss }, 'Закрыть')
 				])
 			])
@@ -726,6 +845,9 @@ function openServersModal() {
  * ========================================================== */
 
 return view.extend({
+	// A fixed title: LuCI otherwise derives one from the versioned file name,
+	// shows "[AnonymousNNClass]" and forgets the user's Hide choice on updates.
+	title: 'Shpun VPN',
 
 	load: function() {
 		injectStyles();
@@ -785,6 +907,26 @@ return view.extend({
 			: !vpnReady ? (err ? 'Ошибка: ' + err : 'Привязка найдена. Роутер поднимает VPN…')
 			: 'Роутер подключен. Серверы, маршруты и обновления доступны прямо в этом виджете.';
 
+		// Suggest a clearly faster server (stored VPN measurements, at least 30%
+		// and 150 ms better) with a one-click switch.
+		var rec = state.recommendation;
+		var recMs = rec ? formatLatency(rec.tunnel_ms) : null;
+		var curMs = rec ? formatLatency(rec.current_tunnel_ms) : null;
+		var fasterHint = (vpnReady && !subscriptionExpired && recMs != null && curMs != null &&
+			recMs <= curMs * 0.7 && curMs - recMs >= 150)
+			? E('div', { 'class': 'shpun-hint-box shpun-hint-box--suggest' }, [
+				E('span', {}, 'Есть сервер быстрее: ' + displayServerName(rec.name) + ' — VPN ' + recMs + ' мс против ' + curMs + ' мс у текущего.'),
+				E('button', {
+					'type': 'button',
+					'class': 'shpun-btn shpun-btn--primary',
+					'click': function(ev) {
+						ev.preventDefault();
+						choose(callShpunServerSet(rec.index, rec.id), 'Подключаем ' + displayServerName(rec.name) + '…');
+					}
+				}, 'Подключить ' + displayServerName(rec.name))
+			])
+			: '';
+
 		var statusTopBadges = [ buildStatusBadge(state) ];
 		var statusMetricBadges = [];
 		var serverBadges = buildServerBadges(state.current_server);
@@ -802,7 +944,7 @@ return view.extend({
 			statusMetricBadges.push(makeBadge(
 				'shpun-badge--warn',
 				'Качество туннеля снижено',
-				'Базовая связь через VPN работает, но качество ухудшилось. Смена сервера не производится; роутер восстанавливает правила без перезапуска.'
+				'Базовая связь через VPN работает, но качество ухудшилось. Роутер проверит другие подключения и переключится, если найдёт лучшее.'
 			));
 		var statusRows = [
 			E('div', { 'class': 'shpun-status-row shpun-status-row--top' }, statusTopBadges)
@@ -834,7 +976,9 @@ return view.extend({
   else ui.addNotification(null, E('p', {}, 'Не удалось включить прямой доступ. Повторите попытку.'), 'error');
  }).catch(function() { ui.addNotification(null, E('p', {}, 'Роутер временно недоступен.'), 'error'); });
  } }, 'Продлить в ShpunApp')
-				]) : null,
+				]) : '',
+
+				fasterHint,
 
 				E('div', { 'class': 'shpun-card-main' }, [
 					E('div', { 'class': 'shpun-col-main' }, [

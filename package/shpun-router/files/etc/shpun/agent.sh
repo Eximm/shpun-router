@@ -1649,7 +1649,7 @@ ensure_selected_link_valid() {
 install_updated_subscription_candidate() {
 	local candidate="$1"
 	local label="$2"
-	local backup selected_before selected_after
+	local backup selected_before selected_after auto_before auto_released=0
 
 	[ -s "$candidate" ] || return 1
 	[ -s "$SUB_FILE" ] || return 1
@@ -1672,14 +1672,23 @@ install_updated_subscription_candidate() {
 	fi
 
 	# A pinned server is a group, not a transient subscription index.
-	if [ "$(auto_select_current)" = 0 ] && [ -f "$STATE_DIR/server-selection.uc" ]; then
-		selected_after="$(ucode "$STATE_DIR/server-selection.uc" remap \
-			"$SUB_FILE" "$selected_before" "$candidate" "$selected_after" 2>/dev/null)" || {
-			log "$label: pinned server missing in refreshed subscription, keeping current selection"
-			rm -f "$candidate"
-			config_lock_release
-			return 1
-		}
+	# Never let a renamed or removed pinned server block subscription updates:
+	# the refreshed feed carries expiry and server changes the router must see.
+	auto_before="$(auto_select_current)"
+	if [ "$auto_before" = 0 ] && [ -f "$STATE_DIR/server-selection.uc" ]; then
+		local remapped
+		if remapped="$(ucode "$STATE_DIR/server-selection.uc" remap \
+			"$SUB_FILE" "$selected_before" "$candidate" "$selected_after" 2>/dev/null)"; then
+			selected_after="$remapped"
+		else
+			log "$label: pinned server missing in refreshed subscription; accepting it and returning to automatic selection"
+			if ! sub_atomic_write "$SERVER_AUTO_SELECT_FILE" 1; then
+				rm -f "$candidate"
+				config_lock_release
+				return 1
+			fi
+			auto_released=1
+		fi
 	fi
 
 	rm -f "$backup"
@@ -1723,6 +1732,7 @@ install_updated_subscription_candidate() {
 
 	mv "$backup" "$SUB_FILE"
 	printf '%s\n' "$selected_before" > "$STATE_DIR/selected_link_index"
+	[ "$auto_released" = 0 ] || sub_atomic_write "$SERVER_AUTO_SELECT_FILE" "$auto_before" || true
 	log "$label: candidate rejected, active subscription restored"
 	config_lock_release
 	return 1
@@ -2571,10 +2581,41 @@ recover_current_server() {
 	return 1
 }
 
+# Refresh per-server VPN times for the LuCI list while the tunnel is healthy.
+# The selector itself skips the run when memory is low or a selection is active.
+maybe_measure_servers() {
+	local now last interval file="/tmp/shpun-selection-measured-at"
+	[ "$AUTO_FAILOVER_ENABLE" -eq 1 ] && [ -x "$AUTO_FAILOVER_SCRIPT" ] || return 0
+	[ ! -d "${AUTO_FAILOVER_LOCKDIR:-/tmp/shpun-auto-failover.lock}" ] || return 0
+	[ ! -s /tmp/shpun-subscription-portal/blocked ] || return 0
+	interval="${SERVER_MEASURE_INTERVAL:-14400}"
+	case "$interval" in ''|*[!0-9]*) interval=14400 ;; esac
+	[ "$interval" -gt 0 ] || return 0
+	now="$(date +%s)"
+	last="$(cat "$file" 2>/dev/null | tr -d '\r\n ' || true)"
+	case "$last" in
+		''|*[!0-9]*)
+			# First run after boot or agent start: give the router 15 minutes.
+			printf '%s\n' "$((now - interval + 900))" > "$file" 2>/dev/null || true
+			return 0
+			;;
+	esac
+	[ "$now" -lt "$last" ] || [ "$((now - last))" -ge "$interval" ] || return 0
+	printf '%s\n' "$now" > "$file" 2>/dev/null || true
+	log "refreshing server VPN times in background"
+	"$AUTO_FAILOVER_SCRIPT" --measure >/dev/null 2>&1 &
+}
+
 grouped_recovery_due() {
-	local last cooldown now
+	local last cooldown now next
 	[ "$AUTO_FAILOVER_ENABLE" -eq 1 ] && [ -x "$AUTO_FAILOVER_SCRIPT" ] || return 1
 	[ ! -d "${AUTO_FAILOVER_LOCKDIR:-/tmp/shpun-auto-failover.lock}" ] || return 1
+	# auto-failover.sh owns the escalating schedule; it re-checks it as well.
+	next="$(cat "$STATE_DIR/auto_failover_next_attempt" 2>/dev/null | tr -d '\r\n ' || true)"
+	case "$next" in
+		''|*[!0-9]*) ;;
+		*) now="$(date +%s)"; [ "$now" -ge "$next" ] || [ "$((next - now))" -gt 3600 ]; return ;;
+	esac
 	last="$(cat "$STATE_DIR/auto_failover_last_attempt" 2>/dev/null || true)"
 	cooldown="$AUTO_FAILOVER_COOLDOWN"
 	case "$last" in ''|*[!0-9]*) return 0 ;; esac
@@ -3514,7 +3555,9 @@ main_loop() {
 						TUNNEL_QUALITY_FAIL_SECONDS=0
 						TUNNEL_BASIC_WARNED=0
 						TUNNEL_QUALITY_WARNED=0
-						rm -f "$TUNNEL_QUALITY_DEGRADED_FILE" "$AUTO_RECOVERY_LAST_ATTEMPT_FILE" "$AUTO_RECOVERY_FAIL_COUNT_FILE"
+						rm -f "$TUNNEL_QUALITY_DEGRADED_FILE" "$AUTO_RECOVERY_LAST_ATTEMPT_FILE" "$AUTO_RECOVERY_FAIL_COUNT_FILE" \
+							"$STATE_DIR/auto_failover_fail_count" "$STATE_DIR/auto_failover_next_attempt"
+						maybe_measure_servers
 					else
 						probe_rc="$?"
 						if [ "$probe_rc" -eq 2 ]; then

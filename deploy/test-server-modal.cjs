@@ -21,8 +21,10 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
 async function run(adminDisabled, autoRunning) {
   let modal = [], calls = [];
   const servers = [
-    {id:'name:helsinki fi', index:1, name:'Helsinki FI', selected:true},
-    {id:'name:helsinki-2 fi', index:6, name:'Helsinki-2 FI', selected:false}
+    {id:'name:moscow ru', index:21, name:'Moscow RU', selected:false, ru_exit:true, latency_ms:9},
+    {id:'name:helsinki fi', index:1, name:'Helsinki FI', selected:true, latency_ms:21, tunnel_ms:450},
+    {id:'name:riga lv', index:2, name:'Riga LV', selected:false, latency_ms:null, tunnel_failed:true},
+    {id:'name:helsinki-2 fi', index:6, name:'🇫🇮 Helsinki-2 FI', selected:false, latency_ms:18, tunnel_ms:380, recommended:true}
   ];
   const rpc = {declare: spec => (...args) => {
     calls.push([spec.method, ...args]);
@@ -40,15 +42,32 @@ async function run(adminDisabled, autoRunning) {
   const auto = buttons().find(node => text(node).startsWith('Автовыбор'));
   assert.equal(!!auto.attrs.disabled, !!(adminDisabled || autoRunning));
   const list = flatten(modal).find(node => node instanceof Element && node.attrs.class === 'shpun-server-list');
-  assert.deepEqual(list.children.map(text), ['Helsinki FI Текущий', 'Helsinki-2 FI ']);
+  // Fastest first, unreachable after, Russian exits last; no protocol names.
+  assert.deepEqual(list.children.map(text), [
+    'Helsinki-2 FI Рекомендуем VPN 380 мс пинг 18 мс',
+    'Helsinki FI Текущий VPN 450 мс пинг 21 мс',
+    'Riga LV Недоступен пинг —',
+    'Moscow RU пинг 9 мс'
+  ]);
   assert.doesNotMatch(flatten(modal).filter(value=>typeof value==='string').join(' '), /Hysteria|XHTTP|Reality|Через РФ/i);
-  list.children[1].click(); await settle();
+  list.children[0].click(); await settle();
   assert.deepEqual(calls.find(call => call[0] === 'server_set'), autoRunning ? undefined : ['server_set', 6, 'name:helsinki-2 fi']);
+  // One-click switch to the recommended server and an explicit refresh of VPN times.
+  open(); await settle();
+  const recommend = buttons().find(node => text(node).startsWith('Подключить Helsinki-2 FI'));
+  assert.equal(text(recommend), 'Подключить Helsinki-2 FI');
+  assert.match(flatten(modal).filter(v=>typeof v==='string').join(' '), /Замеров через VPN ещё не было/);
+  calls = [];
+  recommend.click(); await settle();
+  assert.deepEqual(calls.find(call => call[0] === 'server_set'), autoRunning ? undefined : ['server_set', 6, 'name:helsinki-2 fi']);
+  open(); await settle();
+  buttons().find(node => text(node) === 'Обновить замеры').click(); await settle();
+  assert.deepEqual(calls.find(call => call[0] === 'servers_measure'), autoRunning ? undefined : ['servers_measure']);
   open(); await settle();
   buttons().find(node => text(node).startsWith('Автовыбор')).click(); await settle();
   assert.deepEqual(calls.find(call => call[0] === 'server_auto_start'), adminDisabled || autoRunning ? undefined : ['server_auto_start', []]);
 }
 (async () => {
   await run(0,false); await run(1,false); await run(0,true);
-  console.log('PASS flat server list, global auto and stable manual group');
+  console.log('PASS flat server list, global auto, stable manual group, recommend and measure buttons');
 })().catch(err => { console.error(err); process.exitCode=1; });

@@ -26,7 +26,8 @@
           "server_set",
           "server_auto_set",
           "server_auto_exclude_ru_set",
-          "server_auto_start"
+          "server_auto_start",
+          "servers_measure"
         ]
       }
     }
