@@ -41,7 +41,7 @@ mkdir -p /etc/shpun/routes 2>/dev/null || true
 # Both files are created only if missing. AUTO_FAILOVER_ENABLE remains a
 # separate administrative override; the agreed user-toggle default is enabled.
 [ -f /etc/shpun/server_auto_select ]    || echo "1" > /etc/shpun/server_auto_select 2>/dev/null || true
-[ -f /etc/shpun/server_auto_exclude_ru ] || echo "1" > /etc/shpun/server_auto_exclude_ru 2>/dev/null || true
+[ -f /etc/shpun/server_auto_exclude_ru ] || echo "0" > /etc/shpun/server_auto_exclude_ru 2>/dev/null || true
 
 # ==========================
 # 4. Отключить стандартное уведомление attended sysupgrade при входе

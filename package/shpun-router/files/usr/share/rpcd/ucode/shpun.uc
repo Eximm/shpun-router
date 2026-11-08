@@ -1,4 +1,5 @@
 import { open, popen, rename, unlink } from "fs";
+import { link_value, subscription_links, server_identity, server_groups } from "/etc/shpun/server-groups.uc";
 
 const DIR       = "/etc/shpun";
 const CODE      = DIR + "/router_code";
@@ -367,25 +368,6 @@ function cleanup_server_name(name, proto) {
 	return name || "Server";
 }
 
-function link_value(link) {
-	if (type(link) == "string")
-		return trim(norm(link));
-
-	if (type(link) == "object") {
-		let keys = ["url", "link", "uri", "vless", "hysteria2", "hy2"];
-		for (let i = 0; i < length(keys); i++) {
-			let value = link[keys[i]];
-			if (type(value) == "string") {
-				value = trim(norm(value));
-				if (match(value, /^(vless|hysteria2|hy2):\/\//))
-					return value;
-			}
-		}
-	}
-
-	return "";
-}
-
 function parse_link_info(link, idx, selected) {
 	link = link_value(link);
 
@@ -455,7 +437,7 @@ function parse_link_info(link, idx, selected) {
 	if (!port && (proto == "hy2" || proto == "hysteria2"))
 		port = "443";
 
-	let name = cleanup_server_name(fragment || host || ("server " + idx), proto);
+	let name = server_identity(link, idx)?.name || cleanup_server_name(fragment || host || ("server " + idx), proto);
 
 	return {
 		index: idx,
@@ -511,93 +493,29 @@ function get_current_server() {
 	return parse_link_info(links[selected], selected, true);
 }
 
-function is_safe_ping_host(host) {
-	host = trim(norm(host));
-	if (!host || length(host) > 253)
-		return false;
-
-	let allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-";
-	for (let i = 0; i < length(host); i++) {
-		if (index(allowed, substr(host, i, 1)) < 0)
-			return false;
-	}
-
-	return index(host, ".") >= 0;
+function server_selection_running() {
+	let status = trim(readfile(SERVER_AUTO_STATUS));
+	return (status == "starting" || status == "running") &&
+		trim(readcmd("test -d /tmp/shpun-auto-failover.lock && echo busy")) == "busy";
 }
 
-function parse_ping_ms(value) {
-	value = trim(norm(value));
-	if (!value || value == "-")
-		return null;
-
-	let dot = index(value, ".");
-	if (dot >= 0)
-		value = substr(value, 0, dot);
-
-	if (!value)
-		return null;
-
-	for (let i = 0; i < length(value); i++) {
-		let ch = substr(value, i, 1);
-		if (ch < "0" || ch > "9")
-			return null;
+function start_server_selection(args) {
+	if (!exists(SERVER_AUTO) || !exists(SUB))
+		return { ok: 0, error: "subscription or server selector unavailable" };
+	if (server_selection_running() ||
+		trim(readcmd("test -d /tmp/shpun-auto-failover.lock && echo busy")) == "busy")
+		return { ok: 0, error: "automatic selection is running", busy: true };
+	let f = open(SERVER_AUTO_STATUS, "w");
+	if (!f) return { ok: 0, error: "cannot start selection" };
+	f.write("starting\n");
+	f.close();
+	let p = popen(SERVER_AUTO + " " + args + " >/dev/null 2>&1 &");
+	if (!p) {
+		unlink(SERVER_AUTO_STATUS);
+		return { ok: 0, error: "cannot start selection" };
 	}
-
-	let ms = int(value);
-	if (ms < 0 || ms > 10000)
-		return null;
-
-	return ms < 1 ? 1 : ms;
-}
-
-function measure_server_latencies(servers) {
-	let latencies = [];
-	let cmd = "";
-	let pending = 0;
-
-	for (let i = 0; i < length(servers); i++) {
-		push(latencies, null);
-
-		let host = trim(norm(servers[i].host));
-		if (!is_safe_ping_host(host))
-			continue;
-
-		cmd +=
-			"(output=$(ping -n -c 1 -W 1 " + host + " 2>/dev/null); " +
-			"value=${output#*time=}; " +
-			"if [ \"$value\" = \"$output\" ]; then value=; else value=${value%% *}; fi; " +
-			"if [ -n \"$value\" ]; then printf '" + i + " %s\\n' \"$value\"; " +
-			"else printf '" + i + " -\\n'; fi) & ";
-
-		pending++;
-		if (pending >= 8) {
-			cmd += "wait; ";
-			pending = 0;
-		}
-	}
-
-	if (!cmd)
-		return latencies;
-
-	let out = trim(readcmd(cmd + "wait"));
-	if (!out)
-		return latencies;
-
-	let lines = split(out, "\n");
-	for (let i = 0; i < length(lines); i++) {
-		let line = trim(lines[i]);
-		let sep = index(line, " ");
-		if (sep < 1)
-			continue;
-
-		let idx = int(substr(line, 0, sep));
-		if (idx < 0 || idx >= length(latencies))
-			continue;
-
-		latencies[idx] = parse_ping_ms(substr(line, sep + 1));
-	}
-
-	return latencies;
+	p.close();
+	return { ok: 1, started: true };
 }
 
 function is_valid_ipv4(ip) {
@@ -782,7 +700,7 @@ return {
 					let auto_admin = auto_admin_disabled();
 					let auto_sel = read_toggle(SERVER_AUTO_SELECT, 1);
 					res.server_auto_select = auto_sel;
-					res.server_auto_exclude_ru = read_toggle(SERVER_AUTO_EXCLUDE_RU, 1);
+					res.server_auto_exclude_ru = read_toggle(SERVER_AUTO_EXCLUDE_RU, 0);
 					res.auto_admin_disabled = auto_admin ? 1 : 0;
 					res.auto_effective_enabled = (auto_sel == 1 && !auto_admin) ? 1 : 0;
 					res.tunnel_quality_degraded = exists(TUNNEL_QUALITY_DEGRADED) ? 1 : 0;
@@ -1033,118 +951,39 @@ return {
 		},
 
 		servers_get: {
-			call: function(req) {
+			call: function() {
 				try {
-					if (!exists(SUB))
-						return { ok: 1, selected: 0, servers: [] };
-
-					let raw = readfile(SUB);
-					let data = parse_json_safe(raw);
-					if (!data)
-						return { ok: 0, error: "invalid subscription json" };
-
-					let links = [];
-					if (data.subscription && type(data.subscription.links) == "array")
-						links = data.subscription.links;
-					else if (type(data.links) == "array")
-						links = data.links;
-
+					let links = subscription_links(parse_json_safe(readfile(SUB)));
 					let selected = int(trim(readfile(SELECTED_LINK) || "0"));
-					if (selected < 0 || selected >= length(links))
-						selected = 0;
-
-					let parsed_servers = [];
-					for (let i = 0; i < length(links); i++) {
-						push(parsed_servers, parse_link_info(links[i], i, i == selected));
-					}
-
-					let latencies = measure_server_latencies(parsed_servers);
 					let servers = [];
-					for (let i = 0; i < length(parsed_servers); i++) {
-						let server = public_server_info(parsed_servers[i]);
-						server.latency_ms = latencies[i];
-						server.group = server_group(parsed_servers[i]);
-						push(servers, server);
-					}
-
-					let auto_admin = auto_admin_disabled();
-					let auto_sel = read_toggle(SERVER_AUTO_SELECT, 1);
-					let status_txt = trim(readfile(SERVER_AUTO_STATUS));
-					let auto_running = (status_txt == "starting" || status_txt == "running");
-
-					return {
-						ok: 1,
-						selected: selected,
-						count: length(servers),
-						servers: servers,
-						auto_select: auto_sel,
-						auto_exclude_ru: read_toggle(SERVER_AUTO_EXCLUDE_RU, 1),
-						auto_admin_disabled: auto_admin ? 1 : 0,
-						auto_effective_enabled: (auto_sel == 1 && !auto_admin) ? 1 : 0,
-						auto_running: auto_running
-					};
-				} catch(e) {
-					return { ok: 0, error: ("" + e) };
-				}
+					for (let group in server_groups(links))
+						push(servers, { id: group.key, index: group.indexes[0], name: group.name,
+							selected: index(group.indexes, selected) >= 0 });
+					let admin_disabled = auto_admin_disabled();
+					return { ok: 1, selected, count: length(servers), servers,
+						auto_admin_disabled: admin_disabled ? 1 : 0,
+						auto_effective_enabled: read_toggle(SERVER_AUTO_SELECT, 1) == 1 && !admin_disabled ? 1 : 0,
+						auto_running: server_selection_running() };
+				} catch(e) { return { ok: 0, error: "" + e }; }
 			}
 		},
 
 		server_set: {
-			args: { index: 0 },
+			args: { index: 0, group: "" },
 			call: function(req) {
 				try {
-					if (trim(readcmd("test -d /tmp/shpun-auto-failover.lock && echo busy")) == "busy")
-						return { ok: 0, error: "automatic selection is running", busy: true };
-
-					let idx = 0;
-					if (req && req.args && req.args.index != null)
-						idx = int(req.args.index);
-
-					if (idx < 0)
-						return { ok: 0, error: "invalid index", index: idx };
-
-					if (!exists(SUB))
-						return { ok: 0, error: "subscription.json not found" };
-
-					let raw = readfile(SUB);
-					let data = parse_json_safe(raw);
-					if (!data)
-						return { ok: 0, error: "invalid subscription json" };
-
-					let links = [];
-					if (data.subscription && type(data.subscription.links) == "array")
-						links = data.subscription.links;
-					else if (type(data.links) == "array")
-						links = data.links;
-
-					if (idx >= length(links))
-						return { ok: 0, error: "index out of range", index: idx, count: length(links) };
-
-					let current = int(trim(readfile(SELECTED_LINK) || "0"));
-					if (current < 0 || current >= length(links))
-						current = 0;
-
-					if (idx == current) {
-						if (!write_toggle_atomic(SERVER_AUTO_SELECT, 0))
-							return { ok: 0, error: "cannot disable automatic server selection" };
-						return { ok: 1, selected: idx, unchanged: true, auto_select: 0 };
-					}
-
-					if (!exists(SERVER_SETTER))
-						return { ok: 0, error: "switch-server.sh not found" };
-
-					let p = popen(SERVER_SETTER + " " + idx + " 2>/dev/null");
-					let out = "";
-					if (p) { out = p.read("all") || ""; p.close(); }
-
-					out = trim(out);
-					if (out != "ok")
-						return { ok: 0, error: out || "server profile validation failed", output: out };
-
-					return { ok: 1, selected: idx };
-				} catch(e) {
-					return { ok: 0, error: ("" + e) };
-				}
+					let idx = req?.args?.index;
+					if (type(idx) != "int" || idx < 0 || idx > 9999)
+						return { ok: 0, error: "invalid server" };
+					let fingerprint = trim(readcmd("sha256sum " + SUB + " 2>/dev/null | cut -d' ' -f1"));
+					let links = subscription_links(parse_json_safe(readfile(SUB)));
+					let id = server_identity(links[idx], idx);
+					if (!id || id.alias || (req.args.group && req.args.group != id.key))
+						return { ok: 0, error: "server list changed; reopen it" };
+					if (!match(fingerprint, /^[0-9a-f]{64}$/))
+						return { ok: 0, error: "subscription unavailable" };
+					return start_server_selection("--choose-server " + idx + " " + fingerprint);
+				} catch(e) { return { ok: 0, error: "" + e }; }
 			}
 		},
 
@@ -1195,42 +1034,10 @@ return {
 
 		server_auto_start: {
 			args: { candidates: [] },
-			call: function(req) {
-				try {
-					if (!exists(SERVER_AUTO))
-						return { ok: 0, error: "auto-failover.sh not found" };
-					if (trim(readcmd("test -d /tmp/shpun-auto-failover.lock && echo busy")) == "busy")
-						return { ok: 0, error: "automatic selection is already running", busy: true };
-
-					let input = (req && req.args && type(req.args.candidates) == "array") ? req.args.candidates : [];
-					let values = [];
-					let list = "";
-					for (let i = 0; i < length(input); i++) {
-						let idx = int(input[i]);
-						if (idx < 0 || idx > 9999)
-							continue;
-						let token = "" + idx;
-						if (index(values, token) >= 0)
-							continue;
-						push(values, token);
-						list += (list ? " " : "") + token;
-					}
-					if (!list)
-						return { ok: 0, error: "no server candidates" };
-
-					if (!write_toggle_atomic(SERVER_AUTO_SELECT, 0))
-						return { ok: 0, error: "cannot disable automatic server selection" };
-
-					let f = open(SERVER_AUTO_STATUS, "w");
-					if (f) { f.write("starting\n"); f.close(); }
-					let p = popen("AUTO_FAILOVER_CANDIDATES='" + list + "' AUTO_FAILOVER_IGNORE_COOLDOWN=1 " + SERVER_AUTO + " >/dev/null 2>&1 &");
-					if (!p)
-						return { ok: 0, error: "failed to start automatic selection" };
-					p.close();
-					return { ok: 1, started: true, count: length(values) };
-				} catch(e) {
-					return { ok: 0, error: ("" + e) };
-				}
+			call: function() {
+				if (auto_admin_disabled())
+					return { ok: 0, error: "automatic selection is disabled by administrator" };
+				return start_server_selection("--choose-all");
 			}
 		},
 
@@ -1239,7 +1046,7 @@ return {
 				try {
 					let status = trim(readfile(SERVER_AUTO_STATUS));
 					let selected = int(trim(readfile(SELECTED_LINK) || "0"));
-					let running = status == "starting" || status == "running";
+					let running = server_selection_running();
 					return { ok: 1, status: status || "idle", running: running, selected: selected };
 				} catch(e) {
 					return { ok: 0, error: ("" + e) };

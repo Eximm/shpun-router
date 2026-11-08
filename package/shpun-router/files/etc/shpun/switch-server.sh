@@ -163,6 +163,11 @@ if ! lock_config; then
 	exit 1
 fi
 
+if [ -n "${SHPUN_SELECTION_SOURCE:-}" ] && ! cmp -s "$SHPUN_SELECTION_SOURCE" /etc/shpun/subscription.json; then
+	echo "subscription_changed"
+	exit 1
+fi
+
 SELECTED_CANDIDATE="${SELECTED_LINK_FILE}.candidate.$$"
 AUTO_SELECT_CANDIDATE="${SERVER_AUTO_SELECT_FILE}.candidate.$$"
 CONFIG_CANDIDATE="${ENGINE_CONFIG}.candidate.$$"

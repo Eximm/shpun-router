@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=shpun-router
-PKG_VERSION:=1.2.3
+PKG_VERSION:=1.2.4
 PKG_RELEASE:=1
 SHPUN_LUCI_TAG:=$(subst .,_,$(PKG_VERSION))_r$(PKG_RELEASE)
 
@@ -65,6 +65,8 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_BIN) ./files/etc/shpun/build-config.sh          $(1)/etc/shpun/build-config.sh
 	$(INSTALL_DATA) ./files/etc/shpun/hysteria2-outbound.uc    $(1)/etc/shpun/hysteria2-outbound.uc
 	$(INSTALL_DATA) ./files/etc/shpun/xhttp-outbound.uc        $(1)/etc/shpun/xhttp-outbound.uc
+	$(INSTALL_DATA) ./files/etc/shpun/server-groups.uc          $(1)/etc/shpun/server-groups.uc
+	$(INSTALL_DATA) ./files/etc/shpun/server-selection.uc          $(1)/etc/shpun/server-selection.uc
 	$(INSTALL_DATA) ./files/etc/shpun/subscription-notice.uc   $(1)/etc/shpun/subscription-notice.uc
 	$(INSTALL_BIN) ./files/etc/shpun/subscription-notice.sh    $(1)/etc/shpun/subscription-notice.sh
 	$(INSTALL_BIN) ./files/etc/shpun/subscription-portal.sh $(1)/etc/shpun/subscription-portal.sh

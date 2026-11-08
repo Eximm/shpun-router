@@ -119,7 +119,7 @@ var callShpunServersGet = rpc.declare({
 	object: 'shpun', method: 'servers_get', expect: { '': {} }
 });
 var callShpunServerSet = rpc.declare({
-	object: 'shpun', method: 'server_set', params: ['index'], expect: { '': {} }
+	object: 'shpun', method: 'server_set', params: ['index', 'group'], expect: { '': {} }
 });
 var callShpunServerAutoStart = rpc.declare({
 	object: 'shpun', method: 'server_auto_start', params: ['candidates'], expect: { '': {} }
@@ -127,13 +127,6 @@ var callShpunServerAutoStart = rpc.declare({
 var callShpunServerAutoStatus = rpc.declare({
 	object: 'shpun', method: 'server_auto_status', expect: { '': {} }
 });
-var callShpunServerAutoSet = rpc.declare({
-	object: 'shpun', method: 'server_auto_set', params: ['enabled'], expect: { '': {} }
-});
-var callShpunServerAutoExcludeRuSet = rpc.declare({
-	object: 'shpun', method: 'server_auto_exclude_ru_set', params: ['enabled'], expect: { '': {} }
-});
-
 function waitForRoutingMode(targetMode, timeoutMs) {
 	var started = Date.now();
 
@@ -389,12 +382,10 @@ function buildServerBadges(server) {
 	if (!server)
 		return [];
 
-	var proto = String(server.proto || '').toLowerCase();
-	var protoLabel = getServerProtocolLabel(server);
-	var location = formatServerLocation(server.name || server.host || 'Server', protoLabel);
+	var location = server.name || 'Сервер';
 	var exitPing = parseInt(server.exit_ping_ms, 10);
 	var badges = [
-		makeBadge('shpun-badge--server', location + (protoLabel ? ' - ' + protoLabel : ''))
+		makeBadge('shpun-badge--server', location)
 	];
 
 	if (isValidDisplayIp(server.exit_ip))
@@ -483,47 +474,6 @@ function validateDomainEntry(entry) {
 function validateRouteEntry(entry) {
 	entry = normalizeRouteEntry(entry);
 	return validateIpCidr(entry) || validateDomainEntry(entry);
-}
-
-function formatServerLocation(name, protoLabel) {
-	name = String(name || '').replace(/\+/g, ' ');
-	try { name = decodeURIComponent(name); } catch(e) {}
-	name = name.replace(/\s+/g, ' ').trim();
-
-	if (protoLabel)
-		name = name.replace(new RegExp('\\s*' + protoLabel + '\\s*$', 'i'), '');
-
-	name = name.replace(/\s*VLESS\s*$/i, '').trim();
-	name = name.replace(/[-–—]\s*$/g, '').trim();
-
-	return name || 'Server';
-}
-
-function getServerConnectionGroup(server, location) {
-	var label = String(location || '').toLowerCase();
-	var host = String((server || {}).host || '').toLowerCase();
-
-	if (label.indexOf('напрямую') >= 0)
-		return 'direct';
-	if (label.indexOf('через рф') >= 0)
-		return 'gateway';
-
-	return /^rush[0-9]*\.lenivo\.site$/.test(host) ? 'gateway' : 'direct';
-}
-
-function getServerProtocolLabel(server) {
-	var proto = String((server || {}).proto || '').toLowerCase();
-	if (proto === 'hy2' || proto === 'hysteria2') return 'Hysteria 2';
-	if (proto === 'vless' && server.transport === 'xhttp') return 'XHTTP';
-	if (proto === 'vless') return server.security && server.security !== 'reality' ? 'VLESS' : 'Reality';
-	return proto.toUpperCase() || 'VPN';
-}
-
-function getServerDisplayGroup(server, location) {
-	var proto = String((server || {}).proto || '').toLowerCase();
-	if (proto === 'hysteria2' || proto === 'hy2') return 'hysteria2';
-	if (proto === 'vless' && server.transport === 'xhttp') return 'xhttp';
-	return getServerConnectionGroup(server, location);
 }
 
 /* ============================================================
@@ -668,317 +618,108 @@ function openCustomRoutesModal() {
 }
 
 function openServersModal() {
-	ui.showModal('Серверы VPN', [
-		E('div', { 'class': 'shpun-modal-wrap' }, [
-			E('div', { 'class': 'shpun-modal-desc' }, 'Загружаем список серверов...')
-		])
-	]);
+	var title = 'Серверы VPN';
 
-	callShpunServersGet().then(function(res) {
-		res = res || {};
-		var servers = res.servers || [];
-		var selected = res.selected || 0;
-		var autoEffective = (res.auto_effective_enabled === 1);
-		var autoAdminDisabled = (res.auto_admin_disabled === 1);
-		var excludeRuVal = (res.auto_exclude_ru == null ? 1 : res.auto_exclude_ru);
-		var autoState = { effective: autoEffective, adminDisabled: autoAdminDisabled, excludeRu: !!excludeRuVal };
+	function dismiss() { ui.hideModal(); }
+	function showMessage(message) {
+		ui.showModal(title, [
+			E('p', {}, message),
+			E('div', { 'class': 'shpun-modal-footer' }, [
+				E('button', { 'type': 'button', 'class': 'shpun-modal-btn', 'click': dismiss }, 'Закрыть')
+			])
+		]);
+	}
 
-		if (!res.ok) {
-			ui.showModal('Серверы VPN', [
-				E('div', { 'class': 'shpun-modal-wrap' }, [
-					E('p', { 'style': 'color:#fecaca;' }, 'Не удалось загрузить список серверов: ' + (res.error || 'ошибка')),
-					E('div', { 'class': 'shpun-modal-footer' }, [
-						E('button', { 'type': 'button', 'class': 'shpun-modal-btn', 'click': function() { ui.hideModal(); } }, 'Закрыть')
-					])
-				])
-			]);
-			return;
-		}
-
-		if (!servers.length) {
-			ui.showModal('Серверы VPN', [
-				E('div', { 'class': 'shpun-modal-wrap' }, [
-					E('div', { 'class': 'shpun-modal-desc' }, 'Список серверов пока недоступен. Дождитесь получения подписки.'),
-					E('div', { 'class': 'shpun-modal-footer' }, [
-						E('button', { 'type': 'button', 'class': 'shpun-modal-btn', 'click': function() { ui.hideModal(); } }, 'Закрыть')
-					])
-				])
-			]);
-			return;
-		}
-
-		var chosen = selected;
-		var list = E('div', { 'class': 'shpun-server-list' });
-		var rows = [];
-		var groupCounts = { gateway: 0, direct: 0, hysteria2: 0, xhttp: 0 };
-		var activeGroup = 'gateway';
-		var gatewayButton;
-		var directButton;
-		var hysteriaButton;
-		var xhttpButton;
-		var autoButton;
-
-		function markSelected() {
-			rows.forEach(function(row) {
-				var active = row.index === chosen;
-				row.node.className = 'shpun-server-row' + (active ? ' is-selected' : '');
-				row.badge.className = 'shpun-server-kind ' + (active ? 'shpun-server-kind--main' : 'shpun-server-kind--reserve');
-				row.badge.textContent = active ? 'Выбран' : 'В подписке';
-			});
-		}
-
-		function renderGroup() {
-			while (list.firstChild) list.removeChild(list.firstChild);
-			rows.forEach(function(row) {
-				if (row.group === activeGroup)
-					list.appendChild(row.node);
-			});
-			gatewayButton.className = 'shpun-server-switch-btn' + (activeGroup === 'gateway' ? ' is-active' : '');
-			directButton.className = 'shpun-server-switch-btn' + (activeGroup === 'direct' ? ' is-active' : '');
-			hysteriaButton.className = 'shpun-server-switch-btn' + (activeGroup === 'hysteria2' ? ' is-active' : '');
-			xhttpButton.className = 'shpun-server-switch-btn' + (activeGroup === 'xhttp' ? ' is-active' : '');
-			autoButton.textContent = 'Найти рабочий сервер в этой группе';
-			autoButton.disabled = (activeGroup === 'gateway' && autoState.excludeRu) ? true : null;
-			list.scrollTop = 0;
-		}
-
-		servers.forEach(function(s) {
-			var proto = String(s.proto || 'vpn').toLowerCase();
-			var protoLabel = getServerProtocolLabel(s);
-			var isSelected = s.index === selected;
-			var location = formatServerLocation(s.name || ('Server ' + s.index), protoLabel);
-			var group = getServerDisplayGroup(s, location);
-			groupCounts[group]++;
-			if (isSelected)
-				activeGroup = group;
-			var latency = Number(s.latency_ms);
-			var hasLatency = s.latency_ms != null && isFinite(latency) && latency >= 0;
-			var latencyClass = !hasLatency ? 'unknown' : (latency <= 80 ? 'good' : (latency <= 160 ? 'medium' : 'slow'));
-			var latencyText = hasLatency ? (Math.round(latency) + ' мс') : 'Нет ping';
-			var badge = E('span', { 'class': 'shpun-server-kind ' + (isSelected ? 'shpun-server-kind--main' : 'shpun-server-kind--reserve') }, isSelected ? 'Текущий' : 'В подписке');
-			var latencyNode = E('span', {
-				'class': 'shpun-server-latency shpun-server-latency--' + latencyClass,
-				'title': hasLatency ? (group === 'gateway' ? 'ICMP-пинг до РФ-шлюза, не до конечного VPN-сервера. Не проверка туннеля.' : 'ICMP-пинг до узла. Не проверка VPN-туннеля.') : 'Нет ответа ICMP. Это не доказывает отказ VPN.'
-			}, latencyText);
-			var meta = E('span', { 'class': 'shpun-server-meta' }, [
-				latencyNode,
-				E('span', { 'class': 'shpun-server-proto' }, protoLabel),
-				badge
-			]);
-			var row = E('button', {
-				'type': 'button',
-				'class': 'shpun-server-row' + (s.index === selected ? ' is-selected' : ''),
-				'click': function(ev) {
-					ev.preventDefault();
-					chosen = s.index;
-					markSelected();
-				}
-			}, [
-				E('span', { 'class': 'shpun-server-location', 'title': location }, location),
-				meta
-			]);
-			rows.push({ index: s.index, node: row, badge: badge, group: group, latency: hasLatency ? latency : null });
-		});
-
-		gatewayButton = E('button', {
-			'type': 'button',
-			'class': 'shpun-server-switch-btn',
-			'disabled': groupCounts.gateway === 0 ? true : null,
-			'click': function(ev) { ev.preventDefault(); activeGroup = 'gateway'; renderGroup(); }
-		}, 'Reality · РФ-шлюз · ' + groupCounts.gateway);
-		directButton = E('button', {
-			'type': 'button',
-			'class': 'shpun-server-switch-btn',
-			'disabled': groupCounts.direct === 0 ? true : null,
-			'click': function(ev) { ev.preventDefault(); activeGroup = 'direct'; renderGroup(); }
-		}, 'Reality · напрямую · ' + groupCounts.direct);
-		hysteriaButton = E('button', {
-			'type': 'button',
-			'class': 'shpun-server-switch-btn',
-			'disabled': groupCounts.hysteria2 === 0 ? true : null,
-			'click': function(ev) { ev.preventDefault(); activeGroup = 'hysteria2'; renderGroup(); }
-		}, 'Hysteria 2 · ' + groupCounts.hysteria2);
-		xhttpButton = E('button', {
-			'type': 'button',
-			'class': 'shpun-server-switch-btn',
-			'disabled': groupCounts.xhttp === 0 ? true : null,
-			'click': function(ev) { ev.preventDefault(); activeGroup = 'xhttp'; renderGroup(); }
-		}, 'XHTTP · ' + groupCounts.xhttp);
-		rows.sort(function(a, b) {
-			if (a.latency == null && b.latency == null) return a.index - b.index;
-			if (a.latency == null) return 1;
-			if (b.latency == null) return -1;
-			return a.latency - b.latency || a.index - b.index;
-		});
-		autoButton = E('button', {
-			'type': 'button',
-			'class': 'shpun-server-switch-btn is-auto shpun-server-search',
-			'click': function(ev) {
-				ev.preventDefault();
-				var candidates = rows.filter(function(row) { return row.group === activeGroup; });
-				candidates.sort(function(a, b) {
-					if (a.latency == null && b.latency == null) return a.index - b.index;
-					if (a.latency == null) return 1;
-					if (b.latency == null) return -1;
-					return a.latency - b.latency || a.index - b.index;
-				});
-				var indexes = candidates.map(function(row) { return row.index; });
-				if (!indexes.length) return;
-
-				autoButton.disabled = true;
-				callShpunServerAutoStart(indexes).then(function(result) {
+	function choose(request, message) {
+		showMessage(message);
+		request.then(function(result) {
+			result = result || {};
+			if (!result.ok) {
+				showMessage(result.busy ? 'Роутер уже проверяет серверы. Попробуйте чуть позже.' :
+					'Не удалось запустить проверку: ' + (result.error || 'ошибка'));
+				return;
+			}
+			var started = Date.now();
+			function poll() {
+				callShpunServerAutoStatus().then(function(result) {
 					result = result || {};
-					if (!result.ok) {
-						autoButton.disabled = false;
-						ui.addNotification(null, E('p', {}, 'Не удалось запустить автовыбор: ' + (result.error || 'ошибка')), 'error');
-						return;
+					if (result.running && Date.now() - started < 90000) {
+						window.setTimeout(poll, 1500);
+					} else if (String(result.status || '').indexOf('ok:') === 0) {
+						dismiss();
+						ui.addNotification(null, E('p', {}, 'Подключение выбрано.'), 'info');
+						window.setTimeout(function() { window.location.reload(); }, 1200);
+					} else {
+						showMessage(result.running ? 'Проверка продолжается в фоне.' :
+							'Рабочее подключение не найдено. Текущий выбор сохранён.');
 					}
-
-					ui.hideModal();
-					ui.addNotification(null, E('p', {}, 'Автовыбор запущен. Роутер проверяет серверы по отклику и качеству туннеля.'), 'info');
-					var startedAt = Date.now();
-					var poll = function() {
-						callShpunServerAutoStatus().then(function(statusResult) {
-							statusResult = statusResult || {};
-							var status = String(statusResult.status || '');
-							if (statusResult.running || status === 'starting') {
-								if (Date.now() - startedAt < 360000)
-									window.setTimeout(poll, 2500);
-								else
-									ui.addNotification(null, E('p', {}, 'Проверка серверов занимает слишком много времени. Роутер продолжит её в фоне.'), 'warning');
-								return;
-							}
-							if (status.indexOf('ok:') === 0) {
-								ui.addNotification(null, E('p', {}, 'Рабочий сервер выбран автоматически.'), 'info');
-								window.setTimeout(function() { window.location.reload(); }, 1200);
-							} else if (status.indexOf('failed:') === 0) {
-								ui.addNotification(null, E('p', {}, 'Рабочий сервер в этом разделе не найден. Исходный сервер восстановлен.'), 'error');
-							} else if (status.indexOf('error:') === 0) {
-								ui.addNotification(null, E('p', {}, 'Автовыбор не запустился. Повторите попытку через несколько секунд.'), 'error');
-							} else {
-								window.setTimeout(poll, 1000);
-							}
-						}).catch(function() { window.setTimeout(poll, 2500); });
-					};
-					window.setTimeout(poll, 1500);
-				}).catch(function(err) {
-					autoButton.disabled = false;
-					ui.addNotification(null, E('p', {}, 'Ошибка автовыбора: ' + String(err)), 'error');
+				}).catch(function() {
+					if (Date.now() - started < 90000) window.setTimeout(poll, 1500);
+					else showMessage('Не удалось получить результат проверки.');
 				});
 			}
-		}, 'Найти рабочий сервер в этой группе');
-		var autoToggleState = E('span', { 'class': 'shpun-auto-state' }, '');
-		var autoToggleBtn = E('button', { 'type': 'button', 'class': 'shpun-auto-toggle', 'role': 'switch', 'aria-label': 'Автосмена сервера' }, [
-			'Автосмена сервера', autoToggleState,
-			E('span', { 'class': 'shpun-auto-track', 'aria-hidden': 'true' })
-		]);
+			window.setTimeout(poll, 1000);
+		}).catch(function(err) {
+			showMessage('Не удалось запустить проверку: ' + String(err));
+		});
+	}
 
-		function renderAutoToggle() {
-			var on = autoState.effective && !autoState.adminDisabled;
-			autoToggleBtn.className = 'shpun-auto-toggle' + (on ? ' is-on' : '');
-			autoToggleBtn.setAttribute('aria-checked', on ? 'true' : 'false');
-			autoToggleBtn.disabled = !!autoState.adminDisabled;
-			autoToggleState.textContent = autoState.adminDisabled ? 'Недоступна' : (on ? 'Вкл' : 'Выкл');
-			autoToggleBtn.title = on
-				? 'При сбое VPN роутер сменит сервер.'
-				: (autoState.adminDisabled ? 'Отключена администратором.' : 'Сервер выбираете вы. Нажмите, чтобы включить автосмену.');
+	showMessage('Загружаем список серверов…');
+	callShpunServersGet().then(function(res) {
+		res = res || {};
+		if (!res.ok) {
+			showMessage('Не удалось загрузить список серверов.');
+			return;
+		}
+		if (!res.servers || !res.servers.length) {
+			showMessage('Список появится после получения подписки.');
+			return;
 		}
 
-		autoToggleBtn.addEventListener('click', function(ev) {
-			ev.preventDefault();
-			if (autoToggleBtn.disabled) return;
-			var next = autoState.effective ? 0 : 1;
-			autoToggleBtn.disabled = true;
-			callShpunServerAutoSet(next).then(function(r) {
-				r = r || {};
-				autoToggleBtn.disabled = false;
-				if (!r.ok) {
-					ui.addNotification(null, E('p', {}, 'Не удалось переключить авто: ' + (r.error || 'ошибка')), 'error');
-					return;
+		var auto = res.auto_effective_enabled === 1;
+		var autoButton = E('button', {
+			'type': 'button',
+			'class': 'shpun-server-row' + (auto ? ' is-selected' : ''),
+			'disabled': res.auto_admin_disabled === 1 || res.auto_running ? true : null,
+			'click': function(ev) {
+				ev.preventDefault();
+				choose(callShpunServerAutoStart([]), 'Ищем лучшее подключение…');
+			}
+		}, [
+			E('span', { 'class': 'shpun-server-location' }, 'Автовыбор'),
+			auto ? E('span', { 'class': 'shpun-server-kind shpun-server-kind--main' }, 'Включён') : ''
+		]);
+
+		var rows = res.servers.map(function(server) {
+			return E('button', {
+				'type': 'button',
+				'class': 'shpun-server-row' + (server.selected && !auto ? ' is-selected' : ''),
+				'disabled': res.auto_running ? true : null,
+				'click': function(ev) {
+					ev.preventDefault();
+					choose(callShpunServerSet(server.index, server.id), 'Проверяем подключения к ' + server.name + '…');
 				}
-				autoState.effective = !!r.effective_enabled;
-				autoState.adminDisabled = !!r.admin_disabled;
-				if (r.admin_disabled && next === 1)
-					ui.addNotification(null, E('p', {}, 'Автоматический failover административно отключён.'), 'warning');
-				renderAutoToggle();
-			}).catch(function(err) {
-				autoToggleBtn.disabled = false;
-				ui.addNotification(null, E('p', {}, 'Ошибка: ' + String(err)), 'error');
-			});
+			}, [
+				E('span', { 'class': 'shpun-server-location' }, server.name),
+				server.selected ? E('span', { 'class': 'shpun-server-kind shpun-server-kind--main' }, 'Текущий') : ''
+			]);
 		});
-
-		var excludeCheckbox = E('input', { 'type': 'checkbox', 'id': 'shpun-exclude-ru-cb' });
-		excludeCheckbox.checked = autoState.excludeRu;
-		excludeCheckbox.addEventListener('change', function() {
-			var val = excludeCheckbox.checked ? 1 : 0;
-			callShpunServerAutoExcludeRuSet(val).then(function(r) {
-				r = r || {};
-				if (!r.ok) {
-					ui.addNotification(null, E('p', {}, 'Не удалось изменить исключение РФ: ' + (r.error || 'ошибка')), 'error');
-					excludeCheckbox.checked = autoState.excludeRu;
-					return;
-				}
-				autoState.excludeRu = !!r.enabled;
-				excludeCheckbox.checked = autoState.excludeRu;
-				if (activeGroup === 'gateway')
-					autoButton.disabled = autoState.excludeRu ? true : null;
-				ui.addNotification(null, E('p', {}, autoState.excludeRu ? 'Направления через РФ-шлюз исключены из автовыбора.' : 'Направления через РФ-шлюз включены в автовыбор.'), 'info');
-			}).catch(function(err) {
-				excludeCheckbox.checked = autoState.excludeRu;
-				ui.addNotification(null, E('p', {}, 'Ошибка: ' + String(err)), 'error');
-			});
-		});
-		var excludeLabel = E('label', { 'for': 'shpun-exclude-ru-cb', 'style': 'display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;font-weight:800;color:#c7d2fe;' }, [excludeCheckbox, ' Исключать РФ-шлюз из Авто']);
-		var autoRow = E('div', { 'class': 'shpun-server-switch', 'style': 'display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:6px;' }, [autoToggleBtn, excludeLabel]);
-		autoToggleBtn.style = 'flex:1 1 220px;';
-		renderAutoToggle();
-
-		var serverSwitch = E('div', { 'class': 'shpun-server-switch' }, [ gatewayButton, directButton, hysteriaButton, xhttpButton ]);
-		renderGroup();
-
-		ui.showModal('Серверы VPN', [
+		ui.showModal(title, [
 			E('div', { 'class': 'shpun-modal-wrap' }, [
-				E('div', { 'class': 'shpun-modal-desc' }, 'Выберите группу и сервер. Пинг — до РФ-шлюза или прямого узла, не проверка VPN.'),
-				autoRow,
-				E('div', { 'class': 'shpun-modal-desc' }, 'Автосмена: замена при сбое VPN, Reality — резерв для Hysteria 2. Ручной выбор выключает её. Поиск ниже — разовая проверка с переключением.'),
-				serverSwitch,
-				E('div', { 'style': 'margin:8px 0;' }, [autoButton]),
-				list,
+				E('div', { 'class': 'shpun-modal-desc' }, res.auto_running ? 'Роутер проверяет подключения…' :
+					'Автовыбор подбирает сервер сам. Чтобы закрепить сервер, выберите его из списка.'),
+				autoButton,
+				E('div', { 'class': 'shpun-server-list' }, rows),
 				E('div', { 'class': 'shpun-modal-footer' }, [
-					E('button', { 'type': 'button', 'class': 'shpun-modal-btn', 'click': function() { ui.hideModal(); } }, 'Отмена'),
-					E('button', {
-						'type': 'button',
-						'class': 'shpun-modal-btn shpun-modal-btn--primary',
-						'click': function() {
-							ui.hideModal();
-							ui.addNotification(null, E('p', {}, 'Переключаем сервер...'), 'info');
-							callShpunServerSet(chosen).then(function(r) {
-								r = r || {};
-								if (r.ok) {
-									autoState.effective = false;
-									renderAutoToggle();
-									ui.addNotification(null, E('p', {}, 'Сервер выбран. VPN перезапускается. Авто-выбор выключен.'), 'info');
-								} else
-									ui.addNotification(null, E('p', {}, 'Не удалось выбрать сервер: ' + (r.error || 'ошибка')), 'error');
-							}).catch(function(err) {
-								ui.addNotification(null, E('p', {}, 'Ошибка: ' + String(err)), 'error');
-							});
-						}
-					}, 'Применить')
+					E('button', { 'type': 'button', 'class': 'shpun-modal-btn', 'click': dismiss }, 'Закрыть')
 				])
 			])
 		]);
 	}).catch(function(err) {
-		ui.showModal('Серверы VPN', [
-			E('div', { 'class': 'shpun-modal-wrap' }, [
-				E('p', { 'style': 'color:#fecaca;' }, 'Не удалось загрузить список серверов: ' + String(err)),
-				E('div', { 'class': 'shpun-modal-footer' }, [
-					E('button', { 'type': 'button', 'class': 'shpun-modal-btn', 'click': function() { ui.hideModal(); } }, 'Закрыть')
-				])
-			])
-		]);
+		showMessage('Не удалось загрузить список серверов: ' + String(err));
 	});
 }
+
 
 /* ============================================================
  *  View

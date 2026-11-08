@@ -171,7 +171,7 @@ ensure_state_dir() {
 	# The user toggle defaults to enabled. AUTO_FAILOVER_ENABLE remains a separate
 	# administrative override and can still make the effective state disabled.
 	[ -f "$SERVER_AUTO_SELECT_FILE" ] || printf '%s\n' "$AUTO_FAILOVER_ENABLE_DEFAULT" > "$SERVER_AUTO_SELECT_FILE" 2>/dev/null || true
-	[ -f "$SERVER_AUTO_EXCLUDE_RU_FILE" ] || echo "1" > "$SERVER_AUTO_EXCLUDE_RU_FILE" 2>/dev/null || true
+	[ -f "$SERVER_AUTO_EXCLUDE_RU_FILE" ] || echo "0" > "$SERVER_AUTO_EXCLUDE_RU_FILE" 2>/dev/null || true
 }
 
 auto_select_current() {
@@ -1671,6 +1671,17 @@ install_updated_subscription_candidate() {
 		selected_after="$(sub_find_selected_index "$SUB_FILE" "$candidate" "$selected_before" || printf '%s' "$selected_before")"
 	fi
 
+	# A pinned server is a group, not a transient subscription index.
+	if [ "$(auto_select_current)" = 0 ] && [ -f "$STATE_DIR/server-selection.uc" ]; then
+		selected_after="$(ucode "$STATE_DIR/server-selection.uc" remap \
+			"$SUB_FILE" "$selected_before" "$candidate" "$selected_after" 2>/dev/null)" || {
+			log "$label: pinned server missing in refreshed subscription, keeping current selection"
+			rm -f "$candidate"
+			config_lock_release
+			return 1
+		}
+	fi
+
 	rm -f "$backup"
 	if ! cp "$SUB_FILE" "$backup" 2>/dev/null; then
 		log "$label: failed to back up active subscription"
@@ -2560,11 +2571,26 @@ recover_current_server() {
 	return 1
 }
 
+grouped_recovery_due() {
+	local last cooldown now
+	[ "$AUTO_FAILOVER_ENABLE" -eq 1 ] && [ -x "$AUTO_FAILOVER_SCRIPT" ] || return 1
+	[ ! -d "${AUTO_FAILOVER_LOCKDIR:-/tmp/shpun-auto-failover.lock}" ] || return 1
+	last="$(cat "$STATE_DIR/auto_failover_last_attempt" 2>/dev/null || true)"
+	cooldown="$AUTO_FAILOVER_COOLDOWN"
+	case "$last" in ''|*[!0-9]*) return 0 ;; esac
+	case "$cooldown" in ''|*[!0-9]*) cooldown=600 ;; esac
+	now="$(date +%s)"
+	[ "$now" -lt "$last" ] || [ "$((now-last))" -ge "$cooldown" ]
+}
+
 recover_tunnel_quality() {
-	log "tunnel quality degraded for ${TUNNEL_QUALITY_FAIL_SECONDS}s; restoring transparent rules without server change or xray restart"
+	log "tunnel quality degraded for ${TUNNEL_QUALITY_FAIL_SECONDS}s; restoring transparent rules and checking replacement connections"
 	ensure_transparent_rules || true
 	apply_protected_dns_forwarding
 	printf '1\n' > "$TUNNEL_QUALITY_DEGRADED_FILE" 2>/dev/null || true
+	if [ "$AUTO_FAILOVER_ENABLE" -eq 1 ] && [ -x "$AUTO_FAILOVER_SCRIPT" ]; then
+		"$AUTO_FAILOVER_SCRIPT" --recover-quality >/dev/null 2>&1 &
+	fi
 	return 0
 }
 
@@ -2582,17 +2608,17 @@ recover_failed_tunnel() {
 		return 1
 	fi
 
-	if [ "$AUTO_FAILOVER_ENABLE" -eq 1 ] && [ "$(auto_select_current)" -eq 1 ] && [ -x "$AUTO_FAILOVER_SCRIPT" ]; then
-		log "tunnel probe failure confirmed; starting automatic server failover (auto_select=$(auto_select_current), admin_enabled=$AUTO_FAILOVER_ENABLE)"
+	if [ "$AUTO_FAILOVER_ENABLE" -eq 1 ] && [ -x "$AUTO_FAILOVER_SCRIPT" ]; then
+		log "tunnel probe failure confirmed; checking replacement connections (auto_select=$(auto_select_current))"
 		ensure_transparent_rules || true
 		apply_protected_dns_forwarding
-		rm -f "$VPN_READY_FILE" "$TUNNEL_QUALITY_DEGRADED_FILE"
 		echo "tunnel_probe_failed" > "$VERROR_FILE"
-		"$AUTO_FAILOVER_SCRIPT" >/dev/null 2>&1 &
+		"$AUTO_FAILOVER_SCRIPT" --recover-failed >/dev/null 2>&1 &
 		return 1
 	fi
 
-	log "tunnel probe failure confirmed; automatic server change is disabled (auto_select=$(auto_select_current), admin_enabled=$AUTO_FAILOVER_ENABLE), recovering current server without changing selected_link_index"
+	log "tunnel probe failure confirmed; automatic recovery selection is disabled"
+
 	recover_current_server
 	return 1
 
@@ -3063,6 +3089,14 @@ ensure_vpn_from_subscription() {
 	return 0
 }
 
+select_server_on_first_binding() {
+	[ "$AUTO_FAILOVER_ENABLE" = 1 ] && [ "$(auto_select_current)" = 1 ] || return 0
+	[ ! -e "$STATE_DIR/selected_link_index" ] && [ ! -e "$ENGINE_CONFIG" ] || return 0
+	[ ! -s /tmp/shpun-subscription-portal/blocked ] && [ -x "$AUTO_FAILOVER_SCRIPT" ] || return 0
+	engine_download || return 0
+	ENGINE_BIN="$ENGINE_BIN" SUB_FILE="$SUB_FILE" "$AUTO_FAILOVER_SCRIPT" --initial || true
+}
+
 poll_subscription_loop() {
 	if [ -s "$SUB_FILE" ]; then
 		if ! subscription_file_valid; then
@@ -3130,6 +3164,7 @@ poll_subscription_loop() {
 		log "router code: $CODE (clean: $CLEAN_CODE)"
 
 		if fetch_subscription_once; then
+			select_server_on_first_binding
 			ensure_routes_ready
 			ensure_vpn_from_subscription
 			return 0
@@ -3487,7 +3522,7 @@ main_loop() {
 							TUNNEL_BASIC_WARNED=0
 							TUNNEL_QUALITY_FAIL_SECONDS=$((TUNNEL_QUALITY_FAIL_SECONDS + TUNNEL_PROBE_INTERVAL))
 							if [ "$TUNNEL_QUALITY_FAIL_SECONDS" -ge "$TUNNEL_QUALITY_FAIL_TIMEOUT" ]; then
-								if [ "$TUNNEL_QUALITY_WARNED" -eq 0 ]; then
+								if [ "$TUNNEL_QUALITY_WARNED" -eq 0 ] || grouped_recovery_due; then
 									log "tunnel quality degraded for ${TUNNEL_QUALITY_FAIL_SECONDS}s while basic tunnel access and WAN are reachable"
 									recover_tunnel_quality || true
 									TUNNEL_QUALITY_WARNED=1
@@ -3500,17 +3535,11 @@ main_loop() {
 							rm -f "$TUNNEL_QUALITY_DEGRADED_FILE"
 							TUNNEL_BASIC_FAIL_SECONDS=$((TUNNEL_BASIC_FAIL_SECONDS + TUNNEL_PROBE_INTERVAL))
 							if [ "$TUNNEL_BASIC_FAIL_SECONDS" -ge "$TUNNEL_FAIL_TIMEOUT" ]; then
-								if [ "$AUTO_FAILOVER_ENABLE" -eq 1 ] && [ "$(auto_select_current)" -eq 1 ]; then
-									if [ "$TUNNEL_BASIC_WARNED" -eq 0 ]; then
-										log "tunnel proxy probe unavailable for ${TUNNEL_BASIC_FAIL_SECONDS}s while WAN is reachable"
-										recover_failed_tunnel || true
-										TUNNEL_BASIC_WARNED=1
-									fi
-								else
-									if [ "$TUNNEL_BASIC_WARNED" -eq 0 ]; then
-										log "tunnel proxy probe unavailable for ${TUNNEL_BASIC_FAIL_SECONDS}s while WAN is reachable"
-										TUNNEL_BASIC_WARNED=1
-									fi
+								if [ "$TUNNEL_BASIC_WARNED" -eq 0 ] || grouped_recovery_due; then
+									log "tunnel proxy probe unavailable for ${TUNNEL_BASIC_FAIL_SECONDS}s while WAN is reachable"
+									recover_failed_tunnel || true
+									TUNNEL_BASIC_WARNED=1
+								elif [ "$AUTO_FAILOVER_ENABLE" -ne 1 ]; then
 									recover_failed_tunnel || true
 								fi
 								TUNNEL_BASIC_FAIL_SECONDS="$TUNNEL_FAIL_TIMEOUT"
