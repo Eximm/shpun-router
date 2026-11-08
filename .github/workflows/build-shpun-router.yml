@@ -62,10 +62,7 @@ jobs:
         if: steps.cache-sdk.outputs.cache-hit != 'true'
         run: |
           set -eu
-          mirror="https://downloads.staging.openwrt.org/${SDK_URL#https://downloads.openwrt.org/}"
-          curl -4 -fLSs --connect-timeout 8 --max-time 100 -o "$SDK_DIR.tar.zst" "$mirror" || \
-            curl -4 -fLSs --connect-timeout 8 --max-time 120 -o "$SDK_DIR.tar.zst" "$SDK_URL"
-          printf '%s  %s\n' '81c40e9ce5229eca7f3fa5cd3356ee2ffa61f827d757e4e8bb4b6ae7f9600282' "$SDK_DIR.tar.zst" | sha256sum -c -
+          node deploy/fetch-pilot-sdk.cjs "$SDK_URL" "$SDK_DIR.tar.zst" 207476527 81c40e9ce5229eca7f3fa5cd3356ee2ffa61f827d757e4e8bb4b6ae7f9600282
           tar -I zstd -xf "$SDK_DIR.tar.zst"
           mv "$SDK_DIR" sdk
       - name: Stage reviewed script-only package
