@@ -58,13 +58,17 @@ jobs:
         with:
           path: sdk
           key: linux-ubuntu24-openwrt-sdk-24.10.3-ath79-generic_gcc-13.3.0_musl.Linux-x86_64-v2
-      - name: Download and verify SDK
+      - name: Extract the pinned OpenWrt SDK from its official image
         if: steps.cache-sdk.outputs.cache-hit != 'true'
         run: |
           set -eu
-          node deploy/fetch-pilot-sdk.cjs "$SDK_URL" "$SDK_DIR.tar.zst" 207476527 81c40e9ce5229eca7f3fa5cd3356ee2ffa61f827d757e4e8bb4b6ae7f9600282
-          tar -I zstd -xf "$SDK_DIR.tar.zst"
-          mv "$SDK_DIR" sdk
+          image='ghcr.io/openwrt/sdk@sha256:68126b17dfe49d777c7fcc9f45d889757ee3bbaeda4d29aa097b3fe5480b1136'
+          container=$(docker create --platform linux/amd64 "$image" /bin/true)
+          trap 'docker rm "$container" >/dev/null' EXIT
+          mkdir sdk
+          docker cp "$container:/builder/." sdk
+          test -d sdk/staging_dir
+          test -f sdk/Makefile
       - name: Stage reviewed script-only package
         run: |
           set -eu
