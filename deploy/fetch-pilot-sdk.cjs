@@ -9,30 +9,51 @@ const { promisify } = require('node:util');
 const curl = promisify(execFile);
 const [url, filename, sizeText, expectedHash] = process.argv.slice(2);
 const size = Number(sizeText);
-const mirror = url.replace('https://downloads.openwrt.org/', 'https://downloads.staging.openwrt.org/');
-const chunkSize = 8 * 1024 * 1024;
+const suffix = url.replace(/^https:\/\/downloads\.openwrt\.org\//, '');
+const endpoints = [
+  url,
+  'https://mirror-03.infra.openwrt.org/' + suffix,
+  'https://mirrors.tuna.tsinghua.edu.cn/openwrt/' + suffix,
+  'https://downloads.staging.openwrt.org/' + suffix,
+];
+const chunkSize = 4 * 1024 * 1024;
 const chunks = Math.ceil(size / chunkSize);
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'openwrt-sdk-ranges-'));
+let completed = 0;
 
 async function download(index) {
-  const start = index * chunkSize;
-  const end = Math.min(size, start + chunkSize) - 1;
+  const first = index * chunkSize;
+  const end = Math.min(size, first + chunkSize) - 1;
   const target = path.join(dir, String(index));
-  for (const endpoint of [url, mirror]) {
+  const piece = target + '.piece';
+  const headerFile = target + '.headers';
+  let start = first;
+  for (let attempt = 0; attempt < 12 && start <= end; attempt++) {
+    fs.rmSync(piece, { force: true });
+    fs.rmSync(headerFile, { force: true });
+    let status;
     try {
-      const { stdout } = await curl('curl', [
-        '-4', '-fLsS', '--connect-timeout', '8', '--max-time', '24',
+      ({ stdout: status } = await curl('curl', [
+        '-4', '-fLsS', '--connect-timeout', '8', '--max-time', '35',
         '--range', start + '-' + end, '--max-filesize', String(end - start + 1),
-        '--dump-header', target + '.headers', '-o', target, '-w', '%{http_code}', endpoint,
-      ]);
-      const headers = fs.readFileSync(target + '.headers', 'utf8');
-      const range = 'content-range: bytes ' + start + '-' + end + '/' + size;
-      if (stdout === '206' &&
-          headers.toLowerCase().split(/\r?\n/).includes(range) &&
-          fs.statSync(target).size === end - start + 1) return;
-    } catch {}
+        '--dump-header', headerFile, '-o', piece, '-w', '%{http_code}',
+        endpoints[attempt % endpoints.length],
+      ]));
+    } catch (err) {
+      status = err.stdout;
+    }
+    if (status !== '206' || !fs.existsSync(headerFile) || !fs.existsSync(piece)) continue;
+    const headers = fs.readFileSync(headerFile, 'utf8');
+    const range = 'content-range: bytes ' + start + '-' + end + '/' + size;
+    if (!headers.toLowerCase().split(/\r?\n/).includes(range)) continue;
+    const data = fs.readFileSync(piece);
+    if (!data.length || data.length > end - start + 1) continue;
+    fs.appendFileSync(target, data);
+    start += data.length;
   }
-  throw new Error('SDK range ' + index + ' unavailable from both OpenWrt endpoints');
+  if (start <= end) throw new Error('SDK range ' + index + ' incomplete after ' + (start - first) + ' bytes');
+  if (++completed % 8 === 0 || completed === chunks)
+    console.log('SDK progress: ' + completed + '/' + chunks + ' ranges');
 }
 
 (async () => {
