@@ -67,10 +67,31 @@ HTTP_PROXY_PORT_DEFAULT=10809
 SOCKS_PROXY_PORT_DEFAULT=10808
 DNS_PROXY_PORT_DEFAULT=1053
 TUNNEL_PROBE_INTERVAL_DEFAULT=60
+# Hysteria carries tunnel checks inside its own QUIC connection. Other
+# transports (Reality, XHTTP) open a new upstream connection per check, so a
+# healthy tunnel on them is checked less often, like an ordinary client app.
+TUNNEL_PROBE_INTERVAL_TCP_DEFAULT=300
+# One tunnel check = one HTTPS connection to this host: exit address
+# (/cdn-cgi/trace), a small download and two short requests for the delay.
+TUNNEL_CHECK_URL_BASE_DEFAULT="https://speed.cloudflare.com"
 TUNNEL_FAIL_TIMEOUT_DEFAULT=180
 AUTO_FAILOVER_ENABLE_DEFAULT=1
 ENGINE_DOWNLOAD_RETRY_INTERVAL_DEFAULT=300
 ENGINE_VERSION_DEFAULT="26.6.27"
+# Exact Xray build of this release (26.6.27 with the UDP reply-close fix) and
+# its SHA-256 per architecture. A binary with another hash is never installed,
+# and a running one is replaced by maybe_upgrade_engine.
+ENGINE_BUILD="26.6.27-reply-close1"
+ENGINE_BUILD_SHA256_AARCH64="c94d9be9dc59936eaab3dc87ed05df7a3fb4faae0defe6400ad3ab44890cea70"
+ENGINE_BUILD_SHA256_AMD64="554eb46e0ae944a9b40ad190398fe1a4cd9df4269ae136de3bdff02ee0a31117"
+ENGINE_BUILD_SHA256_ARMV7="377809ed758eb30e7dcea24310e117adc0cef775a1ffe9dc06aedd9d440aa7e4"
+ENGINE_BUILD_SHA256_MIPS_24KC="8141c1b9444ee8774ba154a87fcbab0889e9076651cb4727b81e6db404ccec5b"
+ENGINE_BUILD_SHA256_MIPSEL_24KC="d50d87cc33424baff2f1197ca5b58f5517bf6a98936a93c7a2433edf91bc635f"
+# Optional gzip copy of the same build on flash; used only when its hash matches.
+ENGINE_CACHE_FILE="/etc/shpun/core-release/xray.gz"
+ENGINE_SHA_CACHE_FILE="/tmp/shpun-engine-sha256"
+ENGINE_UPGRADE_FAIL_FILE="/tmp/shpun-engine-upgrade-failed-at"
+ENGINE_UPGRADE_RETRY_INTERVAL=3600
 TUNNEL_PROBE_URL_DEFAULT="http://api.ipify.org"
 TUNNEL_EXIT_PROBE_URLS_DEFAULT="http://api.ipify.org http://ifconfig.me/ip http://icanhazip.com"
 TUNNEL_PROBE_FALLBACK_URL_DEFAULT="http://cp.cloudflare.com/generate_204"
@@ -533,9 +554,9 @@ http_get_to_file() {
 	local out="$2"
 
 	case "$HTTP_BIN" in
-		curl) curl -fsS -A "$HTTP_USER_AGENT" "$url" -o "$out" ;;
-		wget) wget -q -U "$HTTP_USER_AGENT" -O "$out" "$url" ;;
-		uclient-fetch) uclient-fetch -q -U "$HTTP_USER_AGENT" -O "$out" "$url" ;;
+		curl) curl -fsS --connect-timeout 10 --speed-limit 1 --speed-time 30 -m 600 -A "$HTTP_USER_AGENT" "$url" -o "$out" ;;
+		wget) wget -q -T 30 -U "$HTTP_USER_AGENT" -O "$out" "$url" ;;
+		uclient-fetch) uclient-fetch -q -T 30 -U "$HTTP_USER_AGENT" -O "$out" "$url" ;;
 		*) return 1 ;;
 	esac
 }
@@ -623,7 +644,7 @@ http_get_subscription_to_file() {
 
 	case "$HTTP_BIN" in
 		curl)
-			curl -fsS -A "$user_agent" \
+			curl -fsS --connect-timeout 10 --speed-limit 1 --speed-time 30 -m 600 -A "$user_agent" \
 				-H "x-hwid: $SUB_DEVICE_HWID" \
 				-H "x-device-os: $SUB_DEVICE_OS" \
 				-H "x-ver-os: $SUB_DEVICE_OS_VERSION" \
@@ -631,7 +652,7 @@ http_get_subscription_to_file() {
 				"$url" -o "$out"
 			;;
 		wget)
-			wget -q -U "$user_agent" \
+			wget -q -T 30 -U "$user_agent" \
 				--header="x-hwid: $SUB_DEVICE_HWID" \
 				--header="x-device-os: $SUB_DEVICE_OS" \
 				--header="x-ver-os: $SUB_DEVICE_OS_VERSION" \
@@ -639,7 +660,7 @@ http_get_subscription_to_file() {
 				-O "$out" "$url"
 			;;
 		uclient-fetch)
-			uclient-fetch -q -U "$user_agent" \
+			uclient-fetch -q -T 30 -U "$user_agent" \
 				--header="x-hwid: $SUB_DEVICE_HWID" \
 				--header="x-device-os: $SUB_DEVICE_OS" \
 				--header="x-ver-os: $SUB_DEVICE_OS_VERSION" \
@@ -654,9 +675,9 @@ http_get_stdout() {
 	local url="$1"
 
 	case "$HTTP_BIN" in
-		curl) curl -fsS -A "$HTTP_USER_AGENT" "$url" ;;
-		wget) wget -q -U "$HTTP_USER_AGENT" -O- "$url" ;;
-		uclient-fetch) uclient-fetch -q -U "$HTTP_USER_AGENT" -O- "$url" ;;
+		curl) curl -fsS --connect-timeout 10 --speed-limit 1 --speed-time 30 -m 600 -A "$HTTP_USER_AGENT" "$url" ;;
+		wget) wget -q -T 30 -U "$HTTP_USER_AGENT" -O- "$url" ;;
+		uclient-fetch) uclient-fetch -q -T 30 -U "$HTTP_USER_AGENT" -O- "$url" ;;
 		*) return 1 ;;
 	esac
 }
@@ -836,6 +857,9 @@ load_conf() {
 	[ -z "$SOCKS_PROXY_PORT" ]      && SOCKS_PROXY_PORT="$SOCKS_PROXY_PORT_DEFAULT"
 	[ -z "$DNS_PROXY_PORT" ]        && DNS_PROXY_PORT="$DNS_PROXY_PORT_DEFAULT"
 	[ -z "$TUNNEL_PROBE_INTERVAL" ] && TUNNEL_PROBE_INTERVAL="$TUNNEL_PROBE_INTERVAL_DEFAULT"
+	[ -z "$TUNNEL_PROBE_INTERVAL_TCP" ] && TUNNEL_PROBE_INTERVAL_TCP="$TUNNEL_PROBE_INTERVAL_TCP_DEFAULT"
+	case "$TUNNEL_PROBE_INTERVAL_TCP" in ''|*[!0-9]*) TUNNEL_PROBE_INTERVAL_TCP="$TUNNEL_PROBE_INTERVAL_TCP_DEFAULT" ;; esac
+	[ -z "${TUNNEL_CHECK_URL_BASE+x}" ] && TUNNEL_CHECK_URL_BASE="$TUNNEL_CHECK_URL_BASE_DEFAULT"
 	[ -z "$TUNNEL_FAIL_TIMEOUT" ]   && TUNNEL_FAIL_TIMEOUT="$TUNNEL_FAIL_TIMEOUT_DEFAULT"
 	[ -z "$AUTO_FAILOVER_ENABLE" ]  && AUTO_FAILOVER_ENABLE="$AUTO_FAILOVER_ENABLE_DEFAULT"
 	[ -z "$ENGINE_DOWNLOAD_RETRY_INTERVAL" ] && ENGINE_DOWNLOAD_RETRY_INTERVAL="$ENGINE_DOWNLOAD_RETRY_INTERVAL_DEFAULT"
@@ -1546,15 +1570,26 @@ rewrite_subscription_with_metadata() {
 	mv "$out" "$file"
 }
 
+# subscription_items_are_links FILE PATH: 0 when the first item at PATH is a
+# link string. Apps like Happ get full Xray client configs (JSON objects) from
+# the panel instead; the router cannot use those and must keep its subscription.
+subscription_items_are_links() {
+	[ "$(jsonfilter -i "$1" -t "$2" 2>/dev/null)" = string ] && return 0
+	log "subscription holds full client configs instead of links; the panel must serve links to the router User-Agent"
+	return 1
+}
+
 normalize_subscription_file() {
 	local file="$1"
 	local tmp line escaped first decoded links_tmp
 
 	if jsonfilter -i "$file" -e '@.subscription.links[0]' >/dev/null 2>&1; then
-		return 0
+		subscription_items_are_links "$file" '@.subscription.links[0]'
+		return $?
 	fi
 
 	if jsonfilter -i "$file" -e '@[0]' >/dev/null 2>&1; then
+		subscription_items_are_links "$file" '@[0]' || return 1
 		tmp="${file}.norm"
 		{
 			printf '{"subscription":{"links":'
@@ -1565,6 +1600,7 @@ normalize_subscription_file() {
 	fi
 
 	if jsonfilter -i "$file" -e '@.links[0]' >/dev/null 2>&1; then
+		subscription_items_are_links "$file" '@.links[0]' || return 1
 		tmp="${file}.norm"
 		{
 			printf '{"subscription":{"links":'
@@ -1649,7 +1685,7 @@ ensure_selected_link_valid() {
 install_updated_subscription_candidate() {
 	local candidate="$1"
 	local label="$2"
-	local backup selected_before selected_after
+	local backup selected_before selected_after auto_before auto_released=0
 
 	[ -s "$candidate" ] || return 1
 	[ -s "$SUB_FILE" ] || return 1
@@ -1672,14 +1708,23 @@ install_updated_subscription_candidate() {
 	fi
 
 	# A pinned server is a group, not a transient subscription index.
-	if [ "$(auto_select_current)" = 0 ] && [ -f "$STATE_DIR/server-selection.uc" ]; then
-		selected_after="$(ucode "$STATE_DIR/server-selection.uc" remap \
-			"$SUB_FILE" "$selected_before" "$candidate" "$selected_after" 2>/dev/null)" || {
-			log "$label: pinned server missing in refreshed subscription, keeping current selection"
-			rm -f "$candidate"
-			config_lock_release
-			return 1
-		}
+	# Never let a renamed or removed pinned server block subscription updates:
+	# the refreshed feed carries expiry and server changes the router must see.
+	auto_before="$(auto_select_current)"
+	if [ "$auto_before" = 0 ] && [ -f "$STATE_DIR/server-selection.uc" ]; then
+		local remapped
+		if remapped="$(ucode "$STATE_DIR/server-selection.uc" remap \
+			"$SUB_FILE" "$selected_before" "$candidate" "$selected_after" 2>/dev/null)"; then
+			selected_after="$remapped"
+		else
+			log "$label: pinned server missing in refreshed subscription; accepting it and returning to automatic selection"
+			if ! sub_atomic_write "$SERVER_AUTO_SELECT_FILE" 1; then
+				rm -f "$candidate"
+				config_lock_release
+				return 1
+			fi
+			auto_released=1
+		fi
 	fi
 
 	rm -f "$backup"
@@ -1723,6 +1768,7 @@ install_updated_subscription_candidate() {
 
 	mv "$backup" "$SUB_FILE"
 	printf '%s\n' "$selected_before" > "$STATE_DIR/selected_link_index"
+	[ "$auto_released" = 0 ] || sub_atomic_write "$SERVER_AUTO_SELECT_FILE" "$auto_before" || true
 	log "$label: candidate rejected, active subscription restored"
 	config_lock_release
 	return 1
@@ -2104,17 +2150,254 @@ ensure_routes_ready() {
 	fi
 }
 
+# SHA-256 the installed engine must have, empty when this release does not
+# pin one (an admin-chosen ENGINE_VERSION). ENGINE_SHA256 in agent.conf wins.
+engine_expected_sha256() {
+	if [ -n "$ENGINE_SHA256" ]; then
+		printf '%s\n' "$ENGINE_SHA256"
+		return 0
+	fi
+	case "$ENGINE_VERSION" in
+		"$ENGINE_VERSION_DEFAULT"|"$ENGINE_BUILD") ;;
+		*) return 1 ;;
+	esac
+	[ -n "$ENGINE_ARCH" ] || ENGINE_ARCH="$(detect_engine_arch)"
+	case "$ENGINE_ARCH" in
+		aarch64) echo "$ENGINE_BUILD_SHA256_AARCH64" ;;
+		amd64) echo "$ENGINE_BUILD_SHA256_AMD64" ;;
+		armv7) echo "$ENGINE_BUILD_SHA256_ARMV7" ;;
+		mips_24kc) echo "$ENGINE_BUILD_SHA256_MIPS_24KC" ;;
+		mipsel_24kc) echo "$ENGINE_BUILD_SHA256_MIPSEL_24KC" ;;
+		*) return 1 ;;
+	esac
+}
+
+# SHA-256 of the installed engine. The engine is only ever replaced by rename,
+# so inode and size identify it and the hash is computed once per file.
+engine_installed_sha256() {
+	local id cached sha
+
+	[ -x "$ENGINE_BIN" ] || return 1
+	id="$(ls -lin "$ENGINE_BIN" 2>/dev/null | awk '{print $1 ":" $6}')"
+	[ -n "$id" ] || return 1
+	cached="$(cat "$ENGINE_SHA_CACHE_FILE" 2>/dev/null || true)"
+	if [ "${cached%% *}" = "$id" ] && [ -n "${cached#* }" ]; then
+		printf '%s\n' "${cached#* }"
+		return 0
+	fi
+	sha="$(calc_sha256_file "$ENGINE_BIN")"
+	[ -n "$sha" ] || return 1
+	printf '%s %s\n' "$id" "$sha" > "$ENGINE_SHA_CACHE_FILE"
+	printf '%s\n' "$sha"
+}
+
+# engine_candidate_ok FILE EXPECTED TEST_CONFIG: the exact build (when one is
+# pinned), executable, answers "version", and with TEST_CONFIG=1 accepts the
+# current Xray config.
+engine_candidate_ok() {
+	[ -s "$1" ] || return 1
+	if [ -n "$2" ] && [ "$(calc_sha256_file "$1")" != "$2" ]; then
+		log "engine candidate rejected: sha256 differs from $2"
+		return 1
+	fi
+	chmod 755 "$1" 2>/dev/null || return 1
+	"$1" version >/dev/null 2>&1 || {
+		log "engine candidate rejected: version command failed"
+		return 1
+	}
+	if [ "$3" = 1 ] && [ -s "$ENGINE_CONFIG" ] &&
+		! "$1" run -test -config "$ENGINE_CONFIG" >/dev/null 2>&1; then
+		log "engine candidate rejected: current xray config does not pass its test"
+		return 1
+	fi
+	return 0
+}
+
+# engine_fetch_candidate DEST EXPECTED TEST_CONFIG: put a checked engine at
+# DEST from the flash cache or the download URLs. ENGINE_BIN is not touched.
+engine_fetch_candidate() {
+	local dest="$1" expected="$2" test_config="$3" tmp_err="$1.err" urls="" tried=" " url base err_line
+
+	rm -f "$dest" "$tmp_err"
+	if [ -n "$expected" ] && [ -s "$ENGINE_CACHE_FILE" ] &&
+		gzip -dc "$ENGINE_CACHE_FILE" > "$dest" 2>/dev/null &&
+		engine_candidate_ok "$dest" "$expected" "$test_config"; then
+		log "engine: verified build taken from $ENGINE_CACHE_FILE"
+		return 0
+	fi
+	rm -f "$dest"
+
+	detect_http_client
+	if [ -z "$HTTP_BIN" ]; then
+		log "engine_download: no HTTP client"
+		return 1
+	fi
+	ensure_bootstrap_dns
+
+	[ -n "$ENGINE_BASE_URLS" ] || ENGINE_BASE_URLS="$ENGINE_BASE_URL https://router.shpun.net/files/xray"
+	[ -n "$ENGINE_ARCH" ] || ENGINE_ARCH="$(detect_engine_arch)"
+	# The build name is immutable on the server; version and plain names follow.
+	if [ -n "$expected" ]; then
+		for base in $ENGINE_BASE_URLS; do
+			urls="$urls ${base%/}/xray-${ENGINE_ARCH}-${ENGINE_BUILD}"
+		done
+	fi
+	urls="$urls $ENGINE_URL"
+	for base in $ENGINE_BASE_URLS; do
+		url="$(engine_url_from_base "$base" || echo "")"
+		[ -n "$url" ] && urls="$urls $url"
+	done
+
+	for url in $urls; do
+		case "$tried" in *" $url "*) continue ;; esac
+		tried="$tried$url "
+		log "downloading engine from $url"
+		rm -f "$dest" "$tmp_err"
+		if ! http_get_to_file "$url" "$dest" 2>"$tmp_err"; then
+			log "failed to download engine from $url"
+			err_line="$(head -n 1 "$tmp_err" 2>/dev/null | tr -d '\r' || true)"
+			[ -n "$err_line" ] && log "engine download error: $err_line"
+			continue
+		fi
+		if engine_candidate_ok "$dest" "$expected" "$test_config"; then
+			rm -f "$tmp_err"
+			log "engine downloaded and verified from $url"
+			return 0
+		fi
+	done
+	rm -f "$dest" "$tmp_err"
+	return 1
+}
+
+engine_upgrade_due() {
+	local now last
+
+	now="$(date +%s 2>/dev/null || echo 0)"
+	last="$(cat "$ENGINE_UPGRADE_FAIL_FILE" 2>/dev/null | tr -d '\r\n ' || echo 0)"
+	case "$now" in ''|*[!0-9]*) now=0 ;; esac
+	case "$last" in ''|*[!0-9]*) last=0 ;; esac
+	[ "$last" -le 0 ] || [ "$((now - last))" -ge "$ENGINE_UPGRADE_RETRY_INTERVAL" ]
+}
+
+engine_upgrade_failed() {
+	date +%s > "$ENGINE_UPGRADE_FAIL_FILE" 2>/dev/null || true
+	log "engine: upgrade postponed for ${ENGINE_UPGRADE_RETRY_INTERVAL}s: $1"
+}
+
+# Every running Xray executes the file now at ENGINE_BIN (a process still on
+# the replaced binary shows the old path or "(deleted)").
+engine_running_is_installed() {
+	local pid exe found=0
+
+	for pid in $(pidof xray 2>/dev/null); do
+		exe="$(readlink "/proc/$pid/exe" 2>/dev/null || true)"
+		[ "$exe" = "$ENGINE_BIN" ] || return 1
+		found=1
+	done
+	[ "$found" = 1 ]
+}
+
+engine_tunnel_confirmed() {
+	local i=0
+
+	while [ "$i" -lt 4 ]; do
+		sleep 10
+		check_tunnel_connectivity
+		case "$?" in 0|2) return 0 ;; esac
+		i=$((i + 1))
+	done
+	return 1
+}
+
+# Replace a running engine whose build differs from the pinned one: verified
+# candidate first, then one restart with the same config, selection and mode.
+# The previous binary is kept until the tunnel works again and is restored
+# otherwise.
+maybe_upgrade_engine() {
+	local expected installed cand="${ENGINE_BIN}.candidate" prev="${ENGINE_BIN}.previous"
+
+	expected="$(engine_expected_sha256)" || return 0
+	[ -n "$expected" ] || return 0
+	installed="$(engine_installed_sha256)" || return 0
+	[ "$installed" != "$expected" ] || return 0
+	engine_upgrade_due || return 0
+	[ ! -d "${AUTO_FAILOVER_LOCKDIR:-/tmp/shpun-auto-failover.lock}" ] || return 0
+	planned_vpn_restart_active && return 0
+
+	log "engine: installed build $installed differs from $ENGINE_BUILD ($expected), preparing replacement"
+	if ! engine_fetch_candidate "$cand" "$expected" 1; then
+		rm -f "$cand"
+		engine_upgrade_failed "no verified candidate"
+		return 0
+	fi
+	if ! config_lock_acquire; then
+		rm -f "$cand"
+		return 0
+	fi
+	rm -f "$prev"
+	if ! mv "$ENGINE_BIN" "$prev"; then
+		rm -f "$cand"
+		config_lock_release
+		engine_upgrade_failed "cannot keep the previous binary"
+		return 0
+	fi
+	rm -f "$ENGINE_SHA_CACHE_FILE"
+	if ! mv "$cand" "$ENGINE_BIN"; then
+		mv "$prev" "$ENGINE_BIN"
+		rm -f "$cand"
+		config_lock_release
+		engine_upgrade_failed "cannot install the candidate"
+		return 0
+	fi
+
+	if restart_vpn && wait_vpn_started && engine_running_is_installed && engine_tunnel_confirmed; then
+		rm -f "$prev" "$ENGINE_UPGRADE_FAIL_FILE"
+		config_lock_release
+		log "engine: running verified build $ENGINE_BUILD"
+		return 0
+	fi
+
+	log "engine: new build did not confirm a working tunnel, restoring the previous binary"
+	mv -f "$prev" "$ENGINE_BIN"
+	rm -f "$ENGINE_SHA_CACHE_FILE"
+	if ! restart_vpn || ! wait_vpn_started; then
+		log "engine: previous binary did not start either"
+	fi
+	config_lock_release
+	engine_upgrade_failed "new build rejected after start"
+	return 0
+}
+
 engine_download() {
-	local url tried_urls tmp_err err_line now_ts last_fail_ts
+	local now_ts last_fail_ts expected installed cand="${ENGINE_BIN}.candidate"
 
 	if [ -z "$ENGINE_URL" ]; then
 		log "ENGINE_URL not set, skip engine download"
 		return 1
 	fi
 
+	expected="$(engine_expected_sha256 || true)"
 	if [ -x "$ENGINE_BIN" ]; then
 		rm -f "$ENGINE_DOWNLOAD_FAIL_FILE"
-		log "engine already present: $ENGINE_BIN"
+		[ -n "$expected" ] || {
+			log "engine already present: $ENGINE_BIN"
+			return 0
+		}
+		installed="$(engine_installed_sha256 || true)"
+		[ "$installed" != "$expected" ] || return 0
+		if is_vpn_process_running; then
+			log "engine: running build $installed differs from $ENGINE_BUILD, replacement left to the main loop"
+			return 0
+		fi
+		# Nothing runs it yet (an older boot copy): swap before the first start.
+		engine_upgrade_due || return 0
+		if engine_fetch_candidate "$cand" "$expected" 0 && rm -f "$ENGINE_SHA_CACHE_FILE" &&
+			mv -f "$cand" "$ENGINE_BIN"; then
+			log "engine: replaced build $installed with $ENGINE_BUILD before start"
+		else
+			rm -f "$cand"
+			engine_upgrade_failed "no verified candidate before start"
+		fi
 		return 0
 	fi
 
@@ -2127,74 +2410,13 @@ engine_download() {
 		return 1
 	fi
 
-	detect_http_client
-
-	if [ -z "$HTTP_BIN" ]; then
-		log "engine_download: no HTTP client"
-		return 1
-	fi
-	ensure_bootstrap_dns
-
 	mkdir -p "$(dirname "$ENGINE_BIN")" 2>/dev/null || true
-
-	tried_urls=" $ENGINE_URL "
-	tmp_err="${ENGINE_BIN}.download.err"
-
-	for url in "$ENGINE_URL"; do
-		log "downloading engine from $url to $ENGINE_BIN"
-		rm -f "$tmp_err"
-		if http_get_to_file "$url" "$ENGINE_BIN" 2>"$tmp_err"; then
-			if [ -s "$ENGINE_BIN" ]; then
-				chmod +x "$ENGINE_BIN" 2>/dev/null || {
-					log "failed to chmod +x engine"
-					rm -f "$ENGINE_BIN" "$tmp_err"
-					return 1
-				}
-				rm -f "$tmp_err"
-				log "engine downloaded and ready: $ENGINE_BIN"
-				return 0
-			fi
-			log "downloaded engine file is empty from $url"
-		else
-			log "failed to download engine from $url"
-			err_line="$(head -n 1 "$tmp_err" 2>/dev/null | tr -d '\r' || true)"
-			[ -n "$err_line" ] && log "engine download error: $err_line"
-		fi
-		rm -f "$ENGINE_BIN"
-	done
-
-	[ -z "$ENGINE_BASE_URLS" ] && ENGINE_BASE_URLS="$ENGINE_BASE_URL https://router.shpun.net/files/xray"
-	for base in $ENGINE_BASE_URLS; do
-		url="$(engine_url_from_base "$base" || echo "")"
-		[ -n "$url" ] || continue
-		case "$tried_urls" in
-			*" $url "*) continue ;;
-		esac
-		tried_urls="${tried_urls}${url} "
-
-		log "downloading engine from fallback $url to $ENGINE_BIN"
-		rm -f "$tmp_err"
-		if http_get_to_file "$url" "$ENGINE_BIN" 2>"$tmp_err"; then
-			if [ -s "$ENGINE_BIN" ]; then
-				chmod +x "$ENGINE_BIN" 2>/dev/null || {
-					log "failed to chmod +x engine"
-					rm -f "$ENGINE_BIN" "$tmp_err"
-					return 1
-				}
-				rm -f "$tmp_err"
-				log "engine downloaded and ready: $ENGINE_BIN"
-				return 0
-			fi
-			log "downloaded engine file is empty from $url"
-		else
-			log "failed to download engine from fallback $url"
-			err_line="$(head -n 1 "$tmp_err" 2>/dev/null | tr -d '\r' || true)"
-			[ -n "$err_line" ] && log "engine download error: $err_line"
-		fi
-		rm -f "$ENGINE_BIN"
-	done
-
-	rm -f "$tmp_err"
+	if engine_fetch_candidate "$cand" "$expected" 0 && rm -f "$ENGINE_SHA_CACHE_FILE" &&
+		mv -f "$cand" "$ENGINE_BIN"; then
+		log "engine downloaded and ready: $ENGINE_BIN"
+		return 0
+	fi
+	rm -f "$cand"
 	[ "$now_ts" -gt 0 ] && echo "$now_ts" > "$ENGINE_DOWNLOAD_FAIL_FILE"
 	log "failed to download engine from all sources"
 	return 1
@@ -2485,8 +2707,64 @@ check_tunnel_connectivity_basic() {
 	return 1
 }
 
+# One check of the live tunnel, like a page load: a single HTTPS connection
+# through it carries the exit address, a small download and two short requests
+# for the delay. 0 = all fine, 2 = reachable but the download fell short,
+# 1 = the check host did not answer (the caller falls back to older probes).
+probe_tunnel_combined() {
+	local b tmp lines ip ms delay
+	[ "$HTTP_BIN" = curl ] && [ -n "$TUNNEL_CHECK_URL_BASE" ] || return 1
+	b="$TUNNEL_CHECK_URL_BASE"
+	tmp="/tmp/shpun-tunnel-check.$$"
+	lines="$(curl -q -sS --connect-timeout 5 -m 10 -A "$HTTP_USER_AGENT" -x "http://127.0.0.1:${HTTP_PROXY_PORT}" \
+		-w '%{http_code} %{size_download} %{time_appconnect} %{time_starttransfer} %{time_total}\n' \
+		-o "$tmp" "$b/cdn-cgi/trace" -o /dev/null "$b/__down?bytes=$TUNNEL_QUALITY_PROBE_MIN_BYTES" \
+		-o /dev/null "$b/cdn-cgi/trace" -o /dev/null "$b/cdn-cgi/trace" 2>/dev/null)"
+	ip="$(sed -n 's/^ip=//p' "$tmp" 2>/dev/null | head -n 1)"
+	rm -f "$tmp"
+	set -- $(printf '%s\n' "$lines" | sed -n 1p)
+	[ "${1:-000}" = 200 ] && [ -n "$ip" ] || return 1
+	ms="$(seconds_to_ms "$5")"
+	cache_tunnel_exit "$ip" "$ms" || return 1
+	set -- $(printf '%s\n' "$lines" | sed -n 2p)
+	[ "${1:-000}" = 200 ] && [ "${2:-0}" -ge "$TUNNEL_QUALITY_PROBE_MIN_BYTES" ] 2>/dev/null || return 2
+	# Delay as a speed test's ping sees it: requests on the already open connection.
+	delay="$(printf '%s\n' "$lines" | sed -n '3,4p' | awk '$1 == 200 && $4 > $3 { s += $4 - $3; n++ } END { if (n) printf "%d\n", s / n * 1000 + 0.5 }')"
+	case "$delay" in
+		''|*[!0-9]*) rm -f "$TUNNEL_DELAY_FILE" ;;
+		*) printf '%s\n' "$delay" > "$TUNNEL_DELAY_FILE" ;;
+	esac
+	TUNNEL_DELAY_FRESH=1
+	return 0
+}
+
+active_transport_is_quic() {
+	case "$(jsonfilter -i "$ENGINE_CONFIG" -e '@.outbounds[@.tag="proxy"].protocol' 2>/dev/null | head -n 1)" in
+		hysteria*) return 0 ;;
+	esac
+	return 1
+}
+
+# Seconds between live tunnel checks: the normal interval for Hysteria and for
+# a tunnel that is failing, the longer TCP interval for a healthy TCP tunnel.
+tunnel_probe_interval() {
+	if [ "${TUNNEL_BASIC_FAIL_SECONDS:-0}" -eq 0 ] && [ "${TUNNEL_QUALITY_FAIL_SECONDS:-0}" -eq 0 ] &&
+		[ "$TUNNEL_PROBE_INTERVAL_TCP" -gt "$TUNNEL_PROBE_INTERVAL" ] && ! active_transport_is_quic; then
+		echo "$TUNNEL_PROBE_INTERVAL_TCP"
+	else
+		echo "$TUNNEL_PROBE_INTERVAL"
+	fi
+}
+
 check_tunnel_connectivity() {
-	check_tunnel_connectivity_basic || return 1
+	local rc
+	detect_http_client
+	probe_tunnel_combined
+	rc=$?
+	[ "$rc" -eq 0 ] && return 0
+	if [ "$rc" -ne 2 ]; then
+		check_tunnel_connectivity_basic || return 1
+	fi
 	probe_tunnel_quality || {
 		log "tunnel quality probe failed"
 		return 2
@@ -2571,10 +2849,70 @@ recover_current_server() {
 	return 1
 }
 
+# Live request delay through the active tunnel for the LuCI widget: time to the
+# first response byte after the TLS session is up (comparable to ping, but over
+# the real VPN path). Kept in RAM; the widget ignores it once stale.
+TUNNEL_DELAY_FILE="/tmp/shpun-tunnel-delay-ms"
+# Delay of a request through the live tunnel, as a speed test's ping sees it:
+# four requests on one connection, the median of the last three (the first one
+# also carries the connection setup). A single sample taken during a download
+# would show the load, not the server.
+measure_tunnel_delay() {
+	local timing ms url
+	# Already measured by this round's combined tunnel check.
+	if [ "${TUNNEL_DELAY_FRESH:-0}" = 1 ]; then
+		TUNNEL_DELAY_FRESH=0
+		return 0
+	fi
+	[ "$HTTP_BIN" = curl ] || return 0
+	url="${TUNNEL_DELAY_URL:-https://www.gstatic.com/generate_204}"
+	timing="$(curl -q -s --connect-timeout 3 -m 8 -A "$HTTP_USER_AGENT" \
+		-x "http://127.0.0.1:${HTTP_PROXY_PORT}" -w '%{time_starttransfer}\n' \
+		-o /dev/null -o /dev/null -o /dev/null -o /dev/null "$url" "$url" "$url" "$url" 2>/dev/null)" || { rm -f "$TUNNEL_DELAY_FILE"; return 0; }
+	ms="$(printf '%s\n' "$timing" | awk 'NR > 1 && $1 > 0 { v[++n] = $1 * 1000 }
+		END { if (n < 2) exit 1; for (i = 1; i <= n; i++) for (j = i + 1; j <= n; j++) if (v[j] < v[i]) { t = v[i]; v[i] = v[j]; v[j] = t }
+			printf "%d\n", v[int((n + 1) / 2)] + 0.5 }')"
+	case "$ms" in
+		''|*[!0-9]*) rm -f "$TUNNEL_DELAY_FILE" ;;
+		*) printf '%s\n' "$ms" > "$TUNNEL_DELAY_FILE" ;;
+	esac
+}
+
+# Refresh per-server VPN times for the LuCI list while the tunnel is healthy.
+# The selector itself skips the run when memory is low or a selection is active.
+maybe_measure_servers() {
+	local now last interval file="/tmp/shpun-selection-measured-at"
+	[ "$AUTO_FAILOVER_ENABLE" -eq 1 ] && [ -x "$AUTO_FAILOVER_SCRIPT" ] || return 0
+	[ ! -d "${AUTO_FAILOVER_LOCKDIR:-/tmp/shpun-auto-failover.lock}" ] || return 0
+	[ ! -s /tmp/shpun-subscription-portal/blocked ] || return 0
+	interval="${SERVER_MEASURE_INTERVAL:-14400}"
+	case "$interval" in ''|*[!0-9]*) interval=14400 ;; esac
+	[ "$interval" -gt 0 ] || return 0
+	now="$(date +%s)"
+	last="$(cat "$file" 2>/dev/null | tr -d '\r\n ' || true)"
+	case "$last" in
+		''|*[!0-9]*)
+			# First run after boot or agent start: give the router 15 minutes.
+			printf '%s\n' "$((now - interval + 900))" > "$file" 2>/dev/null || true
+			return 0
+			;;
+	esac
+	[ "$now" -lt "$last" ] || [ "$((now - last))" -ge "$interval" ] || return 0
+	printf '%s\n' "$now" > "$file" 2>/dev/null || true
+	log "refreshing server VPN times in background"
+	"$AUTO_FAILOVER_SCRIPT" --measure >/dev/null 2>&1 &
+}
+
 grouped_recovery_due() {
-	local last cooldown now
+	local last cooldown now next
 	[ "$AUTO_FAILOVER_ENABLE" -eq 1 ] && [ -x "$AUTO_FAILOVER_SCRIPT" ] || return 1
 	[ ! -d "${AUTO_FAILOVER_LOCKDIR:-/tmp/shpun-auto-failover.lock}" ] || return 1
+	# auto-failover.sh owns the escalating schedule; it re-checks it as well.
+	next="$(cat "$STATE_DIR/auto_failover_next_attempt" 2>/dev/null | tr -d '\r\n ' || true)"
+	case "$next" in
+		''|*[!0-9]*) ;;
+		*) now="$(date +%s)"; [ "$now" -ge "$next" ] || [ "$((next - now))" -gt 3600 ]; return ;;
+	esac
 	last="$(cat "$STATE_DIR/auto_failover_last_attempt" 2>/dev/null || true)"
 	cooldown="$AUTO_FAILOVER_COOLDOWN"
 	case "$last" in ''|*[!0-9]*) return 0 ;; esac
@@ -3504,7 +3842,7 @@ main_loop() {
 				esac
 
 				if is_vpn_process_running &&
-					[ "$((NOW_TS - LAST_TUNNEL_PROBE))" -ge "$TUNNEL_PROBE_INTERVAL" ]; then
+					[ "$((NOW_TS - LAST_TUNNEL_PROBE))" -ge "$(tunnel_probe_interval)" ]; then
 					LAST_TUNNEL_PROBE="$NOW_TS"
 
 					if check_tunnel_connectivity; then
@@ -3514,7 +3852,11 @@ main_loop() {
 						TUNNEL_QUALITY_FAIL_SECONDS=0
 						TUNNEL_BASIC_WARNED=0
 						TUNNEL_QUALITY_WARNED=0
-						rm -f "$TUNNEL_QUALITY_DEGRADED_FILE" "$AUTO_RECOVERY_LAST_ATTEMPT_FILE" "$AUTO_RECOVERY_FAIL_COUNT_FILE"
+						rm -f "$TUNNEL_QUALITY_DEGRADED_FILE" "$AUTO_RECOVERY_LAST_ATTEMPT_FILE" "$AUTO_RECOVERY_FAIL_COUNT_FILE" \
+							"$STATE_DIR/auto_failover_fail_count" "$STATE_DIR/auto_failover_next_attempt"
+						measure_tunnel_delay
+						maybe_measure_servers
+						maybe_upgrade_engine
 					else
 						probe_rc="$?"
 						if [ "$probe_rc" -eq 2 ]; then

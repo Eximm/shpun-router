@@ -12,7 +12,7 @@ for version in 24 25; do
  sh -n "$d/agent-$version.sh"
  ucode -c -o /dev/null "$d/rpc-$version.uc"
  # Extract only pure subscription helpers, never source or launch the agent.
- awk '/^(json_escape_string|base64_decode_subscription|extract_uri_links_file|write_links_json_from_lines|normalize_subscription_file)\(\)/ { emit=1 } emit { print } emit && /^}/ { emit=0 }' "$d/agent-$version.sh" > "$d/helpers.sh"
+ awk '/^(json_escape_string|base64_decode_subscription|extract_uri_links_file|write_links_json_from_lines|subscription_items_are_links|normalize_subscription_file)\(\)/ { emit=1 } emit { print } emit && /^}/ { emit=0 }' "$d/agent-$version.sh" > "$d/helpers.sh"
  (
   . "$d/helpers.sh"
   log() { :; }
@@ -22,9 +22,15 @@ for version in 24 25; do
   printf '%s' 'aHkyOi8vdGVzdEBleGFtcGxlLmNvbTo0NDM=' > "$d/encoded"
   normalize_subscription_file "$d/encoded"
   [ "$(jsonfilter -i "$d/encoded" -e '@.subscription.links[0]')" = 'hy2://test@example.com:443' ]
+  # Full Xray client configs (the panel's answer to apps like Happ) are refused unchanged.
+  for body in '[{"remarks":"x","outbounds":[{"protocol":"vless"}]}]' '{"subscription":{"links":[{"outbounds":[]}]}}' '{"links":[{"outbounds":[]}]}'; do
+   printf '%s' "$body" > "$d/configs"
+   if normalize_subscription_file "$d/configs"; then echo 'FAIL accepted client configs as links'; exit 1; fi
+   [ "$(cat "$d/configs")" = "$body" ] || { echo 'FAIL refused configs were rewritten'; exit 1; }
+  done
  )
- echo "PASS mixed and base64 subscription OpenWrt$version"
- for uri in 'hysteria2://test%40auth@example.com/?sni=example.com' 'hy2://user:pass@[2001:db8::1]:8443?insecure=0' 'hy2://a@example.com?obfs=salamander&obfs-password=abc%2Bdef' 'vless://00000000-0000-0000-0000-000000000001@example.com:443?security=tls&type=tcp&sni=example.com'; do
+ echo "PASS mixed and base64 subscription, client configs refused OpenWrt$version"
+ for uri in 'hysteria2://test%40auth@example.com/?sni=example.com' 'hy2://user:pass@[2001:db8::1]:8443?insecure=0' 'hy2://a@example.com?obfs=salamander&obfs-password=abc%2Bdef' 'vless://00000000-0000-0000-0000-000000000001@example.com:443?security=tls&type=tcp&sni=example.com' 'vless://00000000-0000-0000-0000-000000000001@example.com:443?encryption=none&flow=xtls-rprx-vision&type=raw&security=tls&sni=example.com&fp=chrome'; do
   printf '{"subscription":{"links":["%s"]}}' "$uri" > "$SUB_FILE"
   sh "$d/build-$version.sh"
   /tmp/xray run -test -config "$OUT_CFG" >/dev/null

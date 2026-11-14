@@ -421,6 +421,8 @@ if [ "$PROTO" = "vless" ]; then
         RANDOM_UA="$(url_decode "$(get_first_param randomUserAgent random_user_agent userAgentRandom user_agent_random randomUA random_ua)")"
 
         [ -z "$TYPE" ]       && TYPE="tcp"
+        # Xray calls plain TCP "raw" since 24.9; links may use either name.
+        [ "$TYPE" = "raw" ]  && TYPE="tcp"
         [ -z "$FP" ]         && FP="firefox"
         [ -z "$ENCRYPTION" ] && ENCRYPTION="none"
         [ -z "$SNI" ]        && SNI="$HOST"

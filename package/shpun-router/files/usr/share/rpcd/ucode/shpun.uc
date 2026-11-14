@@ -1,5 +1,5 @@
-import { open, popen, rename, unlink } from "fs";
-import { link_value, subscription_links, server_identity, server_groups } from "/etc/shpun/server-groups.uc";
+import { open, popen, rename, unlink, stat } from "fs";
+import { link_value, subscription_links, server_identity, server_groups, is_ru_exit, transport_rank, compare_delay } from "/etc/shpun/server-groups.uc";
 
 const DIR       = "/etc/shpun";
 const CODE      = DIR + "/router_code";
@@ -17,6 +17,7 @@ const TUNNEL_EXIT_IP = DIR + "/tunnel_exit_ip";
 const TUNNEL_EXIT_CHECK_MS = DIR + "/tunnel_exit_check_ms";
 const TUNNEL_EXIT_PING_MS = DIR + "/tunnel_exit_ping_ms";
 const TUNNEL_EXIT_LAST_OK = DIR + "/tunnel_exit_last_ok";
+const TUNNEL_DELAY = "/tmp/shpun-tunnel-delay-ms";
 
 const SERVER_AUTO_SELECT = DIR + "/server_auto_select";
 const SERVER_AUTO_EXCLUDE_RU = DIR + "/server_auto_exclude_ru";
@@ -447,7 +448,9 @@ function parse_link_info(link, idx, selected) {
 		security: security,
 		host: host,
 		port: port,
-		name: name
+		name: name,
+		// The transport goes through a Russian relay ("Через РФ", "XHTTP RF").
+		via_ru: !!match(lc(replace(fragment, /%([0-9a-fA-F]{2})/g, (m, h) => chr(int(h, 16)))), /(через[ +]рф|Через[ +]РФ|ЧЕРЕЗ[ +]РФ|[ +]rf([ +]|$))/)
 	};
 }
 
@@ -464,7 +467,8 @@ function public_server_info(info) {
 		security: info.security,
 		name: info.name,
 		host: info.host,
-		port: info.port
+		port: info.port,
+		via_ru: info.via_ru
 	};
 }
 
@@ -493,10 +497,178 @@ function get_current_server() {
 	return parse_link_info(links[selected], selected, true);
 }
 
+function is_safe_ping_host(host) {
+	host = trim(norm(host));
+	return !!(host && length(host) <= 253 && index(host, ".") >= 0 &&
+		match(host, /^[A-Za-z0-9.-]+$/));
+}
+
+function parse_ping_ms(value) {
+	value = trim(norm(value));
+	let m = match(value, /^([0-9]+)(\.[0-9]+)?$/);
+	if (!m) return null;
+	let ms = int(m[1]);
+	if (ms > 10000) return null;
+	return ms < 1 ? 1 : ms;
+}
+
+// Parallel ICMP to the connection endpoints (max 16 at once): the average of
+// two packets, 1 s timeout each. This is the path to the server or to the RU
+// gateway, not a tunnel check.
+function measure_host_latencies(hosts) {
+	let result = {}, cmd = "", pending = 0, i = 0;
+	for (let host in hosts) {
+		if (!is_safe_ping_host(host)) continue;
+		cmd += "(o=$(ping -n -q -c 2 -W 1 " + host + " 2>/dev/null); v=${o##*= }; v=${v#*/}; " +
+			"case \"$o\" in *round-trip*) v=${v%%/*} ;; *) v=- ;; esac; printf '%s %s\\n' " + host + " \"$v\") & ";
+		if (++pending >= 16) { cmd += "wait; "; pending = 0; }
+		i++;
+	}
+	if (!i) return result;
+	for (let line in split(trim(readcmd(cmd + "wait")), "\n")) {
+		let parts = split(trim(line), " ");
+		if (length(parts) == 2) result[parts[0]] = parse_ping_ms(parts[1]);
+	}
+	return result;
+}
+
+// Tunnel transfer times recorded by auto-failover.sh ("index seconds|fail epoch").
+const SELECTION_SCORES = "/tmp/shpun-selection-delay";
+const SELECTION_PROGRESS = "/tmp/shpun-selection-progress";
+const SELECTION_MEASURED_AT = "/tmp/shpun-selection-measured-at";
+const SELECTION_SCORE_TTL = 6 * 3600;
+// A failed check is a moment, not a verdict: short outages must not mark a
+// server unavailable for hours. Successful measurements stay longer.
+const SELECTION_FAIL_TTL = 3600;
+// The agent probes the live tunnel every 60 s; a success within this window
+// proves the current server works regardless of stored measurements.
+const LIVE_TUNNEL_OK_WINDOW = 180;
+// Background measuring runs every 4 h; an older pass result is not shown as
+// verified.
+const CHECK_FRESH_TTL = 4 * 3600 + 1800;
+
+// scores: index -> delay ms (-1 = failed); times, when given, gets the epoch
+// of each kept result.
+function read_selection_scores(times) {
+	let scores = {}, now = time();
+	// Indexes are only meaningful for the subscription they were measured on.
+	let since = stat(SUB)?.mtime || 0;
+	for (let line in split(readfile(SELECTION_SCORES) || "", "\n")) {
+		let p = split(trim(line), " ");
+		if (length(p) != 3) continue;
+		let at = int(p[2]);
+		let failed = p[1] == "fail";
+		if (at <= 0 || at < since || at - now > 300 ||
+			now - at > (failed ? SELECTION_FAIL_TTL : SELECTION_SCORE_TTL)) {
+			// The newest line for an index wins; an expired one must not leave
+			// an older result in place.
+			delete scores[p[0]];
+			if (times) delete times[p[0]];
+			continue;
+		}
+		scores[p[0]] = failed ? -1 : int(+p[1] * 1000);
+		if (times) times[p[0]] = at;
+	}
+	return scores;
+}
+
+// Short public name of a connection type, e.g. "Hysteria 2" or "Reality через РФ".
+function transport_title(info, via_gateway) {
+	let p = lc(info.proto || "");
+	let base = (p == "hysteria2" || p == "hy2" || p == "hysteria") ? "Hysteria 2" :
+		(info.transport == "xhttp" ? "XHTTP" : (info.security == "reality" ? "Reality" : "VLESS"));
+	return via_gateway ? base + " через РФ" : base;
+}
+
+// The connection a server uses: the active one for the current server, else the
+// best verified one (relays only when clearly faster, see compare_delay), else
+// the one the router would try first.
+function group_connection(group, links, scores, selected) {
+	if (index(group.indexes, selected) >= 0) return selected;
+	let pick = null, best = null;
+	for (let idx in group.indexes) {
+		let s = scores["" + idx];
+		if (s == null || s < 0) continue;
+		s = compare_delay(links[idx], s / 1000.0);
+		if (best == null || s < best) { best = s; pick = idx; }
+	}
+	if (pick != null) return pick;
+	pick = group.indexes[0];
+	for (let idx in group.indexes)
+		if (transport_rank(links[idx]) < transport_rank(links[pick])) pick = idx;
+	return pick;
+}
+
+function server_rows(links, selected, with_ping) {
+	let groups = server_groups(links), hosts = [], conns = [], times = {};
+	let scores = read_selection_scores(times);
+	for (let g in groups) {
+		let idx = group_connection(g, links, scores, selected);
+		let info = parse_link_info(links[idx], idx, false);
+		let via_gateway = transport_rank(links[idx]) == 3 || server_group(info) == "gateway";
+		let s = scores["" + idx];
+		push(conns, { idx, host: info.host, via_gateway, title: transport_title(info, via_gateway),
+			delay: s != null && s >= 0 ? s : null,
+			checked_age: s != null && s >= 0 && times["" + idx] ? time() - times["" + idx] : null });
+		if (info.host && index(hosts, info.host) < 0) push(hosts, info.host);
+	}
+	let latencies = with_ping ? measure_host_latencies(hosts) : {};
+	let last_ok = int(trim(readfile(TUNNEL_EXIT_LAST_OK) || "0"));
+	let live_ok = exists(READY) && last_ok > 0 && time() - last_ok <= LIVE_TUNNEL_OK_WINDOW && last_ok - time() <= 300;
+
+	let rows = [];
+	for (let i = 0; i < length(groups); i++) {
+		let g = groups[i], tunnel = null, failed = 0, checked = 0;
+		let is_current = index(g.indexes, selected) >= 0;
+		for (let idx in g.indexes) {
+			let s = scores["" + idx];
+			if (s == null) continue;
+			checked++;
+			if (s < 0) failed++;
+			else if (tunnel == null || s < tunnel) tunnel = s;
+		}
+		let c = conns[i];
+		// The live tunnel proves the current connection independently.
+		let verified = (is_current && live_ok) || (c.delay != null && c.checked_age != null && c.checked_age <= CHECK_FRESH_TTL);
+		push(rows, {
+			id: g.key, index: g.indexes[0], name: g.name,
+			selected: is_current,
+			ru_exit: is_ru_exit(g),
+			// ICMP to the endpoint of that connection: the server itself, or
+			// the RU gateway for relays (ping_target says which).
+			latency_ms: c.host ? latencies[c.host] : null,
+			ping_target: c.via_gateway ? "gateway" : "server",
+			transport: c.title,
+			// VPN check of that same connection: delay and age of the result.
+			tunnel_ms: c.delay != null ? c.delay : tunnel,
+			compare_ms: c.delay != null ? int(compare_delay(links[c.idx], c.delay / 1000.0) * 1000 + 0.5) : null,
+			checked_age_s: c.checked_age,
+			verified,
+			tunnel_failed: checked > 0 && failed == checked && !(is_current && live_ok)
+		});
+	}
+
+	// Recommend the fastest verified non-RU server; without tunnel checks,
+	// the one with the lowest server response time.
+	let best = null, key = null;
+	for (let r in rows) {
+		if (r.ru_exit || r.tunnel_failed) continue;
+		let v = r.compare_ms != null ? r.compare_ms : (r.latency_ms != null ? 100000 + r.latency_ms : null);
+		if (v != null && (key == null || v < key)) { best = r; key = v; }
+	}
+	if (best) best.recommended = true;
+	return rows;
+}
+
 function server_selection_running() {
 	let status = trim(readfile(SERVER_AUTO_STATUS));
-	return (status == "starting" || status == "running") &&
-		trim(readcmd("test -d /tmp/shpun-auto-failover.lock && echo busy")) == "busy";
+	if (status != "starting" && status != "running")
+		return false;
+	if (trim(readcmd("test -d /tmp/shpun-auto-failover.lock && echo busy")) == "busy")
+		return true;
+	// The selector was just launched and has not taken its lock yet.
+	let at = stat(SERVER_AUTO_STATUS)?.mtime || 0;
+	return status == "starting" && time() - at < 15;
 }
 
 function start_server_selection(args) {
@@ -684,6 +856,14 @@ return {
 									server_public.exit_ping_ms = exit_ping_ms;
 							}
 
+							// Live delay through the tunnel, measured by the agent every minute.
+							let delay_at = stat(TUNNEL_DELAY)?.mtime || 0;
+							if (delay_at > 0 && time() - delay_at <= 180) {
+								let tunnel_delay_ms = int(trim(readfile(TUNNEL_DELAY)));
+								if (tunnel_delay_ms > 0 && tunnel_delay_ms <= 30000)
+									server_public.tunnel_delay_ms = tunnel_delay_ms;
+							}
+
 							let exit_last_ok = int(trim(readfile(TUNNEL_EXIT_LAST_OK)));
 							if (exit_last_ok > 0)
 								server_public.exit_last_ok = exit_last_ok;
@@ -704,6 +884,22 @@ return {
 					res.auto_admin_disabled = auto_admin ? 1 : 0;
 					res.auto_effective_enabled = (auto_sel == 1 && !auto_admin) ? 1 : 0;
 					res.tunnel_quality_degraded = exists(TUNNEL_QUALITY_DEGRADED) ? 1 : 0;
+
+					// Cheap suggestion from stored VPN measurements only (no ping here:
+					// the widget refreshes this often). Shown when another server is
+					// clearly faster than the current one.
+					try {
+						let rows = server_rows(subscription_links(parse_json_safe(readfile(SUB))),
+							int(trim(readfile(SELECTED_LINK) || "0")), false);
+						let rec = null, cur = null;
+						for (let r in rows) {
+							if (r.recommended) rec = r;
+							if (r.selected) cur = r;
+						}
+						if (rec && !rec.selected && rec.tunnel_ms != null)
+							res.recommendation = { index: rec.index, id: rec.id, name: rec.name, tunnel_ms: rec.tunnel_ms,
+								current_tunnel_ms: cur ? cur.tunnel_ms : null };
+					} catch(e) {}
 
 					return res;
 				} catch(e) {
@@ -955,12 +1151,10 @@ return {
 				try {
 					let links = subscription_links(parse_json_safe(readfile(SUB)));
 					let selected = int(trim(readfile(SELECTED_LINK) || "0"));
-					let servers = [];
-					for (let group in server_groups(links))
-						push(servers, { id: group.key, index: group.indexes[0], name: group.name,
-							selected: index(group.indexes, selected) >= 0 });
+					let servers = server_rows(links, selected, true);
 					let admin_disabled = auto_admin_disabled();
 					return { ok: 1, selected, count: length(servers), servers,
+						measured_at: int(trim(readfile(SELECTION_MEASURED_AT) || "0")) || null,
 						auto_admin_disabled: admin_disabled ? 1 : 0,
 						auto_effective_enabled: read_toggle(SERVER_AUTO_SELECT, 1) == 1 && !admin_disabled ? 1 : 0,
 						auto_running: server_selection_running() };
@@ -1041,13 +1235,24 @@ return {
 			}
 		},
 
+		servers_measure: {
+			call: function() {
+				return start_server_selection("--measure");
+			}
+		},
+
 		server_auto_status: {
 			call: function(req) {
 				try {
 					let status = trim(readfile(SERVER_AUTO_STATUS));
 					let selected = int(trim(readfile(SELECTED_LINK) || "0"));
 					let running = server_selection_running();
-					return { ok: 1, status: status || "idle", running: running, selected: selected };
+					let res = { ok: 1, status: status || "idle", running: running, selected: selected };
+					// "<tested> <total> <action>" written by auto-failover.sh while probing.
+					let p = split(trim(readfile(SELECTION_PROGRESS) || ""), " ");
+					if (running && length(p) == 3)
+						res.progress = { tested: int(p[0]), total: int(p[1]), action: p[2] };
+					return res;
 				} catch(e) {
 					return { ok: 0, error: ("" + e) };
 				}

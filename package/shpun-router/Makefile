@@ -150,6 +150,26 @@ define Package/$(PKG_NAME)/postinst
 		/etc/shpun/routes/presets/always_vpn.domains-opkg-new \
 		/etc/shpun/routes/presets/always_vpn.cidrs-opkg-new 2>/dev/null || true
 
+	# Server measurements moved to /tmp/shpun-selection-delay in 1.2.4.
+	rm -f /tmp/shpun-selection-scores 2>/dev/null || true
+
+	# Copies kept during a config rewrite are named *.previous.<pid>; drop the
+	# ones whose writer is gone (interrupted writes), keep any still in use.
+	for stale_copy in /etc/shpun/*.previous.*; do
+		[ -f "$$stale_copy" ] || continue
+		stale_pid="$${stale_copy##*.previous.}"
+		case "$$stale_pid" in ''|*[!0-9]*) continue ;; esac
+		[ -d "/proc/$$stale_pid" ] || rm -f "$$stale_copy"
+	done
+
+	# Earlier manual hotfixes seeded a fixed Xray at boot. The agent now installs
+	# and verifies the pinned build itself (and reuses that flash copy when its
+	# hash matches), so the old seed services are only disabled, files kept.
+	for legacy_seed in shpun-xray-udp-seed shpun-core-seed; do
+		[ -x "/etc/init.d/$$legacy_seed" ] || continue
+		"/etc/init.d/$$legacy_seed" disable 2>/dev/null || true
+	done
+
 	# opkg preserves locally edited files under /etc and writes the packaged copy
 	# as .opkg-new. Keep those edits, but migrate the retired download host in the
 	# active runtime files so a later routing-mode change cannot use the old host.
