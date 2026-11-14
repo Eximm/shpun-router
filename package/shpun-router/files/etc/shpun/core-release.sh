@@ -18,7 +18,7 @@ if ! mkdir "$state/lock" 2>/dev/null; then
  rmdir "$state/lock"
  mkdir "$state/lock"
 fi
-echo $ > "$state/lock/pid"
+echo $$ > "$state/lock/pid"
 candidate= stage=
 cleanup() {
  [ -z "$candidate" ] || rm -f "$candidate"
@@ -82,6 +82,7 @@ case "$1" in
    cp -p "$target" "$state/previous"
    hash "$state/previous" > "$state/previous.sha256"
   fi
+  rm -f "$state/confirmed"
   touch "$state/pending"
   mv "$candidate" "$target"
   rm -f "$state/failed"
