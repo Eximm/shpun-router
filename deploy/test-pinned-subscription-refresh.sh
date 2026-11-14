@@ -15,6 +15,18 @@ VERROR_FILE="$state/vpn_error"
 # Never touch the real measurements of the machine running the test.
 export SELECTION_SCORES_FILE="$state/scores" SELECTION_MEASURED_AT_FILE="$state/measured-at"
 cp "$files/etc/shpun/server-groups.uc" "$files/etc/shpun/server-selection.uc" "$state/"
+# OpenWrt always has jsonfilter; CI builds only ucode. Stand in for the one
+# query the refresh uses: every link of a subscription, one per line.
+if ! command -v jsonfilter >/dev/null 2>&1; then
+	mkdir "$state/bin"
+	cat > "$state/bin/jsonfilter" <<'SHIM'
+#!/bin/sh
+[ "$1" = -i ] && [ "$3" = -e ] && [ "$4" = '@.subscription.links[*]' ] || exit 1
+exec ucode -e 'import { readfile } from "fs"; let s = json(readfile(ARGV[0])); for (let l in s?.subscription?.links || []) print(l, "\n");' "$2"
+SHIM
+	chmod +x "$state/bin/jsonfilter"
+	PATH="$state/bin:$PATH"
+fi
 
 . "$files/usr/share/shpun/subscription-sources.sh"
 eval "$(sed -n '/^install_updated_subscription_candidate() {$/,/^}$/p' "$files/etc/shpun/agent.sh")"

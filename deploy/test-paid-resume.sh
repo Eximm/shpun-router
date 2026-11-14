@@ -4,7 +4,7 @@ set -eu
 src=${1:-$(dirname "$0")/../package/shpun-router/files/etc/shpun/agent.sh}
 d=$(mktemp -d /tmp/shpun-paid-resume.XXXXXX)
 trap 'rm -rf "$d"' EXIT
-for fn in resume_paid_subscription ensure_vpn_from_subscription;do
+for fn in resume_paid_subscription prebuilt_config_current ensure_vpn_from_subscription;do
  awk -v fn="$fn" '$0 == fn "() {" {emit=1} emit {print} emit && /^}/ {emit=0}' "$src" >> "$d/functions"
 done
 sed "s|/etc/shpun/build-config.sh|$d/builder|g;s|/tmp/shpun-subscription-portal/blocked|$d/blocked|g" "$d/functions" > "$d/test-functions"
@@ -13,6 +13,7 @@ PAID_RESUME_FILE="$d/resume";PAID_RESUME_ATTEMPT_FILE="$d/attempt"
 SUB_FILE="$d/sub";SUB_URL_FILE="$d/url";SUB_MIRROR_URL_FILE="$d/mirror"
 VPN_READY_FILE="$d/ready";ENGINE_CONFIG="$d/config";CONFIG_ACTIVE_FILE="$d/active"
 CONFIG_PENDING_FILE="$d/pending";VERROR_FILE="$d/error";SHPUN_CONFIG_LOCK_HELD=0
+CONFIG_PREBUILT_FILE="$d/prebuilt";STATE_DIR="$d"
 export ENGINE_CONFIG
 printf '#!/bin/sh\necho fresh > "$ENGINE_CONFIG"\n' > "$d/builder";chmod +x "$d/builder"
 log(){ :; }
