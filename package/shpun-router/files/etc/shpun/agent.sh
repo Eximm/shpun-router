@@ -186,8 +186,8 @@ ensure_routes_dir() {
 	[ -d "$ROUTES_DIR" ] || mkdir -p "$ROUTES_DIR" 2>/dev/null || true
 	[ -d "$PRESETS_DIR" ] || mkdir -p "$PRESETS_DIR" 2>/dev/null || true
 
-	# ВАЖНО: режим создаём только при первой установке.
-	# При обновлении пакета пользовательский выбор не перетираем.
+	# Р’РђР–РќРћ: СЂРµР¶РёРј СЃРѕР·РґР°С‘Рј С‚РѕР»СЊРєРѕ РїСЂРё РїРµСЂРІРѕР№ СѓСЃС‚Р°РЅРѕРІРєРµ.
+	# РџСЂРё РѕР±РЅРѕРІР»РµРЅРёРё РїР°РєРµС‚Р° РїРѕР»СЊР·РѕРІР°С‚РµР»СЊСЃРєРёР№ РІС‹Р±РѕСЂ РЅРµ РїРµСЂРµС‚РёСЂР°РµРј.
 	[ -f "$ROUTES_MODE_FILE" ]       || echo "full" > "$ROUTES_MODE_FILE"
 	[ -f "$ROUTES_VER_FILE" ]        || echo "0"    > "$ROUTES_VER_FILE"
 	[ -f "$ROUTES_LAST_CHECK_FILE" ] || echo "0"    > "$ROUTES_LAST_CHECK_FILE"
@@ -2094,7 +2094,7 @@ ensure_routes_ready() {
 }
 
 engine_download() {
- if [ "$ENGINE_BIN" = /tmp/xray ] && [ -x /etc/shpun/core-release.sh ]; then
+ if [ "${ENGINE_BIN:-}" = /tmp/xray ] && [ -x /etc/shpun/core-release.sh ]; then
   if /etc/shpun/core-release.sh prepare "$(detect_engine_arch)"; then return 0; fi
   [ -x "$ENGINE_BIN" ] && return 0
   return 1
@@ -3073,7 +3073,7 @@ ensure_vpn_from_subscription() {
 	rm -f "$CONFIG_PENDING_FILE"
 	enable_protected_dns_forwarding
 	log "vpn_ready marked in $VPN_READY_FILE"
- if [ "$ENGINE_BIN" = /tmp/xray ] && [ -x /etc/shpun/core-release.sh ]; then
+ if [ "${ENGINE_BIN:-}" = /tmp/xray ] && [ -x /etc/shpun/core-release.sh ]; then
   /etc/shpun/core-release.sh confirm || log "core cache confirmation deferred"
  fi
 
