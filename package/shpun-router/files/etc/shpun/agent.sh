@@ -2094,6 +2094,11 @@ ensure_routes_ready() {
 }
 
 engine_download() {
+ if [ "$ENGINE_BIN" = /tmp/xray ] && [ -x /etc/shpun/core-release.sh ]; then
+  if /etc/shpun/core-release.sh prepare "$(detect_engine_arch)"; then return 0; fi
+  [ -x "$ENGINE_BIN" ] && return 0
+  return 1
+ fi
 	local url tried_urls tmp_err err_line now_ts last_fail_ts
 
 	if [ -z "$ENGINE_URL" ]; then
@@ -2946,6 +2951,10 @@ ensure_vpn_from_subscription() {
 		return 1
 	fi
 
+ # A new executable must actually replace the running process.
+ if [ -e /tmp/shpun-core-release/pending ]; then
+  vpn_was_running=0
+ fi
 	if [ ! -x /etc/shpun/build-config.sh ]; then
 		log "/etc/shpun/build-config.sh not found or not executable"
 		echo "build_script_missing" > "$VERROR_FILE"
@@ -3037,6 +3046,9 @@ ensure_vpn_from_subscription() {
 
 	if ! restart_vpn; then
 		log "restart_vpn failed, not marking vpn_ready"
+  if [ -e /tmp/shpun-core-release/pending ]; then
+   /etc/shpun/core-release.sh rollback || true
+  fi
 		echo "restart_vpn_failed" > "$VERROR_FILE"
 		rm -f "$VPN_READY_FILE"
 		config_lock_release_if_owned "$config_lock_owned"
@@ -3045,6 +3057,9 @@ ensure_vpn_from_subscription() {
 
 	if ! wait_vpn_started; then
 		log "xray did not start successfully, not marking vpn_ready"
+  if [ -e /tmp/shpun-core-release/pending ]; then
+   /etc/shpun/core-release.sh rollback || true
+  fi
 		disable_protected_dns_forwarding
 		echo "xray_failed_to_start" > "$VERROR_FILE"
 		rm -f "$VPN_READY_FILE"
@@ -3058,6 +3073,9 @@ ensure_vpn_from_subscription() {
 	rm -f "$CONFIG_PENDING_FILE"
 	enable_protected_dns_forwarding
 	log "vpn_ready marked in $VPN_READY_FILE"
+ if [ "$ENGINE_BIN" = /tmp/xray ] && [ -x /etc/shpun/core-release.sh ]; then
+  /etc/shpun/core-release.sh confirm || log "core cache confirmation deferred"
+ fi
 
 	config_lock_release_if_owned "$config_lock_owned"
 	return 0

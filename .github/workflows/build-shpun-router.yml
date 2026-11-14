@@ -50,23 +50,23 @@ jobs:
           sh deploy/test-notice-runtime.sh
           sh deploy/test-paid-resume.sh
           sh deploy/test-portal-cgi.sh
+          sh deploy/test-core-release.sh
       - name: Cache OpenWrt SDK
         id: cache-sdk
         uses: actions/cache@v4
         with:
           path: sdk
           key: linux-ubuntu24-openwrt-sdk-24.10.3-ath79-generic_gcc-13.3.0_musl.Linux-x86_64-v2
-      - name: Download and verify SDK
+      - name: Extract the pinned official SDK image
         if: steps.cache-sdk.outputs.cache-hit != 'true'
         run: |
           set -eu
-          wget -q -O "$SDK_DIR.tar.zst" "$SDK_URL"
-          wget -q -O sdk-sha256sums "${SDK_URL%/*}/sha256sums"
-          awk -v name="$SDK_DIR.tar.zst" '$2==name || $2=="*"name' sdk-sha256sums > sdk-check.sha256
-          test -s sdk-check.sha256
-          sha256sum -c sdk-check.sha256
-          tar -I zstd -xf "$SDK_DIR.tar.zst"
-          mv "$SDK_DIR" sdk
+          container=$(docker create --platform linux/amd64 ghcr.io/openwrt/sdk@sha256:68126b17dfe49d777c7fcc9f45d889757ee3bbaeda4d29aa097b3fe5480b1136 /bin/true)
+          trap 'docker rm "$container" >/dev/null' EXIT
+          mkdir sdk
+          docker cp "$container:/builder/." sdk
+          test -d sdk/staging_dir
+          test -f sdk/Makefile
       - name: Stage reviewed script-only package
         run: |
           set -eu

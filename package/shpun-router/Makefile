@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=shpun-router
-PKG_VERSION:=1.2.3
+PKG_VERSION:=1.2.5
 PKG_RELEASE:=1
 SHPUN_LUCI_TAG:=$(subst .,_,$(PKG_VERSION))_r$(PKG_RELEASE)
 
@@ -61,6 +61,9 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_DIR) $(1)/etc/uci-defaults
 
 	# --- core scripts ---
+	$(INSTALL_BIN) ./files/etc/shpun/core-release.sh $(1)/etc/shpun/core-release.sh
+	$(INSTALL_DATA) ./files/usr/share/shpun/core-release.sha256 $(1)/usr/share/shpun/core-release.sha256
+	$(INSTALL_BIN) ./files/etc/init.d/shpun-core-seed $(1)/etc/init.d/shpun-core-seed
 	$(INSTALL_BIN) ./files/etc/shpun/agent.sh                 $(1)/etc/shpun/agent.sh
 	$(INSTALL_BIN) ./files/etc/shpun/build-config.sh          $(1)/etc/shpun/build-config.sh
 	$(INSTALL_DATA) ./files/etc/shpun/hysteria2-outbound.uc    $(1)/etc/shpun/hysteria2-outbound.uc
@@ -163,6 +166,7 @@ define Package/$(PKG_NAME)/postinst
 	chmod +x /etc/shpun/*.sh 2>/dev/null || true
 	/etc/shpun/disable-flow-offload.sh apply 2>/dev/null || true
 
+	/etc/init.d/shpun-core-seed enable 2>/dev/null || true
 	/etc/init.d/shpun-agent enable 2>/dev/null || true
 	/etc/init.d/shpun-vpn enable 2>/dev/null || true
 	/etc/init.d/shpun-auto-update enable 2>/dev/null || true
