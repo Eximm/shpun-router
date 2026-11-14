@@ -1055,7 +1055,7 @@ return view.extend({
 			: '';
 
 		// A selection started before a page reload keeps its live status panel.
-		window.setTimeout(resumeSelection, 300);
+		if (typeof window.setTimeout === 'function') window.setTimeout(resumeSelection, 300);
 
 		var statusStats = buildStatusStats(state, vpnReady);
 
