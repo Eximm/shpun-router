@@ -27,6 +27,9 @@ CONFIG_ACTIVE_FILE="$STATE_DIR/xray_config_active"
 CONFIG_PENDING_FILE="$STATE_DIR/xray_config_pending"
 DNS_PROXY_READY_FILE="$STATE_DIR/dns_proxy_ready"
 VPN_RESTART_PRESERVE_FILE="$STATE_DIR/vpn_restart_preserve"
+# "<config sha256> <selected index> <epoch>" left by switch-server.sh for the
+# config it has just built and installed.
+CONFIG_PREBUILT_FILE="${CONFIG_PREBUILT_FILE:-/tmp/shpun-config-prebuilt}"
 UDP_READY_FILE="$STATE_DIR/udp_ready"
 TUNNEL_EXIT_IP_FILE="$STATE_DIR/tunnel_exit_ip"
 TUNNEL_EXIT_CHECK_MS_FILE="$STATE_DIR/tunnel_exit_check_ms"
@@ -1744,6 +1747,14 @@ install_updated_subscription_candidate() {
 		return 1
 	fi
 
+	# Connection measurements are kept per subscription index. A changed link
+	# list makes them point at other connections: drop them, and the next
+	# background measurement (soon, see maybe_measure_servers) refills them.
+	if [ "$(jsonfilter -i "$backup" -e '@.subscription.links[*]' 2>/dev/null)" != 		"$(jsonfilter -i "$SUB_FILE" -e '@.subscription.links[*]' 2>/dev/null)" ]; then
+		rm -f "${SELECTION_SCORES_FILE:-/tmp/shpun-selection-delay}" "${SELECTION_MEASURED_AT_FILE:-/tmp/shpun-selection-measured-at}"
+		log "$label: server list changed; previous connection measurements dropped"
+	fi
+
 	if [ "$selected_after" != "$selected_before" ]; then
 		if ! sub_atomic_write "$STATE_DIR/selected_link_index" "$selected_after"; then
 			mv "$backup" "$SUB_FILE"
@@ -3282,6 +3293,22 @@ resume_paid_subscription() {
  return 1
 }
 
+# 0 when switch-server.sh has just installed a config for the selected server
+# and nothing changed since: the agent then skips building it again. The note
+# is used once.
+prebuilt_config_current() {
+	local sha idx at now
+	[ -s "$CONFIG_PREBUILT_FILE" ] || return 1
+	read -r sha idx at < "$CONFIG_PREBUILT_FILE"
+	rm -f "$CONFIG_PREBUILT_FILE"
+	case "$at" in ''|*[!0-9]*) return 1 ;; esac
+	now="$(date +%s)"
+	[ "$((now - at))" -ge 0 ] && [ "$((now - at))" -le 120 ] || return 1
+	[ "$idx" = "$(cat "$STATE_DIR/selected_link_index" 2>/dev/null | tr -d '\r\n ')" ] || return 1
+	[ "$(date -r "$SUB_FILE" +%s 2>/dev/null || echo 0)" -le "$at" ] || return 1
+	[ -n "$sha" ] && [ "$sha" = "$(calc_sha256_file "$ENGINE_CONFIG" 2>/dev/null)" ]
+}
+
 ensure_vpn_from_subscription() {
  [ ! -s /tmp/shpun-subscription-portal/blocked ] || return 0
  [ ! -s "${PAID_RESUME_FILE:-/tmp/shpun-subscription-portal/resume-pending}" ] || [ "${SHPUN_PAID_RESUME:-0}" = 1 ] || return 1
@@ -3345,9 +3372,9 @@ ensure_vpn_from_subscription() {
 		return 1
 	fi
 
-	log "building xray config from subscription.json"
-
-	if ! /etc/shpun/build-config.sh; then
+	if prebuilt_config_current; then
+		log "using xray config just prepared by the server switch"
+	elif ! { log "building xray config from subscription.json"; /etc/shpun/build-config.sh; }; then
 		log "build-config.sh failed"
 		if [ -s "$config_backup" ]; then
 			mv "$config_backup" "$ENGINE_CONFIG"

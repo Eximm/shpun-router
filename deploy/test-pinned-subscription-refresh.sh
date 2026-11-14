@@ -12,6 +12,8 @@ STATE_DIR="$state"
 SUB_FILE="$state/subscription.json"
 SERVER_AUTO_SELECT_FILE="$state/server_auto_select"
 VERROR_FILE="$state/vpn_error"
+# Never touch the real measurements of the machine running the test.
+export SELECTION_SCORES_FILE="$state/scores" SELECTION_MEASURED_AT_FILE="$state/measured-at"
 cp "$files/etc/shpun/server-groups.uc" "$files/etc/shpun/server-selection.uc" "$state/"
 
 . "$files/usr/share/shpun/subscription-sources.sh"
@@ -82,3 +84,15 @@ cmp -s "$SUB_FILE" "$state/expected"
 [ "$(cat "$state/selected_link_index")" = 1 ]
 
 echo 'PASS pinned server rename/removal never blocks subscription refresh'
+
+# 5. Measurements are per index: a changed link list drops them, the same list keeps them.
+echo 0 > "$SERVER_AUTO_SELECT_FILE"; echo 1 > "$state/selected_link_index"
+feed "$old" "$fi_new" "$pl" > "$SUB_FILE"
+{ printf '{"x":1,'; feed "$old" "$fi_new" "$pl" | cut -c2-; } > "$state/candidate"
+echo '1 0.050 1' > "$SELECTION_SCORES_FILE"; echo 1 > "$SELECTION_MEASURED_AT_FILE"
+install_updated_subscription_candidate "$state/candidate" test
+[ -s "$SELECTION_SCORES_FILE" ] || { echo 'FAIL: unchanged links dropped measurements' >&2; exit 1; }
+feed "$old" "$pl" "$fi_new" > "$state/candidate"
+install_updated_subscription_candidate "$state/candidate" test
+[ ! -e "$SELECTION_SCORES_FILE" ] && [ ! -e "$SELECTION_MEASURED_AT_FILE" ] || { echo 'FAIL: stale measurements kept' >&2; exit 1; }
+echo 'PASS measurements are dropped when the server list changes'

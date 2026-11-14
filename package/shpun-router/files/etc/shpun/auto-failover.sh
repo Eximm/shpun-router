@@ -65,6 +65,15 @@ REALITY_BLOCK_FILE="${REALITY_BLOCK_FILE:-/tmp/shpun-gateway-reality-blocked}"
 REALITY_BLOCK_COOLDOWN_DEFAULT=86400
 RELAY_PROBES_PER_GATEWAY_DEFAULT=2
 SELECTION_PROBE_GAP_DEFAULT=3
+# What the selector is doing right now, for the LuCI widget: "<phase> <index>"
+# with phase probing|connecting|verifying|reverting|done|failed (RAM only).
+PHASE_FILE="${SELECTION_PHASE_FILE:-/tmp/shpun-selection-phase}"
+# Measurements newer than this order candidates best-first (background
+# measuring runs every 4 h).
+SCORE_FRESH_TTL=16200
+# Automatic choice re-checks the best measured servers first and stops once
+# this many direct connections passed, instead of testing every server.
+SELECTION_GOOD_ENOUGH_DEFAULT=3
 
 log() {
 	logger -t "$LOGTAG" "$*"
@@ -272,6 +281,135 @@ switch_to() {
 	return 0
 }
 
+set_phase() {
+	printf '%s %s\n' "$1" "${2:--}" > "$PHASE_FILE" 2>/dev/null || true
+}
+
+# One check of the live tunnel after a switch: wait until the new engine
+# listens (the agent marks the tunnel ready a few seconds later), then a small
+# download through it on one connection (twice at most).
+live_tunnel_ok() {
+	local waited=0 n=0 tmp="/tmp/shpun-failover-live.$$" bytes
+	while [ "$waited" -lt "$AUTO_FAILOVER_READY_TIMEOUT" ]; do
+		[ -s "$VPN_READY_FILE" ] && break
+		probe_port_listening "$LIVE_PROXY_PORT" && break
+		usleep 500000 2>/dev/null || sleep 1
+		waited=$((waited + 1))
+	done
+	[ -s "$VPN_READY_FILE" ] || probe_port_listening "$LIVE_PROXY_PORT" || return 1
+	while [ "$n" -lt 2 ]; do
+		[ "$n" -eq 0 ] || sleep 2
+		n=$((n + 1))
+		rm -f "$tmp"
+		curl -q -fsSL --noproxy '' --connect-timeout 4 -m 8 -A ShpunRouter \
+			-x "http://127.0.0.1:$LIVE_PROXY_PORT" -o "$tmp" "$TUNNEL_QUALITY_PROBE_URL" >/dev/null 2>&1 || continue
+		bytes="$(wc -c < "$tmp" 2>/dev/null | tr -d ' ')"
+		rm -f "$tmp"
+		case "$bytes" in ''|*[!0-9]*) continue ;; esac
+		[ "$bytes" -ge "$TUNNEL_QUALITY_PROBE_MIN_BYTES" ] && return 0
+	done
+	rm -f "$tmp"
+	return 1
+}
+
+# order_by_scores INDEX...: best first. Direct connections before relays; within
+# each, recently passed ones by measured delay, then unmeasured ones in the given
+# order (the transport priority), then recently failed ones.
+order_by_scores() {
+	cat "$SCORES_FILE" 2>/dev/null | awk -v list="$*" -v relays="$relays" -v now="$(date +%s)" -v ttl="$SCORE_FRESH_TTL" '
+		NF == 3 && now - $3 <= ttl && $3 - now <= 300 { s[$1] = $2 }
+		END {
+			n = split(list, a, " ")
+			for (i = 1; i <= n; i++) {
+				id = a[i]; st = 1; v = 0
+				if (id in s) { if (s[id] == "fail") st = 2; else { st = 0; v = s[id] + 0 } }
+				k[i] = (index(relays, " " id " ") ? 3 : 0) + st; d[i] = v
+			}
+			for (i = 2; i <= n; i++)
+				for (j = i; j > 1 && (k[j] < k[j-1] || (k[j] == k[j-1] && d[j] < d[j-1])); j--) {
+					t = a[j]; a[j] = a[j-1]; a[j-1] = t
+					t = k[j]; k[j] = k[j-1]; k[j-1] = t
+					t = d[j]; d[j] = d[j-1]; d[j-1] = t
+				}
+			for (i = 1; i <= n; i++) printf "%s%s", a[i], (i < n ? " " : "\n")
+		}'
+}
+
+# fresh_passes INDEX...: how many of them passed a check recently.
+fresh_passes() {
+	cat "$SCORES_FILE" 2>/dev/null | awk -v list=" $* " -v now="$(date +%s)" -v ttl="$SCORE_FRESH_TTL" '
+		NF == 3 && $2 != "fail" && now - $3 <= ttl && $3 - now <= 300 && index(list, " " $1 " ") { s[$1] = 1 }
+		END { n = 0; for (i in s) n++; print n }'
+}
+
+# relay_allowed INDEX: 0 when a relay may be used now (gateway not paused, TCP
+# relays not blocked on this network, per-pass budget left). Sets gateway and
+# relay_kind; both stay empty for a direct connection.
+relay_allowed() {
+	gateway= relay_kind=
+	case "$relays" in *" $1 "*) ;; *) return 0 ;; esac
+	gateway="$(gateway_key "$(printf '%s\n' "$endpoints" | awk -v i="$1" '$1 == i { print $2; exit }')")"
+	relay_kind="$(printf '%s\n' "$endpoints" | awk -v i="$1" '$1 == i { print $4; exit }')"
+	if gateway_paused "$gateway"; then
+		log "grouped candidate index $1 skipped: gateway $gateway is paused"
+		return 1
+	fi
+	if [ "$relay_kind" != xhttp ] && reality_blocked "$gateway"; then
+		log "grouped candidate index $1 skipped: TCP relays through gateway $gateway are blocked on this network"
+		return 1
+	fi
+	if [ "$(printf '%s\n' $relay_probes | grep -cx "$gateway")" -ge "$RELAY_PROBES_PER_GATEWAY" ]; then
+		log "grouped candidate index $1 skipped: relay limit for gateway $gateway in this pass"
+		return 1
+	fi
+	relay_probes="$relay_probes $gateway"
+	return 0
+}
+
+relay_failed() {
+	if [ -n "$gateway" ] && ! gateway_answers "$gateway"; then
+		gateway_pause "$gateway"
+		[ "$relay_kind" = xhttp ] || reality_block "$gateway"
+	fi
+}
+
+# connect_and_verify MODE INDEX...: switch the live tunnel to each connection in
+# turn and keep the first one that carries traffic right after the switch.
+# MODE pin keeps the server pinned, auto keeps automatic selection. Sets connected.
+connect_and_verify() {
+	local mode="$1" idx
+	shift
+	connected=
+	for idx in "$@"; do
+		relay_allowed "$idx" || continue
+		set_phase connecting "$idx"
+		if [ "$mode" = pin ]; then
+			SHPUN_SELECTION_SOURCE="$probe_dir/subscription.json" switch_to "$idx" pin || continue
+		else
+			SHPUN_SELECTION_SOURCE="$probe_dir/subscription.json" switch_to "$idx" || continue
+		fi
+		set_phase verifying "$idx"
+		if live_tunnel_ok; then
+			connected="$idx"
+			return 0
+		fi
+		log "connection index $idx carries no traffic after the switch"
+		record_score "$idx" fail
+		relay_failed
+	done
+	return 1
+}
+
+# Return to the connection that was active before (and its mode).
+revert_connection() {
+	case "$old_selection" in ''|*[!0-9]*) return 1 ;; esac
+	set_phase reverting "$old_selection"
+	SHPUN_SELECTION_SOURCE="$probe_dir/subscription.json" switch_to "$old_selection" || return 1
+	[ -z "$old_mode" ] || write_selection_value "$SERVER_AUTO_SELECT_FILE" "$old_mode" || true
+	live_tunnel_ok || log "previous connection index $old_selection does not answer either"
+	return 0
+}
+
 # Probe generated outbounds privately before changing the active tunnel.
 stop_selection_probe() {
 	if [ -n "$probe_pid" ]; then
@@ -291,6 +429,7 @@ cleanup_group_selection() {
 	fi
 	if [ "$interactive" = 1 ] && [ "$(cat "$AUTO_SELECT_STATUS_FILE" 2>/dev/null)" = running ]; then
 		printf 'failed:%s\n' "$current" > "$AUTO_SELECT_STATUS_FILE"
+		case "$(cat "$PHASE_FILE" 2>/dev/null)" in done*|failed*) ;; *) set_phase failed ;; esac
 	fi
 	rm -f "$PROGRESS_FILE"
 	rm -f "$LOCKDIR/pid"
@@ -518,8 +657,14 @@ probe_candidate() {
 	local candidate="$1" score
 	printf '%s\n' "$candidate" > "$probe_dir/index" || return 1
 	rm -f "$probe_dir/config.json"
+	# The probe replaces inbounds and routing below, so the domain lists that make
+	# a full build take seconds on small routers are left out; the outbound itself
+	# is built exactly as for the live tunnel.
 	SUB_FILE="$probe_dir/subscription.json" OUT_CFG="$probe_dir/config.json" \
-		SELECTED_LINK_FILE="$probe_dir/index" "$BUILD_SCRIPT" || return 1
+		SELECTED_LINK_FILE="$probe_dir/index" ROUTES_MODE_FILE="$probe_dir/absent" \
+		SMART_RU_DOMAINS_FILE="$probe_dir/absent" SMART_RU_BUILTIN_DOMAINS_FILE="$probe_dir/absent" \
+		ALWAYS_VPN_DOMAINS_FILE="$probe_dir/absent" ALWAYS_VPN_CIDRS_FILE="$probe_dir/absent" \
+		CUSTOM_ROUTES_FILE="$probe_dir/absent" "$BUILD_SCRIPT" || return 1
 	[ "$(cat "$probe_dir/index")" = "$candidate" ] || return 1
 	# Preserve the actual outbound and XHTTP endpoint DNS. Force HTTPS
 	# probes through the candidate regardless of the user's LAN presets.
@@ -564,6 +709,7 @@ select_grouped_server() {
 	local only=- skip=- first=- exclude_ru=0 candidates candidate tried=0 best= best_score= best_compare= score compare relays
 	local endpoints gateway gateway_addrs relay_probes relay_kind
 	local old_selection old_mode expected_hash limit now recovering=0 deadline=75 probe_rc low_memory=0 measuring=0 total
+	local connecting=0 passed= direct_passes=0 good_enough=0 connected
 	old_selection="$(cat "$SELECTED_LINK_FILE" 2>/dev/null || true)"
 	old_mode="$(cat "$SERVER_AUTO_SELECT_FILE" 2>/dev/null || true)"
 	current="$old_selection"
@@ -593,6 +739,14 @@ select_grouped_server() {
 			case "$only" in ''|*[!0-9]*) return 1 ;; esac
 			expected_hash="$2"
 			;;
+		--connect-server)
+			# Manual choice: connect at once with the best transport of the server,
+			# verify the live tunnel, fall back to its other transports, else revert.
+			only="$1"
+			case "$only" in ''|*[!0-9]*) return 1 ;; esac
+			expected_hash="$2"
+			connecting=1
+			;;
 		--recover-quality|--recover-failed)
 			now="$(date +%s)"
 			recovery_due "$now" || return 0
@@ -610,6 +764,7 @@ select_grouped_server() {
 			;;
 	esac
 
+	[ "$interactive" = 0 ] || rm -f "$PHASE_FILE"
 	cleanup_stale_probes
 	umask 077
 	probe_dir="$(mktemp -d "${SELECTION_DIR_PREFIX}XXXXXX")" || return 1
@@ -618,6 +773,7 @@ select_grouped_server() {
 		[ "$(sha256sum "$probe_dir/subscription.json" | awk '{print $1}')" = "$expected_hash" ] || return 1
 	fi
 	ln -s "$ENGINE_BIN" "$probe_dir/shpun-probe" || return 1
+	LIVE_PROXY_PORT="$HTTP_PROXY_PORT"
 	HTTP_PROXY_PORT="$SELECTION_PROBE_PORT"
 	INITIAL_DEADLINE=$(( $(date +%s) + deadline ))
 	if [ "$measuring" = 1 ]; then
@@ -634,6 +790,37 @@ select_grouped_server() {
 	endpoints="$(ucode "$STATE_DIR/server-selection.uc" endpoints "$probe_dir/subscription.json" 2>/dev/null)"
 	relays=" $(printf '%s\n' "$endpoints" | awk '$3 == 1 { printf "%s ", $1 }') "
 	gateway_addrs= relay_probes=
+
+	if [ "$connecting" = 1 ]; then
+		candidates="$(order_by_scores $candidates)"
+		[ -n "$candidates" ] || return 1
+		# Already on this server and it works: only pin it.
+		if [ -s "$VPN_READY_FILE" ] && case " $candidates " in *" $current "*) true ;; *) false ;; esac &&
+			set_phase verifying "$current" && live_tunnel_ok; then
+			write_selection_value "$SERVER_AUTO_SELECT_FILE" 0 || return 1
+			connected="$current"
+		elif ! connect_and_verify pin $candidates; then
+			log "manual connection to server index $only failed with every transport; returning to index $old_selection"
+			revert_connection || true
+			set_phase failed "$only"
+			printf 'failed:%s\n' "$old_selection" > "$AUTO_SELECT_STATUS_FILE"
+			return 1
+		fi
+		set_phase done "$connected"
+		clear_recovery_backoff
+		rm -f "$LAST_ATTEMPT_FILE"
+		printf 'ok:%s\n' "$connected" > "$AUTO_SELECT_STATUS_FILE"
+		log "manual connection to server index $only uses index $connected"
+		return 0
+	fi
+
+	if [ "$GROUP_ACTION" = --choose-all ]; then
+		# Best measured servers first. With enough fresh results that order is
+		# meaningful, so the search stops after a few passes instead of testing all.
+		candidates="$(order_by_scores $candidates)"
+		[ "$(fresh_passes $candidates)" -lt "$SELECTION_GOOD_ENOUGH" ] || good_enough="$SELECTION_GOOD_ENOUGH"
+	fi
+	[ "$interactive" = 0 ] || set_phase probing
 	total=0
 	for candidate in $candidates; do total=$((total + 1)); done
 	[ "$total" -le "$limit" ] || total="$limit"
@@ -641,6 +828,10 @@ select_grouped_server() {
 		case "$candidate" in ''|*[!0-9]*) continue ;; esac
 		selection_is_current || return 1
 		[ "$tried" -lt "$limit" ] && [ "$(date +%s)" -lt "$INITIAL_DEADLINE" ] || break
+		if [ "$good_enough" -gt 0 ] && [ "$direct_passes" -ge "$good_enough" ]; then
+			log "grouped search: $direct_passes of the best measured connections passed; not testing the rest"
+			break
+		fi
 		gateway= relay_kind=
 		case "$relays" in
 			*" $candidate "*)
@@ -652,29 +843,26 @@ select_grouped_server() {
 					log "grouped candidate index $candidate skipped: a working connection was found, relays are a reserve"
 					continue
 				fi
-				gateway="$(gateway_key "$(printf '%s\n' "$endpoints" | awk -v i="$candidate" '$1 == i { print $2; exit }')")"
-				relay_kind="$(printf '%s\n' "$endpoints" | awk -v i="$candidate" '$1 == i { print $4; exit }')"
-				if gateway_paused "$gateway"; then
-					log "grouped candidate index $candidate skipped: gateway $gateway is paused"
-					continue
-				fi
-				if [ "$relay_kind" != xhttp ] && reality_blocked "$gateway"; then
-					log "grouped candidate index $candidate skipped: TCP relays through gateway $gateway are blocked on this network"
-					continue
-				fi
-				if [ "$(printf '%s\n' $relay_probes | grep -cx "$gateway")" -ge "$RELAY_PROBES_PER_GATEWAY" ]; then
-					log "grouped candidate index $candidate skipped: relay limit for gateway $gateway in this pass"
-					continue
-				fi
-				relay_probes="$relay_probes $gateway"
+				relay_allowed "$candidate" || continue
 				;;
 		esac
-		[ "$tried" -eq 0 ] || sleep "$SELECTION_PROBE_GAP"
+		# Pacing matters only for connections through the shared gateway.
+		[ "$tried" -eq 0 ] || [ -z "$gateway" ] || sleep "$SELECTION_PROBE_GAP"
 		# Progress for the LuCI dialog: "<tested> <total> <action>".
 		printf '%s %s %s\n' "$tried" "$total" "$GROUP_ACTION" > "$PROGRESS_FILE" 2>/dev/null || true
 		tried=$((tried + 1))
 		probe_candidate "$candidate"
 		probe_rc=$?
+		# One check is a single connection, so a lost packet can fail it. A direct
+		# connection gets one more chance before it is called unavailable; relays
+		# do not, to keep connections to the shared gateway few.
+		if [ "$probe_rc" -eq 1 ] && [ -z "$gateway" ] && [ "$SELECTION_RETRY" = 1 ] &&
+			[ "$(date +%s)" -lt "$INITIAL_DEADLINE" ]; then
+			log "grouped candidate index $candidate failed once; checking it again"
+			sleep 2
+			probe_candidate "$candidate"
+			probe_rc=$?
+		fi
 		if [ "$probe_rc" -eq 0 ]; then
 			score="$SCORE"
 			log "grouped candidate index $candidate passed (delay ${score}s)"
@@ -683,7 +871,10 @@ select_grouped_server() {
 			case "$relays" in
 				# Same reserve penalty as compare_delay in server-groups.uc.
 				*" $candidate "*) compare="$(awk -v s="$score" 'BEGIN { printf "%.4f\n", s + 30 }')" ;;
+				*) direct_passes=$((direct_passes + 1)) ;;
 			esac
+			passed="$passed$compare $candidate
+"
 			if [ -z "$best" ] || awk -v a="$compare" -v b="$best_compare" 'BEGIN {exit !(a<b)}'; then
 				best="$candidate"
 				best_score="$score"
@@ -697,10 +888,7 @@ select_grouped_server() {
 		else
 			log "grouped candidate index $candidate failed tunnel checks"
 			record_score "$candidate" fail
-			if [ -n "$gateway" ] && ! gateway_answers "$gateway"; then
-				gateway_pause "$gateway"
-				[ "$relay_kind" = xhttp ] || reality_block "$gateway"
-			fi
+			relay_failed
 		fi
 	done
 
@@ -739,6 +927,17 @@ select_grouped_server() {
 		[ "$GROUP_ACTION" != --choose-server ] || write_selection_value "$SERVER_AUTO_SELECT_FILE" 0 || return 1
 	elif [ "$GROUP_ACTION" = --choose-server ]; then
 		SHPUN_SELECTION_SOURCE="$probe_dir/subscription.json" switch_to "$best" pin || return 1
+	elif [ "$GROUP_ACTION" = --choose-all ]; then
+		# Connect to the best one and make sure the live tunnel carries traffic;
+		# otherwise the next best that passed, and the previous one as last resort.
+		relay_probes=
+		if ! connect_and_verify auto $(printf '%s' "$passed" | sort -n | awk '{ printf "%s ", $2 }'); then
+			log "no passed connection works as the live tunnel; returning to index $old_selection"
+			revert_connection || true
+			set_phase failed
+			return 1
+		fi
+		best="$connected"
 	else
 		SHPUN_SELECTION_SOURCE="$probe_dir/subscription.json" switch_to "$best" || return 1
 	fi
@@ -748,6 +947,7 @@ select_grouped_server() {
 	clear_recovery_backoff
 	if [ "$interactive" = 1 ]; then
 		rm -f "$LAST_ATTEMPT_FILE"
+		set_phase done "$best"
 		printf 'ok:%s\n' "$best" > "$AUTO_SELECT_STATUS_FILE"
 	fi
 	log "grouped selection $GROUP_ACTION chose index $best (tested $tried, delay ${best_score}s)"
@@ -760,6 +960,9 @@ select_grouped_server() {
 [ -z "$AUTO_FAILOVER_MAX_CANDIDATES" ] && AUTO_FAILOVER_MAX_CANDIDATES="$AUTO_FAILOVER_MAX_CANDIDATES_DEFAULT"
 [ -z "$GATEWAY_COOLDOWN" ] && GATEWAY_COOLDOWN="$GATEWAY_COOLDOWN_DEFAULT"
 [ -z "$REALITY_BLOCK_COOLDOWN" ] && REALITY_BLOCK_COOLDOWN="$REALITY_BLOCK_COOLDOWN_DEFAULT"
+[ -z "$SELECTION_RETRY" ] && SELECTION_RETRY=1
+[ -z "$SELECTION_GOOD_ENOUGH" ] && SELECTION_GOOD_ENOUGH="$SELECTION_GOOD_ENOUGH_DEFAULT"
+case "$SELECTION_GOOD_ENOUGH" in ""|*[!0-9]*) SELECTION_GOOD_ENOUGH="$SELECTION_GOOD_ENOUGH_DEFAULT" ;; esac
 [ -z "$RELAY_PROBES_PER_GATEWAY" ] && RELAY_PROBES_PER_GATEWAY="$RELAY_PROBES_PER_GATEWAY_DEFAULT"
 [ -z "$SELECTION_PROBE_GAP" ] && SELECTION_PROBE_GAP="$SELECTION_PROBE_GAP_DEFAULT"
 [ -z "$AUTO_FAILOVER_READY_TIMEOUT" ] && AUTO_FAILOVER_READY_TIMEOUT="$AUTO_FAILOVER_READY_TIMEOUT_DEFAULT"
@@ -792,8 +995,8 @@ case "$SERVER_AUTO_EXCLUDE_RU" in 1|yes|true|on) SERVER_AUTO_EXCLUDE_RU=1 ;; *) 
 INITIAL_DEADLINE=
 GROUP_ACTION="${1:-}"
 interactive=0
-case "$GROUP_ACTION" in --choose-all|--choose-server|--measure) interactive=1 ;; esac
-case "$GROUP_ACTION" in --initial|--choose-all|--choose-server|--measure|--recover-quality|--recover-failed) shift ;; *) GROUP_ACTION= ;; esac
+case "$GROUP_ACTION" in --choose-all|--choose-server|--connect-server|--measure) interactive=1 ;; esac
+case "$GROUP_ACTION" in --initial|--choose-all|--choose-server|--connect-server|--measure|--recover-quality|--recover-failed) shift ;; *) GROUP_ACTION= ;; esac
 MANUAL_SELECT=0
 if [ -n "${AUTO_FAILOVER_CANDIDATES:-}" ]; then
 	MANUAL_SELECT=1

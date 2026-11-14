@@ -257,6 +257,10 @@ rm -f "$AUTO_SELECT_CANDIDATE" "$CONFIG_BACKUP" "$CONFIG_PENDING_FILE" "$CONFIG_
 if [ "$DISABLE_AUTO_AFTER_SUCCESS" -eq 1 ]; then
 	rm -f /etc/shpun/auto_failover_last_attempt /etc/shpun/auto_failover_last_success /etc/shpun/auto_failover_from
 fi
+# The agent restarted below would build the very same config again (seconds on
+# small routers): leave it a note that this one is built for NEW_INDEX.
+printf '%s %s %s\n' "$(sha256sum "$ENGINE_CONFIG" 2>/dev/null | cut -d' ' -f1)" "$NEW_INDEX" "$(date +%s)" \
+	> "${CONFIG_PREBUILT_FILE:-/tmp/shpun-config-prebuilt}" 2>/dev/null || true
 log "server index $NEW_INDEX validated, restarting VPN once to apply it"
 # The selected endpoint changes, but the transparent routing and per-domain
 # DNS rules do not. Preserve them while the agent starts the validated config;

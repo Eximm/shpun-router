@@ -14,6 +14,8 @@ export SELECTION_SCORES_FILE="$state/scores"
 export SELECTION_PROGRESS_FILE="$state/progress" SELECTION_MEASURED_AT_FILE="$state/measured-at"
 export GATEWAY_COOLDOWN_FILE="$state/gateway-cooldown" SELECTION_PROBE_GAP=0
 export REALITY_BLOCK_FILE="$state/reality-blocked"
+# Retrying failed direct candidates has its own scenario at the end.
+export SELECTION_RETRY=0
 export PATH="$state/bin:$PATH"
 printf '{}\n' > "$STATE_DIR/subscription.json"
 printf 'TUNNEL_QUALITY_PROBE_MIN_BYTES=1\n' > "$STATE_DIR/agent.conf"
@@ -54,15 +56,22 @@ cat > "$state/bin/curl" <<'MOCK'
 #!/bin/sh
 # Plain TLS handshake to the gateway address: GATEWAY_TLS is time_appconnect.
 for a in "$@"; do [ "$a" != https://10.0.0.9/ ] || { echo "${GATEWAY_TLS:-0.050}"; exit 0; }; done
-output= transfers=0
+output= transfers=0 live=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    -x) [ "$2" = http://127.0.0.1:18809 ] || exit 2; shift ;;
+    # 10809 is the live tunnel: it works unless LIVE_FAIL_INDEXES has the selected index.
+    -x) case "$2" in http://127.0.0.1:18809) ;; http://127.0.0.1:10809) live=1 ;; *) exit 2 ;; esac; shift ;;
     # One curl may fetch several URLs on one connection: the first -o is the sample.
     -o) [ -n "$output" ] || output="$2"; transfers=$((transfers + 1)); shift ;;
   esac
   shift
 done
+if [ "$live" = 1 ]; then
+  sel=$(cat "$STATE_DIR/selected_link_index")
+  echo "$sel" >> "$STATE_DIR/live-checks"
+  case " ${LIVE_FAIL_INDEXES:-} " in *" $sel "*) exit 1 ;; esac
+  printf 'x' > "$output"; exit 0
+fi
 echo x >> "$STATE_DIR/curl-calls"
 idx=$(cat "$STATE_DIR/probing")
 case " $PASS_INDEXES " in *" $idx "*) ;; *) exit 1 ;; esac
@@ -80,6 +89,8 @@ cmp -s "$SHPUN_SELECTION_SOURCE" "$STATE_DIR/subscription.json" || exit 1
 printf '%s\n' "$1" > "$STATE_DIR/selected_link_index"
 [ "${SHPUN_AUTO_ONE_SHOT:-0}" != 1 ] || echo 0 > "$STATE_DIR/server_auto_select"
 printf '%s\n' "$1" >> "$STATE_DIR/switches"
+# The agent brings the new engine up and marks the tunnel ready.
+echo 1 > "$STATE_DIR/vpn_ready"
 echo ok
 MOCK
 # The engine publishes its listener like the kernel does and withdraws it on exit.
@@ -100,7 +111,7 @@ fails() {
 
 reset_recovery() {
 	rm -f "$STATE_DIR/auto_failover_last_attempt" "$STATE_DIR/auto_failover_fail_count" \
-		"$STATE_DIR/auto_failover_next_attempt" "$STATE_DIR/switches"
+		"$STATE_DIR/auto_failover_next_attempt" "$STATE_DIR/switches" "$STATE_DIR/vpn_ready"
 	: > "$STATE_DIR/tried"
 }
 
@@ -253,9 +264,10 @@ echo 'PASS initial, pinned/global recovery without restart storm, backoff, memor
 # Relays share one RU gateway: a dead gateway is tried once and then paused,
 # a live one is tried at most twice per pass; direct connections are unaffected.
 rm -rf "$AUTO_FAILOVER_LOCKDIR"
-reset_recovery; rm -f "$GATEWAY_COOLDOWN_FILE"
+# Automatic choice orders by fresh measurements; without them direct first, then relays.
+reset_recovery; rm -f "$GATEWAY_COOLDOWN_FILE"; : > "$SELECTION_SCORES_FILE"
 fails env RELAY_INDEXES='0 1 3' PASS_INDEXES= GATEWAY_TLS=0.000 sh "$auto" --choose-all
-[ "$(cat "$STATE_DIR/tried")" = "$(printf '0\n2')" ] || { echo "FAIL: dead gateway retried: $(tr '\n' ' ' < "$STATE_DIR/tried")"; exit 1; }
+[ "$(cat "$STATE_DIR/tried")" = "$(printf '2\n0')" ] || { echo "FAIL: dead gateway retried: $(tr '\n' ' ' < "$STATE_DIR/tried")"; exit 1; }
 grep -q '^10.0.0.9 ' "$GATEWAY_COOLDOWN_FILE"
 # While paused, its relays are not touched at all.
 reset_recovery
@@ -264,33 +276,76 @@ fails env RELAY_INDEXES='0 1 3' PASS_INDEXES= sh "$auto" --choose-all
 # A Reality relay that left the gateway silent keeps Reality out for a day;
 # XHTTP through the same gateway is tried again once the short pause is over.
 grep -q '^10.0.0.9 ' "$REALITY_BLOCK_FILE"
-reset_recovery; rm -f "$GATEWAY_COOLDOWN_FILE"
+reset_recovery; rm -f "$GATEWAY_COOLDOWN_FILE"; : > "$SELECTION_SCORES_FILE"
 fails env RELAY_INDEXES='0 1 3' XHTTP_INDEXES='1' PASS_INDEXES= sh "$auto" --choose-all
-[ "$(cat "$STATE_DIR/tried")" = "$(printf '1\n2')" ] || { echo "FAIL: Reality not left out: $(tr '\n' ' ' < "$STATE_DIR/tried")"; exit 1; }
+[ "$(cat "$STATE_DIR/tried")" = "$(printf '2\n1')" ] || { echo "FAIL: Reality not left out: $(tr '\n' ' ' < "$STATE_DIR/tried")"; exit 1; }
 # A failing XHTTP relay pauses the gateway but does not mark Reality.
 reset_recovery; rm -f "$GATEWAY_COOLDOWN_FILE" "$REALITY_BLOCK_FILE"
 fails env RELAY_INDEXES='0 1 3' XHTTP_INDEXES='0' PASS_INDEXES= GATEWAY_TLS=0.000 sh "$auto" --choose-all
 [ ! -s "$REALITY_BLOCK_FILE" ] || { echo "FAIL: XHTTP failure marked Reality"; exit 1; }
 # A live gateway: relays limited to two per pass.
-reset_recovery; rm -f "$GATEWAY_COOLDOWN_FILE" "$REALITY_BLOCK_FILE"
+reset_recovery; rm -f "$GATEWAY_COOLDOWN_FILE" "$REALITY_BLOCK_FILE"; : > "$SELECTION_SCORES_FILE"
 fails env RELAY_INDEXES='0 1 3' PASS_INDEXES= GATEWAY_TLS=0.050 sh "$auto" --choose-all
-[ "$(cat "$STATE_DIR/tried")" = "$(printf '0\n1\n2')" ] || { echo "FAIL: relay budget: $(tr '\n' ' ' < "$STATE_DIR/tried")"; exit 1; }
+[ "$(cat "$STATE_DIR/tried")" = "$(printf '2\n0\n1')" ] || { echo "FAIL: relay budget: $(tr '\n' ' ' < "$STATE_DIR/tried")"; exit 1; }
 [ ! -s "$GATEWAY_COOLDOWN_FILE" ]
 echo 'PASS relays through one gateway are paced, limited and paused when it stops answering'
 
 # Relays are a reserve: never probed once a connection works, never measured
 # in background, and a probe is a single curl (one upstream connection).
-reset_recovery; rm -f "$GATEWAY_COOLDOWN_FILE" "$STATE_DIR/curl-calls"
+reset_recovery; rm -f "$GATEWAY_COOLDOWN_FILE" "$STATE_DIR/curl-calls"; : > "$SELECTION_SCORES_FILE"
 RELAY_INDEXES='1 3' PASS_INDEXES='0 1 2 3' sh "$auto" --choose-all
 [ "$(cat "$STATE_DIR/tried")" = "$(printf '0\n2')" ] || { echo "FAIL: relay probed although direct works: $(tr '\n' ' ' < "$STATE_DIR/tried")"; exit 1; }
 [ "$(cat "$STATE_DIR/selected_link_index")" = 0 ]
 [ "$(wc -l < "$STATE_DIR/curl-calls")" -eq 2 ] || { echo "FAIL: more than one request per probe: $(wc -l < "$STATE_DIR/curl-calls")"; exit 1; }
 # A relay that works is kept only until a direct connection is found; other relays are skipped.
-reset_recovery
+reset_recovery; : > "$SELECTION_SCORES_FILE"
 RELAY_INDEXES='0 1 3' PASS_INDEXES='0 1 2 3' sh "$auto" --choose-all
-[ "$(cat "$STATE_DIR/tried")" = "$(printf '0\n2')" ] || { echo "FAIL: relay after relay: $(tr '\n' ' ' < "$STATE_DIR/tried")"; exit 1; }
+[ "$(cat "$STATE_DIR/tried")" = 2 ] || { echo "FAIL: relay after relay: $(tr '\n' ' ' < "$STATE_DIR/tried")"; exit 1; }
 [ "$(cat "$STATE_DIR/selected_link_index")" = 2 ] || { echo "FAIL: relay preferred over direct"; exit 1; }
 reset_recovery; : > "$SELECTION_SCORES_FILE"
 RELAY_INDEXES='1' PASS_INDEXES='0 1 3' sh "$auto" --measure
 [ "$(cat "$STATE_DIR/tried")" = "$(printf '0\n3')" ] || { echo "FAIL: relay measured in background: $(tr '\n' ' ' < "$STATE_DIR/tried")"; exit 1; }
 echo 'PASS relays are a reserve: not probed when a connection works, not measured in background, one request per probe'
+
+# A failed direct connection is checked once more; a failed relay is not.
+reset_recovery; rm -f "$GATEWAY_COOLDOWN_FILE" "$REALITY_BLOCK_FILE"; : > "$SELECTION_SCORES_FILE"
+fails env SELECTION_RETRY=1 RELAY_INDEXES='3' PASS_INDEXES= sh "$auto" --choose-all
+[ "$(cat "$STATE_DIR/tried")" = "$(printf '0\n0\n1\n1\n2\n2\n3')" ] || { echo "FAIL: retry: $(tr '\n' ' ' < "$STATE_DIR/tried")"; exit 1; }
+echo 'PASS a failed direct connection is checked twice, a relay once'
+
+# Manual choice connects at once with the best transport of the server (no
+# private probes), verifies the live tunnel, falls back to the next transport,
+# and returns to the previous connection when none works.
+export SELECTION_PHASE_FILE="$state/phase"
+connect_reset() {
+	reset_recovery; : > "$SELECTION_SCORES_FILE"; rm -f "$STATE_DIR/live-checks"
+	echo 0 > "$STATE_DIR/selected_link_index"; echo 1 > "$STATE_DIR/server_auto_select"
+}
+connect_reset
+sh "$auto" --connect-server 1 "$hash"
+[ ! -s "$STATE_DIR/tried" ] || { echo "FAIL: manual choice probed privately: $(tr '\n' ' ' < "$STATE_DIR/tried")"; exit 1; }
+[ "$(cat "$STATE_DIR/switches")" = 1 ] && [ "$(cat "$STATE_DIR/live-checks")" = 1 ]
+[ "$(cat "$STATE_DIR/selected_link_index")" = 1 ] && [ "$(cat "$STATE_DIR/server_auto_select")" = 0 ]
+grep -qx 'ok:1' "$STATE_DIR/auto_select_status"; grep -qx 'done 1' "$SELECTION_PHASE_FILE"
+connect_reset
+LIVE_FAIL_INDEXES=1 sh "$auto" --connect-server 1 "$hash"
+[ "$(tr '\n' ' ' < "$STATE_DIR/switches")" = '1 2 ' ] || { echo "FAIL: next transport: $(tr '\n' ' ' < "$STATE_DIR/switches")"; exit 1; }
+grep -qx 'ok:2' "$STATE_DIR/auto_select_status"
+connect_reset
+fails env LIVE_FAIL_INDEXES='1 2' sh "$auto" --connect-server 1 "$hash"
+[ "$(tr '\n' ' ' < "$STATE_DIR/switches")" = '1 2 0 ' ] || { echo "FAIL: revert: $(tr '\n' ' ' < "$STATE_DIR/switches")"; exit 1; }
+[ "$(cat "$STATE_DIR/selected_link_index")" = 0 ] && [ "$(cat "$STATE_DIR/server_auto_select")" = 1 ]
+grep -qx 'failed:0' "$STATE_DIR/auto_select_status"; grep -q '^failed' "$SELECTION_PHASE_FILE"
+echo 'PASS manual choice connects at once, falls back to the next transport and reverts when none works'
+
+# Automatic choice with fresh measurements re-checks the best ones first and
+# stops after three direct passes; the live tunnel is verified after the switch.
+connect_reset
+now=$(date +%s)
+printf '0 0.120 %s\n1 0.550 %s\n2 0.310 %s\n3 0.220 %s\n' "$now" "$now" "$now" "$now" > "$SELECTION_SCORES_FILE"
+PASS_INDEXES='0 1 2 3' LIVE_FAIL_INDEXES=0 sh "$auto" --choose-all
+[ "$(tr '\n' ' ' < "$STATE_DIR/tried")" = '0 3 2 ' ] || { echo "FAIL: early stop: $(tr '\n' ' ' < "$STATE_DIR/tried")"; exit 1; }
+[ "$(tr '\n' ' ' < "$STATE_DIR/switches")" = '0 3 ' ] || { echo "FAIL: live check fallback: $(tr '\n' ' ' < "$STATE_DIR/switches")"; exit 1; }
+[ "$(cat "$STATE_DIR/selected_link_index")" = 3 ] && [ "$(cat "$STATE_DIR/server_auto_select")" = 1 ]
+grep -qx 'ok:3' "$STATE_DIR/auto_select_status"
+echo 'PASS automatic choice checks the best measured first, stops early and verifies the live tunnel'

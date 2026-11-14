@@ -535,6 +535,8 @@ function measure_host_latencies(hosts) {
 // Tunnel transfer times recorded by auto-failover.sh ("index seconds|fail epoch").
 const SELECTION_SCORES = "/tmp/shpun-selection-delay";
 const SELECTION_PROGRESS = "/tmp/shpun-selection-progress";
+// "<phase> <index>" of the running selection, written by auto-failover.sh.
+const SELECTION_PHASE = "/tmp/shpun-selection-phase";
 const SELECTION_MEASURED_AT = "/tmp/shpun-selection-measured-at";
 const SELECTION_SCORE_TTL = 6 * 3600;
 // A failed check is a moment, not a verdict: short outages must not mark a
@@ -677,6 +679,8 @@ function start_server_selection(args) {
 	if (server_selection_running() ||
 		trim(readcmd("test -d /tmp/shpun-auto-failover.lock && echo busy")) == "busy")
 		return { ok: 0, error: "automatic selection is running", busy: true };
+	// The previous run's phase must not show up while the new one starts.
+	unlink(SELECTION_PHASE);
 	let f = open(SERVER_AUTO_STATUS, "w");
 	if (!f) return { ok: 0, error: "cannot start selection" };
 	f.write("starting\n");
@@ -1176,7 +1180,9 @@ return {
 						return { ok: 0, error: "server list changed; reopen it" };
 					if (!match(fingerprint, /^[0-9a-f]{64}$/))
 						return { ok: 0, error: "subscription unavailable" };
-					return start_server_selection("--choose-server " + idx + " " + fingerprint);
+					// Connects at once with the server's best transport and verifies it
+					// live; the widget follows the phases via server_auto_status.
+					return start_server_selection("--connect-server " + idx + " " + fingerprint);
 				} catch(e) { return { ok: 0, error: "" + e }; }
 			}
 		},
@@ -1252,6 +1258,21 @@ return {
 					let p = split(trim(readfile(SELECTION_PROGRESS) || ""), " ");
 					if (running && length(p) == 3)
 						res.progress = { tested: int(p[0]), total: int(p[1]), action: p[2] };
+					// Current phase with the server and transport it is about.
+					let ph = split(trim(readfile(SELECTION_PHASE) || ""), " ");
+					if (ph[0]) {
+						res.phase = ph[0];
+						let idx = ph[1] != null && ph[1] != "-" ? int(ph[1]) : -1;
+						let links = idx >= 0 ? subscription_links(parse_json_safe(readfile(SUB))) : [];
+						if (idx >= 0 && idx < length(links)) {
+							let info = parse_link_info(links[idx], idx, false);
+							let via = transport_rank(links[idx]) == 3 || server_group(info) == "gateway";
+							res.phase_index = idx;
+							res.phase_transport = transport_title(info, via);
+							for (let g in server_groups(links))
+								if (index(g.indexes, idx) >= 0) { res.phase_server = g.name; break; }
+						}
+					}
 					return res;
 				} catch(e) {
 					return { ok: 0, error: ("" + e) };

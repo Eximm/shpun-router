@@ -290,6 +290,14 @@ function injectStyles() {
 		+ '.shpun-server-row .shpun-server-latency--good{color:#86efac!important;background:rgba(22,163,74,.22)!important;border-color:rgba(74,222,128,.42)!important;box-shadow:inset 0 0 0 1px rgba(34,197,94,.05);}'
 		+ '.shpun-server-row .shpun-server-latency--medium{color:#fde047!important;background:rgba(202,138,4,.22)!important;border-color:rgba(250,204,21,.42)!important;box-shadow:inset 0 0 0 1px rgba(250,204,21,.05);}'
 		+ '.shpun-server-row .shpun-server-latency--slow{color:#fca5a5!important;background:rgba(220,38,38,.22)!important;border-color:rgba(248,113,113,.44)!important;box-shadow:inset 0 0 0 1px rgba(248,113,113,.05);}'
+		+ '.shpun-selbar{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:2000;display:flex;align-items:center;gap:10px;max-width:min(560px,calc(100vw - 32px));padding:11px 12px 11px 16px;border-radius:14px;background:rgba(10,17,32,.96);border:1px solid rgba(120,140,180,.28);color:#e5ecf7;font-size:13px;line-height:1.45;box-shadow:0 10px 30px rgba(0,0,0,.45);}'
+		+ '.shpun-selbar-dot{flex:0 0 auto;width:9px;height:9px;border-radius:50%;background:#60a5fa;}'
+		+ '.shpun-selbar--busy .shpun-selbar-dot{animation:shpun-selbar-pulse 1.1s ease-in-out infinite;}'
+		+ '.shpun-selbar--ok{border-color:rgba(74,222,128,.45);}.shpun-selbar--ok .shpun-selbar-dot{background:#4ade80;}'
+		+ '.shpun-selbar--error{border-color:rgba(248,113,113,.5);}.shpun-selbar--error .shpun-selbar-dot{background:#f87171;}'
+		+ '.shpun-selbar-text{flex:1 1 auto;}'
+		+ '.shpun-selbar-close{flex:0 0 auto;border:0;background:transparent;color:#94a3b8;font-size:18px;line-height:1;cursor:pointer;padding:0 4px;}'
+		+ '@keyframes shpun-selbar-pulse{0%,100%{opacity:1;}50%{opacity:.3;}}'
 		+ '.shpun-hint-box--suggest{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;border-color:rgba(250,204,21,.28)!important;}'
 		+ '.shpun-hint-box--suggest>span{flex:1 1 260px;}.shpun-hint-box.shpun-hint-box--suggest .shpun-btn{flex:0 0 auto;width:auto;min-width:0;padding:8px 20px;}'
 		+ '.shpun-recommend-btn{width:100%;margin:0 0 8px;}'
@@ -717,45 +725,114 @@ function withProgress(message, progress) {
 	return message + ' Проверено ' + tested + ' из ' + progress.total + '.';
 }
 
-// Start a selection or measurement and follow it with live progress.
-function choose(request, message) {
-	showMessage(message);
+// Live status of a server choice: a small panel at the bottom of the page that
+// follows the phases reported by the router and never blocks the page.
+var selectionBar = null;
+
+function showSelectionBar(text, tone) {
+	if (typeof document === 'undefined' || !document.body) return;
+	if (!selectionBar) {
+		selectionBar = E('div', { 'class': 'shpun-selbar' }, [
+			E('span', { 'class': 'shpun-selbar-dot' }),
+			E('span', { 'class': 'shpun-selbar-text' }),
+			E('button', { 'type': 'button', 'class': 'shpun-selbar-close', 'title': 'Скрыть',
+				'click': function() { hideSelectionBar(); } }, '×')
+		]);
+		document.body.appendChild(selectionBar);
+	}
+	selectionBar.className = 'shpun-selbar shpun-selbar--' + (tone || 'busy');
+	selectionBar.querySelector('.shpun-selbar-text').textContent = text;
+}
+
+function hideSelectionBar() {
+	if (selectionBar && selectionBar.parentNode) selectionBar.parentNode.removeChild(selectionBar);
+	selectionBar = null;
+}
+
+// "Helsinki FI · Hysteria 2" for the connection a phase is about.
+function phaseTarget(r) {
+	var name = r.phase_server ? displayServerName(r.phase_server) : '';
+	return name && r.phase_transport ? name + ' · ' + r.phase_transport : (name || r.phase_transport || '');
+}
+
+// Text for the current phase. kind: auto | manual | measure.
+function selectionText(r, kind, state) {
+	var target = phaseTarget(r);
+	switch (r.phase) {
+	case 'probing':
+		return withProgress(kind === 'measure' ? 'Измеряем серверы через VPN…' : 'Подбираем лучший сервер…', r.progress);
+	case 'connecting':
+		if (state.lastConnecting != null && state.lastConnecting !== r.phase_index)
+			return 'Не отвечает, пробуем другой способ: ' + target + '…';
+		return kind === 'auto' ? 'Найден лучший вариант: ' + target + '. Подключаемся…' : 'Подключаемся: ' + target + '…';
+	case 'verifying':
+		return 'Проверяем соединение: ' + target + '…';
+	case 'reverting':
+		return 'Не удалось подключиться, возвращаем прежний сервер…';
+	default:
+		return kind === 'measure' ? 'Измеряем серверы через VPN…' :
+			kind === 'auto' ? 'Подбираем лучший сервер…' : state.message;
+	}
+}
+
+// Start a selection or measurement and follow it until it ends.
+function choose(request, message, kind) {
+	kind = kind || 'manual';
+	dismiss();
+	showSelectionBar(message, 'busy');
 	request.then(function(result) {
 		result = result || {};
 		if (!result.ok) {
-			showMessage(result.busy ? 'Роутер уже проверяет серверы. Попробуйте чуть позже.' :
-				'Не удалось запустить проверку: ' + (result.error || 'ошибка'));
+			showSelectionBar(result.busy ? 'Роутер уже подбирает сервер, дождитесь окончания.' :
+				'Не удалось начать: ' + (result.error || 'ошибка'), 'error');
 			return;
 		}
-		var started = Date.now();
-		function poll() {
-			callShpunServerAutoStatus().then(function(result) {
-				result = result || {};
-				var status = String(result.status || '');
-				if (result.running && Date.now() - started < 180000) {
-					showMessage(withProgress(message, result.progress));
-					window.setTimeout(poll, 1500);
-				} else if (status.indexOf('measured:') === 0) {
-					openServersModal();
-				} else if (status.indexOf('ok:') === 0) {
-					dismiss();
-					ui.addNotification(null, E('p', {}, 'Подключение выбрано.'), 'info');
-					window.setTimeout(function() { window.location.reload(); }, 1200);
-				} else if (status === 'error:low_memory') {
-					showMessage('На роутере сейчас мало свободной памяти, проверку отложили. Попробуйте позже.');
-				} else {
-					showMessage(result.running ? 'Проверка продолжается в фоне.' :
-						'Рабочее подключение не найдено. Текущий выбор сохранён.');
-				}
-			}).catch(function() {
-				if (Date.now() - started < 180000) window.setTimeout(poll, 1500);
-				else showMessage('Не удалось получить результат проверки.');
-			});
-		}
-		window.setTimeout(poll, 1000);
+		followSelection(kind, message);
 	}).catch(function(err) {
-		showMessage('Не удалось запустить проверку: ' + String(err));
+		showSelectionBar('Не удалось начать: ' + String(err), 'error');
 	});
+}
+
+function followSelection(kind, message) {
+	var started = Date.now(), state = { message: message || 'Подключаемся…', lastConnecting: null };
+	function poll() {
+		callShpunServerAutoStatus().then(function(r) {
+			r = r || {};
+			var status = String(r.status || '');
+			if (r.running && Date.now() - started < 240000) {
+				showSelectionBar(selectionText(r, kind, state), 'busy');
+				if (r.phase === 'connecting') state.lastConnecting = r.phase_index;
+				window.setTimeout(poll, 1200);
+			} else if (status.indexOf('measured:') === 0) {
+				hideSelectionBar();
+				openServersModal();
+			} else if (status.indexOf('ok:') === 0) {
+				var target = phaseTarget(r);
+				showSelectionBar('Подключено' + (target ? ': ' + target : '') + '.', 'ok');
+				window.setTimeout(function() { window.location.reload(); }, 2500);
+			} else if (status === 'error:low_memory') {
+				showSelectionBar('На роутере мало свободной памяти, подбор отложен. Попробуйте позже.', 'error');
+			} else if (r.running) {
+				showSelectionBar('Роутер ещё подбирает сервер в фоне.', 'busy');
+			} else {
+				showSelectionBar(kind === 'manual'
+					? 'Сервер не отвечает ни одним способом. Оставили прежнее подключение.'
+					: 'Рабочее подключение не найдено. Оставили прежнее.', 'error');
+			}
+		}).catch(function() {
+			// The router may be busy restarting the tunnel; keep asking.
+			if (Date.now() - started < 240000) window.setTimeout(poll, 1500);
+			else showSelectionBar('Не удалось получить результат от роутера.', 'error');
+		});
+	}
+	window.setTimeout(poll, 800);
+}
+
+// After a page reload: pick up a selection that is still running.
+function resumeSelection() {
+	callShpunServerAutoStatus().then(function(r) {
+		if (r && r.running) followSelection(r.phase === 'probing' ? 'auto' : 'manual');
+	}).catch(function() {});
 }
 
 function openServersModal() {
@@ -778,7 +855,7 @@ function openServersModal() {
 			'disabled': res.auto_admin_disabled === 1 || res.auto_running ? true : null,
 			'click': function(ev) {
 				ev.preventDefault();
-				choose(callShpunServerAutoStart([]), 'Ищем лучшее подключение…');
+				choose(callShpunServerAutoStart([]), 'Подбираем лучший сервер…', 'auto');
 			}
 		}, [
 			E('span', { 'class': 'shpun-server-location' }, 'Автовыбор'),
@@ -841,7 +918,7 @@ function openServersModal() {
 				'disabled': res.auto_running ? true : null,
 				'click': function(ev) {
 					ev.preventDefault();
-					choose(callShpunServerSet(server.index, server.id), 'Проверяем подключения к ' + displayServerName(server.name) + '…');
+					choose(callShpunServerSet(server.index, server.id), 'Подключаемся к ' + displayServerName(server.name) + '…', 'manual');
 				}
 			}, [
 				E('span', { 'class': 'shpun-server-location' }, displayServerName(server.name)),
@@ -855,7 +932,7 @@ function openServersModal() {
 			'disabled': res.auto_running ? true : null,
 			'click': function(ev) {
 				ev.preventDefault();
-				choose(callShpunServerSet(recommended.index, recommended.id), 'Подключаем ' + displayServerName(recommended.name) + '…');
+				choose(callShpunServerSet(recommended.index, recommended.id), 'Подключаемся к ' + displayServerName(recommended.name) + '…', 'manual');
 			}
 		}, 'Подключить ' + displayServerName(recommended.name)) : '';
 		var measuredAt = Number(res.measured_at) > 0
@@ -877,7 +954,7 @@ function openServersModal() {
 						'disabled': res.auto_running ? true : null,
 						'click': function(ev) {
 							ev.preventDefault();
-							choose(callShpunServersMeasure(), 'Измеряем скорость серверов через VPN…');
+							choose(callShpunServersMeasure(), 'Измеряем серверы через VPN…', 'measure');
 						}
 					}, 'Обновить замеры'),
 					E('button', { 'type': 'button', 'class': 'shpun-modal-btn', 'click': dismiss }, 'Закрыть')
@@ -971,11 +1048,14 @@ return view.extend({
 					'class': 'shpun-btn shpun-btn--primary',
 					'click': function(ev) {
 						ev.preventDefault();
-						choose(callShpunServerSet(rec.index, rec.id), 'Подключаем ' + displayServerName(rec.name) + '…');
+						choose(callShpunServerSet(rec.index, rec.id), 'Подключаемся к ' + displayServerName(rec.name) + '…', 'manual');
 					}
 				}, 'Подключить ' + displayServerName(rec.name))
 			])
 			: '';
+
+		// A selection started before a page reload keeps its live status panel.
+		window.setTimeout(resumeSelection, 300);
 
 		var statusStats = buildStatusStats(state, vpnReady);
 
