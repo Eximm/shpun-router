@@ -38,8 +38,10 @@ function server_identity(entry, idx) {
 		match(label, /^(⚡[ ]*)?(auto|automatic)([ ]*\/|$)/i))
 		return { alias: true, name: "Автовыбор" };
 
-	let name = trim(replace(label, /[ ]*(\/|[–—])[ ]*(xhttp|hysteria[ ]*2|hy2|reality|vless|через рф|напрямую|Через РФ|Напрямую)([ ]+(RF|RU|TLS))?$/i, ""));
-	name = trim(replace(name, /[ ]+(xhttp|hysteria[ ]*2|hy2|reality|vless)([ ]+(RF|TLS))?$/i, ""));
+	// The panel names transports with any chain of these words, e.g.
+	// "XHTTP RF", "RAW TLS RF", "Через РФ": drop all of it after the separator.
+	let name = trim(replace(label, /[ ]*(\/|[–—])[ ]*((xhttp|hysteria[ ]*2|hy2|reality|vless|raw|tcp|tls|grpc|ws|vision|rf|ru|через рф|напрямую|Через РФ|Напрямую)[ ]*)+$/i, ""));
+	name = trim(replace(name, /[ ]+(xhttp|hysteria[ ]*2|hy2|reality|vless|raw)([ ]+(raw|tcp|tls|vision|rf))*$/i, ""));
 
 	// The feed names Helsinki's second node FI2 in the Hysteria entry
 	// and Helsinki-2 FI in the other transports.

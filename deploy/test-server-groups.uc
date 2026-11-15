@@ -39,3 +39,19 @@ check(compare_delay(links[1], 0.095) > 0.098, "relay 3 ms faster loses to direct
 check(compare_delay(links[1], 0.010) > 5.0, "relay is a reserve: even a much faster relay loses to a slow direct");
 check(compare_delay(links[1], 0.010) < compare_delay(links[1], 0.020), "relays still compare among themselves");
 print("PASS direct connections preferred over relays\n");
+
+// The panel renamed relays to "RAW TLS RF": they must join their city, not form new servers.
+let raw_links = [
+	"hysteria2://fixture@fi.example:443#%F0%9F%87%AB%F0%9F%87%AE%20Helsinki%20FI%20%2F%20Hysteria%202",
+	"vless://fixture@ruin.example:443?type=xhttp#%F0%9F%87%AB%F0%9F%87%AE%20Helsinki%20FI%20%2F%20XHTTP%20RF",
+	"vless://fixture@rt1.example:443?type=tcp&security=tls#%F0%9F%87%AB%F0%9F%87%AE%20Helsinki%20FI%20%2F%20RAW%20TLS%20RF",
+	"vless://fixture@rt14.example:443?type=tcp&security=tls#%F0%9F%87%AB%F0%9F%87%AE%20Helsinki-2%20FI%20%2F%20RAW%20TLS%20RF",
+	"hy2://fixture@fi2.example:443#%F0%9F%87%AB%F0%9F%87%AE%20Helsinki%20FI2%20%2F%20Hysteria%202",
+	"hy2://fixture@msk.example:443#%F0%9F%87%B7%F0%9F%87%BA%20Moscow%20RU%20%2F%20Hysteria%202"
+];
+let raw_groups = server_groups(raw_links);
+check(length(raw_groups) == 3, "RAW TLS RF must not create extra servers");
+check(join(",", raw_groups[0].indexes) == "0,1,2" && join(",", raw_groups[1].indexes) == "3,4", "RAW TLS RF joins its city");
+check(raw_groups[2].name == "🇷🇺 Moscow RU", "country code RU stays in the name");
+check(transport_rank(raw_links[2]) == 3, "RAW TLS RF is a relay");
+print("PASS RAW TLS relays grouped with their city\n");
